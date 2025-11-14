@@ -35,8 +35,67 @@ let currentRoundForActions = 0;
 let currentPhase           = "MOVE";
 let unsubActions           = null;
 
-if (!gameId && gameInfo) {
-  gameInfo.textContent = "Geen gameId in de URL";
+const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
+
+const ACTION_CARDS_POOL = [
+  "Scatter!",
+  "Kick Up Dust",
+  "Pack Tinker",
+  "Den Signal",
+  "Countermove",
+  "No-Go Zone",
+  "Nose for Trouble",
+  "Burrow Beacon",
+];
+
+function shuffleArray(array) {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function buildEventTrack() {
+  const baseTrack = [
+    "DEN_RED",
+    "DEN_BLUE",
+    "DEN_GREEN",
+    "DEN_YELLOW",
+    "DOG_CHARGE",
+    "ROOSTER_CROW",
+    "ROOSTER_CROW",
+    "ROOSTER_CROW",
+    "HIDDEN_NEST",
+    "GATE_TOLL",
+    "MAGPIE_SNITCH",
+    "PAINT_BOMB_NEST",
+  ];
+  return shuffleArray(baseTrack);
+}
+
+function buildActionDeck() {
+  const deck = [];
+  const pool = ACTION_CARDS_POOL;
+  for (let i = 0; i < 50; i++) {
+    deck.push({ name: pool[i % pool.length] });
+  }
+  return shuffleArray(deck);
+}
+
+function buildLootDeck() {
+  const deck = [];
+  for (let i = 0; i < 20; i++) {
+    deck.push({ t: "Egg", v: 1 });
+  }
+  for (let i = 0; i < 10; i++) {
+    deck.push({ t: "Hen", v: 2 });
+  }
+  for (let i = 0; i < 6; i++) {
+    deck.push({ t: "Prize Hen", v: 3 });
+  }
+  return shuffleArray(deck);
 }
 
 // Render de Event Track (2x6) zoals EggRun
@@ -57,7 +116,10 @@ function renderEventTrack(game) {
 
   if (!track.length) {
     const p = document.createElement("p");
-    p.textContent = "Geen Event Track beschikbaar.";
+    p.textContent = game.raidStarted
+      ? "Geen Event Track gevonden."
+      : "Nog geen raid gestart.";
+    p.className = "event-track-status";
     eventTrackDiv.appendChild(p);
     return;
   }
@@ -122,10 +184,125 @@ function renderEventTrack(game) {
   eventTrackDiv.appendChild(grid);
 }
 
+// Initialiseert een raid à la EggRun v17d als dat nog niet gedaan is
+async function initRaidIfNeeded(gameRef) {
+  const snap = await getDoc(gameRef);
+  if (!snap.exists()) return null;
+  const game = snap.data();
+
+  if (game.raidStarted) {
+    return game;
+  }
+
+  const playersCol = collection(db, "games", gameId, "players");
+  const playersSnap = await getDocs(playersCol);
+  const players = [];
+  playersSnap.forEach((pDoc) => {
+    players.push({ id: pDoc.id, ...pDoc.data() });
+  });
+
+  if (!players.length) {
+    alert("Geen spelers gevonden. Laat eerst spelers joinen voordat je de raid start.");
+    return game;
+  }
+
+  // Sorteer op joinedAt zodat we een stabiele join-volgorde hebben
+  const sorted = [...players].sort((a, b) => {
+    const aSec = a.joinedAt && a.joinedAt.seconds ? a.joinedAt.seconds : 0;
+    const bSec = b.joinedAt && b.joinedAt.seconds ? b.joinedAt.seconds : 0;
+    return aSec - bSec;
+  });
+
+  let actionDeck = buildActionDeck();
+  const lootDeck = buildLootDeck();
+  const eventTrack = buildEventTrack();
+  const eventRevealed = eventTrack.map(() => false);
+  const flagsRound = {
+    lockEvents: false,
+    scatter: false,
+    denImmune: {},
+    noPeek: [],
+    predictions: [],
+  };
+
+  const updates = [];
+
+  sorted.forEach((p, index) => {
+    const color = DEN_COLORS[index % DEN_COLORS.length];
+    const hand = [];
+    for (let k = 0; k < 3; k++) {
+      if (actionDeck.length) {
+        hand.push(actionDeck.pop());
+      }
+    }
+    const pref = doc(db, "games", gameId, "players", p.id);
+    updates.push(
+      updateDoc(pref, {
+        joinOrder: index,
+        color,
+        inYard: true,
+        dashed: false,
+        burrowUsed: false,
+        decision: null,
+        hand,
+        loot: [],
+      })
+    );
+  });
+
+  // 1 kaart naar de Sack zoals newRaid -> addLootToSack
+  const sack = [];
+  if (lootDeck.length) {
+    sack.push(lootDeck.pop());
+  }
+
+  const leadIndex = Math.floor(Math.random() * sorted.length);
+
+  updates.push(
+    updateDoc(gameRef, {
+      status: "raid",
+      phase: "MOVE",
+      round: 0,
+      currentEventId: null,
+      eventTrack,
+      eventRevealed,
+      eventIndex: 0,
+      roosterSeen: 0,
+      raidEndedByRooster: false,
+      raidStarted: true,
+      actionDeck,
+      lootDeck,
+      sack,
+      flagsRound,
+      scatterArmed: false,
+      opsCount: {},
+      leadIndex,
+    })
+  );
+
+  await Promise.all(updates);
+
+  await addLog(gameId, {
+    round: 0,
+    phase: "MOVE",
+    kind: "SYSTEM",
+    message:
+      "Nieuwe raid gestart. Lead Fox: " + (sorted[leadIndex]?.name || ""),
+  });
+
+  const newSnap = await getDoc(gameRef);
+  return newSnap.exists() ? newSnap.data() : null;
+}
+
+if (!gameId && gameInfo) {
+  gameInfo.textContent = "Geen gameId in de URL";
+}
+
 initAuth(async (authUser) => {
   if (!gameId) return;
 
   const gameRef = doc(db, "games", gameId);
+  const playersColRef = collection(db, "games", gameId, "players");
 
   // 1) Game live volgen
   onSnapshot(gameRef, (snap) => {
@@ -136,8 +313,8 @@ initAuth(async (authUser) => {
 
     const game = snap.data();
     currentRoundNumber = game.round || 0;
-    currentPhase       = game.phase || "MOVE";
-    const event        = game.currentEventId
+    currentPhase = game.phase || "MOVE";
+    const event = game.currentEventId
       ? getEventById(game.currentEventId)
       : null;
 
@@ -153,7 +330,7 @@ initAuth(async (authUser) => {
       `Code: ${game.code} – Status: ${game.status} – ` +
       `Ronde: ${currentRoundNumber} – Fase: ${currentPhase}${extraStatus}`;
 
-    if (game.status !== "round") {
+    if (game.status !== "round" && game.status !== "raid") {
       roundInfo.textContent = "Nog geen actieve ronde.";
       if (unsubActions) {
         unsubActions();
@@ -169,7 +346,7 @@ initAuth(async (authUser) => {
 
     currentRoundForActions = currentRoundNumber;
 
-    const actionsCol   = collection(db, "games", gameId, "actions");
+    const actionsCol = collection(db, "games", gameId, "actions");
     const actionsQuery = query(
       actionsCol,
       where("round", "==", currentRoundForActions)
@@ -213,7 +390,6 @@ initAuth(async (authUser) => {
   });
 
   // 2) Spelers volgen (scorebord + LEAD FOX)
-  const playersColRef = collection(db, "games", gameId, "players");
   onSnapshot(playersColRef, (snapshot) => {
     const players = [];
     snapshot.forEach((pDoc) => {
@@ -222,22 +398,25 @@ initAuth(async (authUser) => {
 
     playersDiv.innerHTML = "<h2>Spelers / Scorebord</h2>";
 
-    // LEAD FOX op basis van join-volgorde
+    // Lead Fox indicatief (eerste op joinOrder)
     let leadFoxName = "";
-    if (players.length > 0 && currentRoundNumber > 0) {
-      const byJoin = [...players].sort((a, b) => {
-        if (!a.joinedAt || !b.joinedAt) return 0;
-        const aSec = a.joinedAt.seconds || 0;
-        const bSec = b.joinat.seconds || 0;
-        return aSec - bSec;
+    if (players.length > 0) {
+      const byOrder = [...players].sort((a, b) => {
+        const ao =
+          typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+        const bo =
+          typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
+        return ao - bo;
       });
-      const leadIndex = (currentRoundNumber - 1) % byJoin.length;
-      leadFoxName = byJoin[leadIndex].name;
+      const lead = byOrder[0];
+      if (lead) {
+        leadFoxName = lead.name;
+      }
     }
 
     if (leadFoxName) {
       const lf = document.createElement("div");
-      lf.textContent = `LEAD FOX deze ronde: ${leadFoxName}`;
+      lf.textContent = `LEAD FOX (indicatief): ${leadFoxName}`;
       lf.className = "lead-fox";
       playersDiv.appendChild(lf);
     }
@@ -256,7 +435,7 @@ initAuth(async (authUser) => {
   });
 
   // 3) Logboek volgen
-  const logCol   = collection(db, "games", gameId, "log");
+  const logCol = collection(db, "games", gameId, "log");
   const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
 
   onSnapshot(logQuery, (snap) => {
@@ -276,11 +455,9 @@ initAuth(async (authUser) => {
 
   // 4) Start (volgende) ronde
   startBtn.addEventListener("click", async () => {
-    const snap = await getDoc(gameRef);
-    if (!snap.exists()) return;
-    const game = snap.data();
+    const game = await initRaidIfNeeded(gameRef);
+    if (!game) return;
 
-    // Als de raid al is geëindigd door de derde Rooster Crow: geen nieuwe rondes meer
     if (game.raidEndedByRooster) {
       alert(
         "De raid is geëindigd door de derde Rooster Crow. Er kunnen geen nieuwe rondes meer gestart worden."
@@ -295,7 +472,7 @@ initAuth(async (authUser) => {
       typeof game.eventIndex === "number" ? game.eventIndex : 0;
 
     let eventId = null;
-    let event   = null;
+    let event = null;
 
     if (track.length > 0) {
       if (index >= track.length) {
@@ -303,13 +480,13 @@ initAuth(async (authUser) => {
         index = 0;
       }
       eventId = track[index];
-      event   = getEventById(eventId);
+      event = getEventById(eventId);
     }
 
     // Rooster Crow teller bijhouden
-    const prevRoosterSeen   = game.roosterSeen || 0;
-    let newRoosterSeen      = prevRoosterSeen;
-    let raidEndedByRooster  = game.raidEndedByRooster || false;
+    const prevRoosterSeen = game.roosterSeen || 0;
+    let newRoosterSeen = prevRoosterSeen;
+    let raidEndedByRooster = game.raidEndedByRooster || false;
 
     if (event && event.type === "ROOSTER") {
       newRoosterSeen = prevRoosterSeen + 1;
@@ -402,9 +579,9 @@ initAuth(async (authUser) => {
       return;
     }
 
-    const actionsCol   = collection(db, "games", gameId, "actions");
+    const actionsCol = collection(db, "games", gameId, "actions");
     const actionsQuery = query(actionsCol, where("round", "==", roundNumber));
-    const actionsSnap  = await getDocs(actionsQuery);
+    const actionsSnap = await getDocs(actionsQuery);
 
     const scoreChanges = {};
 
