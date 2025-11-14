@@ -1,5 +1,3 @@
-console.log("host.js geladen");
-// Straks: gameId uit URL halen, spelers tonen, rondes starten
 import { initAuth } from "./firebase.js";
 import {
   getFirestore,
