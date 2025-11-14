@@ -1,4 +1,3 @@
-// Eenvoudige Vossenjacht-events (later kun je dit uitbreiden / fine-tunen)
 export const EVENTS = [
   {
     id: "SCOUT_COOP",
@@ -38,11 +37,10 @@ export const EVENTS = [
   {
     id: "RAINSTORM",
     title: "Onweersbui",
-    text: "Een harde regenbui barst los. Sporen verdwijnen, maar het terrein wordt glad en gladjes.",
+    text: "Een harde regenbui barst los. Sporen verdwijnen, maar het terrein wordt glad en glibberig.",
   },
 ];
 
-// Bepaal event op basis van rondenummer (1 → eerste event, 2 → tweede, etc.)
 export function getEventForRound(roundNumber) {
   if (!roundNumber || roundNumber <= 0) return null;
   const index = (roundNumber - 1) % EVENTS.length;
