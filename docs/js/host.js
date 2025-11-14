@@ -28,6 +28,7 @@ const startBtn      = document.getElementById("startRoundBtn");
 const endBtn        = document.getElementById("endRoundBtn");
 const nextPhaseBtn  = document.getElementById("nextPhaseBtn");
 const playAsHostBtn = document.getElementById("playAsHostBtn");
+const eventTrackDiv = document.getElementById("eventTrack");
 
 let currentRoundNumber     = 0;
 let currentRoundForActions = 0;
@@ -36,6 +37,89 @@ let unsubActions           = null;
 
 if (!gameId && gameInfo) {
   gameInfo.textContent = "Geen gameId in de URL";
+}
+
+// Render de Event Track (2x6) zoals EggRun
+function renderEventTrack(game) {
+  if (!eventTrackDiv) return;
+
+  const track = game.eventTrack || [];
+  const eventIndex =
+    typeof game.eventIndex === "number" ? game.eventIndex : 0;
+  const currentEventId = game.currentEventId || null;
+  const roosterSeen = game.roosterSeen || 0;
+
+  eventTrackDiv.innerHTML = "";
+
+  const h2 = document.createElement("h2");
+  h2.textContent = "Event Track";
+  eventTrackDiv.appendChild(h2);
+
+  if (!track.length) {
+    const p = document.createElement("p");
+    p.textContent = "Geen Event Track beschikbaar.";
+    eventTrackDiv.appendChild(p);
+    return;
+  }
+
+  // tel aantal Rooster-kaarten in de track
+  const totalRoosters = track.filter((id) => id === "ROOSTER_CROW").length || 3;
+
+  const statusLine = document.createElement("p");
+  statusLine.className = "event-track-status";
+  statusLine.textContent = `Rooster Crow: ${roosterSeen}/${totalRoosters}`;
+  eventTrackDiv.appendChild(statusLine);
+
+  const grid = document.createElement("div");
+  grid.className = "event-track-grid";
+
+  // currentIndex = index van huidig event (laatst getrokken)
+  // eventIndex wijst naar *volgende* kaart in de track
+  const currentIndex =
+    currentEventId && eventIndex > 0 ? eventIndex - 1 : -1;
+
+  track.forEach((eventId, i) => {
+    const ev = getEventById(eventId);
+    let state = "future";
+
+    if (currentIndex === -1) {
+      state = "future"; // nog geen ronde gestart
+    } else if (i < currentIndex) {
+      state = "past";
+    } else if (i === currentIndex) {
+      state = "current";
+    } else {
+      state = "future";
+    }
+
+    const slot = document.createElement("div");
+    slot.classList.add("event-slot", `event-state-${state}`);
+
+    if (ev && ev.type) {
+      slot.classList.add("event-type-" + ev.type.toLowerCase());
+    }
+
+    const idx = document.createElement("div");
+    idx.className = "event-slot-index";
+    idx.textContent = i + 1;
+    slot.appendChild(idx);
+
+    const title = document.createElement("div");
+    title.className = "event-slot-title";
+
+    if (state === "future") {
+      title.textContent = "??";
+    } else if (ev) {
+      title.textContent = ev.title;
+    } else {
+      title.textContent = eventId;
+    }
+
+    slot.appendChild(title);
+    grid.appendChild(slot);
+  });
+
+  eventTrackDiv.appendChild(grid);
 }
 
 initAuth(async (authUser) => {
@@ -56,6 +140,9 @@ initAuth(async (authUser) => {
     const event        = game.currentEventId
       ? getEventById(game.currentEventId)
       : null;
+
+    // Event Track altijd renderen
+    renderEventTrack(game);
 
     let extraStatus = "";
     if (game.raidEndedByRooster) {
@@ -141,7 +228,7 @@ initAuth(async (authUser) => {
       const byJoin = [...players].sort((a, b) => {
         if (!a.joinedAt || !b.joinedAt) return 0;
         const aSec = a.joinedAt.seconds || 0;
-        const bSec = b.joinedAt.seconds || 0;
+        const bSec = b.joinat.seconds || 0;
         return aSec - bSec;
       });
       const leadIndex = (currentRoundNumber - 1) % byJoin.length;
@@ -195,7 +282,9 @@ initAuth(async (authUser) => {
 
     // Als de raid al is geëindigd door de derde Rooster Crow: geen nieuwe rondes meer
     if (game.raidEndedByRooster) {
-      alert("De raid is geëindigd door de derde Rooster Crow. Er kunnen geen nieuwe rondes meer gestart worden.");
+      alert(
+        "De raid is geëindigd door de derde Rooster Crow. Er kunnen geen nieuwe rondes meer gestart worden."
+      );
       return;
     }
 
@@ -218,9 +307,9 @@ initAuth(async (authUser) => {
     }
 
     // Rooster Crow teller bijhouden
-    const prevRoosterSeen = game.roosterSeen || 0;
-    let newRoosterSeen    = prevRoosterSeen;
-    let raidEndedByRooster = game.raidEndedByRooster || false;
+    const prevRoosterSeen   = game.roosterSeen || 0;
+    let newRoosterSeen      = prevRoosterSeen;
+    let raidEndedByRooster  = game.raidEndedByRooster || false;
 
     if (event && event.type === "ROOSTER") {
       newRoosterSeen = prevRoosterSeen + 1;
@@ -270,7 +359,8 @@ initAuth(async (authUser) => {
           round: newRound,
           phase: "MOVE",
           kind: "SYSTEM",
-          message: "Derde Rooster Crow: na deze ronde eindigt de raid. Er kunnen geen nieuwe rondes meer gestart worden.",
+          message:
+            "Derde Rooster Crow: na deze ronde eindigt de raid. Er kunnen geen nieuwe rondes meer gestart worden.",
         });
       }
     }
