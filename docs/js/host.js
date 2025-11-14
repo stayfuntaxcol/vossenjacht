@@ -8,6 +8,7 @@ import {
   updateDoc,
   query,
   where,
+  getDocs,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const db = getFirestore();
@@ -19,6 +20,7 @@ const gameInfo   = document.getElementById("gameInfo");
 const playersDiv = document.getElementById("playersList");
 const roundInfo  = document.getElementById("roundInfo");
 const startBtn   = document.getElementById("startRoundBtn");
+const endBtn     = document.getElementById("endRoundBtn");
 
 let currentRound = 0;
 let unsubActions = null;
@@ -32,7 +34,7 @@ initAuth(async () => {
 
   const gameRef = doc(db, "games", gameId);
 
-  // 1) Game live volgen (code, status, ronde)
+  // 1) Game live volgen
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
       gameInfo.textContent = "Spel niet gevonden";
@@ -107,5 +109,57 @@ initAuth(async () => {
       status: "round",
       round: newRound,
     });
+  });
+
+  // 4) Ronde afsluiten + scores updaten
+  endBtn.addEventListener("click", async () => {
+    const gameSnap = await getDoc(gameRef);
+    if (!gameSnap.exists()) return;
+    const game = gameSnap.data();
+    const roundNumber = game.round || 0;
+
+    if (game.status !== "round" || roundNumber === 0) {
+      alert("Er is geen actieve ronde om af te sluiten.");
+      return;
+    }
+
+    // alle acties van deze ronde ophalen
+    const actionsCol   = collection(db, "games", gameId, "actions");
+    const actionsQuery = query(actionsCol, where("round", "==", roundNumber));
+    const actionsSnap  = await getDocs(actionsQuery);
+
+    // simpele regel:
+    // GRAB_LOOT  => +1 punt
+    // PLAY_SAFE  => 0 punten
+    const scoreChanges = {}; // playerId -> delta score
+
+    actionsSnap.forEach((aDoc) => {
+      const a = aDoc.data();
+      if (!a.playerId) return;
+      if (a.choice === "GRAB_LOOT") {
+        scoreChanges[a.playerId] = (scoreChanges[a.playerId] || 0) + 1;
+      }
+    });
+
+    // spelers ophalen en scores bijwerken
+    const playersCol   = collection(db, "games", gameId, "players");
+    const playersSnap  = await getDocs(playersCol);
+
+    const updates = [];
+    playersSnap.forEach((pDoc) => {
+      const p = pDoc.data();
+      const delta = scoreChanges[pDoc.id] || 0;
+      const newScore = (p.score || 0) + delta;
+      updates.push(updateDoc(pDoc.ref, { score: newScore }));
+    });
+
+    await Promise.all(updates);
+
+    // game terug naar lobby
+    await updateDoc(gameRef, {
+      status: "lobby",
+    });
+
+    alert("Ronde afgesloten en scores bijgewerkt.");
   });
 });
