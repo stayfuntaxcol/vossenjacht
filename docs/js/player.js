@@ -35,7 +35,7 @@ initAuth(async (authUser) => {
     return;
   }
 
-  // Speler volgen (naam + score)
+  // 1) Speler volgen (naam + score)
   const playerRef = doc(db, "games", gameId, "players", playerId);
 
   onSnapshot(playerRef, (snap) => {
@@ -49,7 +49,7 @@ initAuth(async (authUser) => {
     infoDiv.textContent = `Je bent: ${player.name} – score: ${score}`;
   });
 
-  // Huidige winnaar tonen
+  // 2) Huidige winnaar tonen
   const playersCol = collection(db, "games", gameId, "players");
   const winnerDiv = document.createElement("div");
   winnerDiv.id = "winnerInfo";
@@ -86,7 +86,7 @@ initAuth(async (authUser) => {
     }
   });
 
-  // Game volgen (status, ronde, fase, event)
+  // 3) Game volgen (status, ronde, fase, event)
   const gameRef = doc(db, "games", gameId);
   onSnapshot(gameRef, (gameSnap) => {
     if (!gameSnap.exists()) {
@@ -96,7 +96,8 @@ initAuth(async (authUser) => {
 
     const game = gameSnap.data();
     const roundNumber = game.round || 0;
-    currentPhase = game.phase || "MOVE";
+    currentPhase      = game.phase || "MOVE";
+    currentRound      = roundNumber;
 
     if (game.currentEventId) {
       currentEvent = getEventById(game.currentEventId);
@@ -104,6 +105,7 @@ initAuth(async (authUser) => {
       currentEvent = null;
     }
 
+    // niet in ronde
     if (game.status !== "round") {
       roundDiv.textContent = "Wachten op volgende ronde...";
       if (unsubActions) {
@@ -113,18 +115,54 @@ initAuth(async (authUser) => {
       return;
     }
 
-    if (currentRound === roundNumber && unsubActions) {
+    // Alleen in DECISION-fase mogen spelers kiezen
+    if (currentPhase !== "DECISION") {
+      showPhaseWaiting();
+      if (unsubActions) {
+        unsubActions();
+        unsubActions = null;
+      }
       return;
     }
 
-    currentRound = roundNumber;
+    // In DECISION-fase -> check of speler al keuze heeft
+    if (unsubActions && currentRound === roundNumber) {
+      return;
+    }
+
     watchOwnAction();
   });
 });
 
-// Check of deze speler al een keuze heeft
+// 4) Fase-uitleg tonen als je niet in DECISION zit
+function showPhaseWaiting() {
+  let text;
+  if (currentPhase === "MOVE") {
+    text = "MOVE-fase: de vossen verplaatsen zich. Wacht tot de host naar de volgende fase gaat.";
+  } else if (currentPhase === "ACTIONS") {
+    text = "ACTIONS-fase: later komen hier actiekaarten. Wacht op de host.";
+  } else if (currentPhase === "REVEAL") {
+    text = "REVEAL-fase: de keuzes worden onthuld en scores worden bijgewerkt.";
+  } else {
+    text = "Wacht op de host.";
+  }
+
+  roundDiv.innerHTML = "";
+
+  const header = document.createElement("p");
+  header.textContent = `Ronde ${currentRound} – fase: ${currentPhase}`;
+  const p = document.createElement("p");
+  p.textContent = text;
+
+  roundDiv.appendChild(header);
+  roundDiv.appendChild(p);
+}
+
+// 5) Luisteren of jij al een keuze hebt gemaakt in deze ronde (alleen DECISION)
 function watchOwnAction() {
-  roundDiv.innerHTML = `<p>Ronde ${currentRound} – fase: ${currentPhase}</p>`;
+  roundDiv.innerHTML =
+    `<p>Ronde ${currentRound} – fase: ${currentPhase}</p>` +
+    `<p>Keuze-status laden...</p>`;
 
   const actionsCol = collection(db, "games", gameId, "actions");
   const actionsQuery = query(
