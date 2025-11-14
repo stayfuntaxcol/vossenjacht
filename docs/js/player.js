@@ -34,19 +34,6 @@ initAuth(async () => {
   // 1) Speler live volgen (naam + score)
   const playerRef = doc(db, "games", gameId, "players", playerId);
 
-  onSnapshot(playerRef, (snap) => {
-    if (!snap.exists()) {
-      infoDiv.textContent = "Speler niet gevonden";
-      return;
-    }
-    const player = snap.data();
-    playerName = player.name;
-    const score = player.score || 0;
-    infoDiv.textContent = `Je bent: ${player.name} – score: ${score}`;
-  });
-
-  // 2) Game volgen: status, ronde, event
-  const gameRef = doc(db, "games", gameId);
   onSnapshot(gameRef, (gameSnap) => {
     if (!gameSnap.exists()) {
       roundDiv.textContent = "Spel niet gevonden";
@@ -60,6 +47,15 @@ initAuth(async () => {
       currentEvent = getEventById(game.currentEventId);
     } else {
       currentEvent = null;
+    }
+
+    if (game.status === "finished") {
+      roundDiv.textContent = "Spel afgelopen. Bekijk de eindstand op het grote scherm.";
+      if (unsubActions) {
+        unsubActions();
+        unsubActions = null;
+      }
+      return;
     }
 
     if (game.status !== "round") {
