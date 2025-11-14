@@ -1,6 +1,4 @@
 import { initAuth } from "./firebase.js";
-
-// VERVANG versie hier ook door jouw versie
 import {
   getFirestore,
   addDoc,
@@ -13,7 +11,6 @@ import {
 
 const db = getFirestore();
 
-// simpele code-generator, bv. ABCD of J5K9
 function generateCode(length = 4) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
@@ -24,8 +21,8 @@ function generateCode(length = 4) {
 }
 
 initAuth((user) => {
-  const hostBtn  = document.getElementById("hostGameBtn");
-  const joinBtn  = document.getElementById("joinGameBtn");
+  const hostBtn = document.getElementById("hostGameBtn");
+  const joinBtn = document.getElementById("joinGameBtn");
   const nameInput = document.getElementById("playerName");
   const codeInput = document.getElementById("joinCode");
 
@@ -38,16 +35,18 @@ initAuth((user) => {
 
     const code = generateCode();
 
-    // nieuw spel
+    // Nieuw spel
     const gameRef = await addDoc(collection(db, "games"), {
       code,
       status: "lobby",
       round: 0,
+      phase: "MOVE",
+      currentEventId: null,
       createdAt: serverTimestamp(),
-      hostUid: user.uid,   
+      hostUid: user.uid,
     });
 
-    // host als eerste speler
+    // Host als eerste speler
     await addDoc(collection(db, "games", gameRef.id, "players"), {
       name,
       uid: user.uid,
@@ -56,7 +55,6 @@ initAuth((user) => {
       joinedAt: serverTimestamp(),
     });
 
-    // naar host-scherm met gameId
     window.location.href = `host.html?game=${gameRef.id}`;
   });
 
@@ -69,7 +67,6 @@ initAuth((user) => {
       return;
     }
 
-    // zoek spel met deze code
     const q = query(collection(db, "games"), where("code", "==", inputCode));
     const snap = await getDocs(q);
 
@@ -80,16 +77,17 @@ initAuth((user) => {
 
     const gameDoc = snap.docs[0];
 
-    // speler toevoegen
-    const playerRef = await addDoc(collection(db, "games", gameDoc.id, "players"), {
-      name,
-      uid: user.uid,
-      isHost: false,
-      score: 0,
-      joinedAt: serverTimestamp(),
-    });
+    const playerRef = await addDoc(
+      collection(db, "games", gameDoc.id, "players"),
+      {
+        name,
+        uid: user.uid,
+        isHost: false,
+        score: 0,
+        joinedAt: serverTimestamp(),
+      }
+    );
 
-    // naar speler-scherm met game + player id
     window.location.href = `player.html?game=${gameDoc.id}&player=${playerRef.id}`;
   });
 });
