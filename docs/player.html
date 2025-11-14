@@ -2,14 +2,54 @@
 <html lang="nl">
 <head>
   <meta charset="UTF-8" />
-  <title>Vossenjacht – Speler</title>
+  <title>Vossenjacht – Spelerscherm</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="./css/style.css" />
 </head>
-<body class="player-screen">
-  <main class="screen">
+<body class="screen player-screen">
+  <header>
     <h1>Vossenjacht – Speler</h1>
-    <div id="playerInfo" class="panel"></div>
-    <div id="roundArea" class="panel large"></div>
+    <div id="gameStatus" class="game-info"></div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Jij</h2>
+      <div id="playerInfo"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Huidige event</h2>
+      <div id="eventInfo"></div>
+    </section>
+
+    <section class="panel">
+      <h2>MOVE – één actie kiezen</h2>
+      <p id="moveHint" style="font-size:0.85rem; opacity:0.8;">
+        Je mag in deze fase precies één MOVE doen zolang je in de Yard staat.
+      </p>
+      <div class="row">
+        <button id="btnSnatch">Snatch (loot pakken)</button>
+        <button id="btnForage">Forage (loot zoeken)</button>
+      </div>
+      <div class="row">
+        <button id="btnScout">Scout (event bekijken)</button>
+        <button id="btnShift">Shift (events wisselen)</button>
+      </div>
+      <p id="moveState" style="font-size:0.8rem; opacity:0.8; margin-top:0.5rem;"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Jouw loot</h2>
+      <div id="lootPanel"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Actiekaarten (voor later)</h2>
+      <div id="handPanel">
+        Nog niet actief – OPS-fase wordt later toegevoegd.
+      </div>
+    </section>
   </main>
 
   <script type="module" src="./js/player.js"></script>
