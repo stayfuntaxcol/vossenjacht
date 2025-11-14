@@ -11,6 +11,7 @@ import {
 
 const db = getFirestore();
 
+// simpele code-generator, bv. ABCD of J5K9
 function generateCode(length = 4) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
@@ -20,12 +21,23 @@ function generateCode(length = 4) {
   return code;
 }
 
+// Fisher-Yates shuffle
+function shuffleArray(array) {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 initAuth((user) => {
-  const hostBtn = document.getElementById("hostGameBtn");
-  const joinBtn = document.getElementById("joinGameBtn");
+  const hostBtn   = document.getElementById("hostGameBtn");
+  const joinBtn   = document.getElementById("joinGameBtn");
   const nameInput = document.getElementById("playerName");
   const codeInput = document.getElementById("joinCode");
 
+  // Nieuw spel hosten
   hostBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();
     if (!name) {
@@ -35,7 +47,25 @@ initAuth((user) => {
 
     const code = generateCode();
 
-    // Nieuw spel
+    // Event Track opbouwen (12 events) gebaseerd op EggRun
+    const baseTrack = [
+      "DEN_RED",
+      "DEN_BLUE",
+      "DEN_GREEN",
+      "DEN_YELLOW",
+      "DOG_CHARGE",
+      "ROOSTER_CROW",
+      "ROOSTER_CROW",
+      "ROOSTER_CROW",
+      "HIDDEN_NEST",
+      "GATE_TOLL",
+      "MAGPIE_SNITCH",
+      "PAINT_BOMB_NEST",
+    ];
+
+    const eventTrack = shuffleArray(baseTrack);
+
+    // Nieuw game-document
     const gameRef = await addDoc(collection(db, "games"), {
       code,
       status: "lobby",
@@ -44,6 +74,14 @@ initAuth((user) => {
       currentEventId: null,
       createdAt: serverTimestamp(),
       hostUid: user.uid,
+
+      // Event Track + index
+      eventTrack,
+      eventIndex: 0,
+
+      // Voor later (Rooster Crow / eindconditie):
+      roosterSeen: 0,
+      raidEndedByRooster: false,
     });
 
     // Host als eerste speler
@@ -58,6 +96,7 @@ initAuth((user) => {
     window.location.href = `host.html?game=${gameRef.id}`;
   });
 
+  // Joinen met game code
   joinBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();
     const inputCode = codeInput.value.trim().toUpperCase();
