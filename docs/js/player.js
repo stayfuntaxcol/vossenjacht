@@ -24,8 +24,11 @@ let playerName    = "";
 let currentRound  = 0;
 let currentEvent  = null;
 let unsubActions  = null;
+let currentUid    = null;   // ← nieuw: auth uid
 
-initAuth(async () => {
+initAuth(async (authUser) => {
+  currentUid = authUser.uid;
+
   if (!gameId || !playerId) {
     infoDiv.textContent = "Geen game of speler-id in de URL";
     return;
@@ -45,7 +48,7 @@ initAuth(async () => {
     infoDiv.textContent = `Je bent: ${player.name} – score: ${score}`;
   });
 
-  // 2) Huidige winnaar / eindscore tonen (op basis van alle spelers)
+  // 2) Huidige winnaar / eindscore tonen
   const playersCol = collection(db, "games", gameId, "players");
   const winnerDiv = document.createElement("div");
   winnerDiv.id = "winnerInfo";
@@ -53,7 +56,6 @@ initAuth(async () => {
   winnerDiv.style.fontSize = "0.9rem";
   winnerDiv.style.opacity = "0.9";
 
-  // zet het blokje direct onder playerInfo
   infoDiv.insertAdjacentElement("afterend", winnerDiv);
 
   onSnapshot(playersCol, (snapshot) => {
@@ -67,14 +69,12 @@ initAuth(async () => {
       return;
     }
 
-    // sorteer op score (hoog naar laag)
     players.sort((a, b) => (b.score || 0) - (a.score || 0));
     const topScore = players[0].score || 0;
 
     const leaders = players.filter((p) => (p.score || 0) === topScore);
 
     if (topScore === 0) {
-      // nog niemand punten: geen winnaar-tekst nodig
       winnerDiv.textContent = "Nog geen punten uitgedeeld.";
       return;
     }
@@ -115,7 +115,6 @@ initAuth(async () => {
       return;
     }
 
-    // Nieuwe ronde? → nieuwe listener op eigen actie
     if (currentRound === roundNumber && unsubActions) {
       return;
     }
@@ -139,10 +138,8 @@ function watchOwnAction() {
   if (unsubActions) unsubActions();
   unsubActions = onSnapshot(actionsQuery, (snap) => {
     if (snap.empty) {
-      // Nog geen keuze → knoppen tonen
       showChoiceButtons();
     } else {
-      // Keuze al gemaakt
       const action = snap.docs[0].data();
       roundDiv.innerHTML =
         `<p>Ronde ${currentRound}: je hebt gekozen: ${action.choice}.</p>` +
@@ -154,7 +151,6 @@ function watchOwnAction() {
 function showChoiceButtons() {
   roundDiv.innerHTML = "";
 
-  // Event-kaart tonen boven de knoppen
   if (currentEvent) {
     const evTitle = document.createElement("h2");
     evTitle.textContent = currentEvent.title;
@@ -169,9 +165,9 @@ function showChoiceButtons() {
   }
 
   const btnA = document.createElement("button");
-  btnA.textContent = "Grijp buit";      // GRAB_LOOT
+  btnA.textContent = "Grijp buit";
   const btnB = document.createElement("button");
-  btnB.textContent = "Dek jezelf in";   // PLAY_SAFE
+  btnB.textContent = "Dek jezelf in";
 
   btnA.addEventListener("click", () => submitChoice("GRAB_LOOT"));
   btnB.addEventListener("click", () => submitChoice("PLAY_SAFE"));
@@ -189,9 +185,8 @@ async function submitChoice(choice) {
     round: currentRound,
     playerId,
     playerName,
+    playerUid: currentUid,      // ← nieuw: auth uid opslaan
     choice,
     createdAt: serverTimestamp(),
   });
-
-  // UI wordt daarna bijgewerkt door onSnapshot() in watchOwnAction()
 }
