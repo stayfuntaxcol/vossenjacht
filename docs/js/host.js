@@ -1,5 +1,6 @@
 import { initAuth } from "./firebase.js";
 import { getEventForRound, getEventById } from "./cards.js";
+import { addLog } from "./log.js";
 import {
   getFirestore,
   doc,
@@ -10,6 +11,8 @@ import {
   query,
   where,
   getDocs,
+  orderBy,
+  limit,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const db = getFirestore();
@@ -20,14 +23,17 @@ const gameId = params.get("game");
 const gameInfo      = document.getElementById("gameInfo");
 const playersDiv    = document.getElementById("playersList");
 const roundInfo     = document.getElementById("roundInfo");
+const logPanel      = document.getElementById("logPanel");
 const startBtn      = document.getElementById("startRoundBtn");
 const endBtn        = document.getElementById("endRoundBtn");
+const nextPhaseBtn  = document.getElementById("nextPhaseBtn");
 const playAsHostBtn = document.getElementById("playAsHostBtn");
 
-let currentRound = 0;
+let currentRoundNumber = 0;
+let currentRoundForActions = 0;
 let unsubActions = null;
 
-if (!gameId) {
+if (!gameId && gameInfo) {
   gameInfo.textContent = "Geen gameId in de URL";
 }
 
@@ -36,7 +42,7 @@ initAuth(async (authUser) => {
 
   const gameRef = doc(db, "games", gameId);
 
-  // 1) Game live volgen (code, status, ronde, event + acties)
+  // 1) Game live volgen
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
       gameInfo.textContent = "Spel niet gevonden";
@@ -44,13 +50,14 @@ initAuth(async (authUser) => {
     }
 
     const game = snap.data();
-    const roundNumber = game.round || 0;
+    currentRoundNumber = game.round || 0;
+    const phase = game.phase || "MOVE";
     const event = game.currentEventId
       ? getEventById(game.currentEventId)
       : null;
 
     gameInfo.textContent =
-      `Code: ${game.code} – Status: ${game.status} – Ronde: ${roundNumber}`;
+      `Code: ${game.code} – Status: ${game.status} – Ronde: ${currentRoundNumber} – Fase: ${phase}`;
 
     if (game.status !== "round") {
       roundInfo.textContent = "Nog geen actieve ronde.";
@@ -61,35 +68,36 @@ initAuth(async (authUser) => {
       return;
     }
 
-    // Als de ronde al bekend is en we hebben al een listener, niets doen
-    if (currentRound === roundNumber && unsubActions) {
+    // Actions voor huidige ronde volgen
+    if (currentRoundForActions === currentRoundNumber && unsubActions) {
       return;
     }
 
-    currentRound = roundNumber;
+    currentRoundForActions = currentRoundNumber;
 
     const actionsCol   = collection(db, "games", gameId, "actions");
-    const actionsQuery = query(actionsCol, where("round", "==", currentRound));
+    const actionsQuery = query(
+      actionsCol,
+      where("round", "==", currentRoundForActions)
+    );
 
     if (unsubActions) unsubActions();
     unsubActions = onSnapshot(actionsQuery, (snapActions) => {
       roundInfo.innerHTML = "";
 
-      // Event-kaart tonen
       if (event) {
         const h2 = document.createElement("h2");
-        h2.textContent = `Ronde ${roundNumber}: ${event.title}`;
+        h2.textContent = `Ronde ${currentRoundForActions}: ${event.title}`;
         const pText = document.createElement("p");
         pText.textContent = event.text;
         roundInfo.appendChild(h2);
         roundInfo.appendChild(pText);
       } else {
         const h2 = document.createElement("h2");
-        h2.textContent = `Ronde ${roundNumber}`;
+        h2.textContent = `Ronde ${currentRoundForActions}`;
         roundInfo.appendChild(h2);
       }
 
-      // Overzicht keuzes
       const count = snapActions.size;
       const p = document.createElement("p");
       p.textContent = `Keuzes ontvangen: ${count}`;
@@ -106,19 +114,41 @@ initAuth(async (authUser) => {
     });
   });
 
-  // 2) Spelers live volgen (gesorteerd scorebord)
-  const playersCol = collection(db, "games", gameId, "players");
-  onSnapshot(playersCol, (snapshot) => {
+  // 2) Spelers volgen (scorebord + LEAD FOX)
+  const playersColRef = collection(db, "games", gameId, "players");
+  onSnapshot(playersColRef, (snapshot) => {
     const players = [];
     snapshot.forEach((pDoc) => {
       players.push({ id: pDoc.id, ...pDoc.data() });
     });
 
-    // sorteer op score (hoog naar laag)
-    players.sort((a, b) => (b.score || 0) - (a.score || 0));
-
     playersDiv.innerHTML = "<h2>Spelers / Scorebord</h2>";
-    players.forEach((p, index) => {
+
+    // LEAD FOX op basis van join-volgorde
+    let leadFoxName = "";
+    if (players.length > 0 && currentRoundNumber > 0) {
+      const byJoin = [...players].sort((a, b) => {
+        if (!a.joinedAt || !b.joinedAt) return 0;
+        const aSec = a.joinedAt.seconds || 0;
+        const bSec = b.joinedAt.seconds || 0;
+        return aSec - bSec;
+      });
+      const leadIndex = (currentRoundNumber - 1) % byJoin.length;
+      leadFoxName = byJoin[leadIndex].name;
+    }
+
+    if (leadFoxName) {
+      const lf = document.createElement("div");
+      lf.textContent = `LEAD FOX deze ronde: ${leadFoxName}`;
+      lf.className = "lead-fox";
+      playersDiv.appendChild(lf);
+    }
+
+    const byScore = [...players].sort(
+      (a, b) => (b.score || 0) - (a.score || 0)
+    );
+
+    byScore.forEach((p, index) => {
       const plek = index + 1;
       const div = document.createElement("div");
       div.textContent =
@@ -127,7 +157,26 @@ initAuth(async (authUser) => {
     });
   });
 
-  // 3) Start (volgende) ronde
+  // 3) Logboek volgen
+  const logCol   = collection(db, "games", gameId, "log");
+  const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
+
+  onSnapshot(logQuery, (snap) => {
+    const entries = [];
+    snap.forEach((docSnap) => entries.push(docSnap.data()));
+    entries.reverse(); // oud → nieuw
+
+    logPanel.innerHTML = "<h2>Logboek</h2>";
+    entries.forEach((e) => {
+      const div = document.createElement("div");
+      div.className = "log-line";
+      div.textContent =
+        `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${e.message ?? ""}`;
+      logPanel.appendChild(div);
+    });
+  });
+
+  // 4) Start (volgende) ronde
   startBtn.addEventListener("click", async () => {
     const snap = await getDoc(gameRef);
     if (!snap.exists()) return;
@@ -139,11 +188,53 @@ initAuth(async (authUser) => {
     await updateDoc(gameRef, {
       status: "round",
       round: newRound,
+      phase: "MOVE",
       currentEventId: event ? event.id : null,
+    });
+
+    await addLog(gameId, {
+      round: newRound,
+      phase: "MOVE",
+      kind: "SYSTEM",
+      message: `Ronde ${newRound} gestart.`,
+    });
+
+    if (event) {
+      await addLog(gameId, {
+        round: newRound,
+        phase: "MOVE",
+        kind: "EVENT",
+        cardId: event.id,
+        message: event.title,
+      });
+    }
+  });
+
+  // 5) Volgende fase (MOVE → ACTIONS → DECISION → REVEAL → MOVE)
+  nextPhaseBtn.addEventListener("click", async () => {
+    const snap = await getDoc(gameRef);
+    if (!snap.exists()) return;
+    const game = snap.data();
+
+    const currentPhase = game.phase || "MOVE";
+    let next = "MOVE";
+    if (currentPhase === "MOVE") next = "ACTIONS";
+    else if (currentPhase === "ACTIONS") next = "DECISION";
+    else if (currentPhase === "DECISION") next = "REVEAL";
+    else if (currentPhase === "REVEAL") next = "MOVE";
+
+    await updateDoc(gameRef, { phase: next });
+
+    const roundNumber = game.round || 0;
+    await addLog(gameId, {
+      round: roundNumber,
+      phase: next,
+      kind: "SYSTEM",
+      message: `Fase veranderd naar ${next}.`,
     });
   });
 
-  // 4) Ronde afsluiten + scores updaten
+  // 6) Ronde afsluiten + scores updaten
   endBtn.addEventListener("click", async () => {
     const gameSnap = await getDoc(gameRef);
     if (!gameSnap.exists()) return;
@@ -155,12 +246,11 @@ initAuth(async (authUser) => {
       return;
     }
 
-    // alle acties van deze ronde ophalen
     const actionsCol   = collection(db, "games", gameId, "actions");
     const actionsQuery = query(actionsCol, where("round", "==", roundNumber));
     const actionsSnap  = await getDocs(actionsQuery);
 
-    const scoreChanges = {}; // playerId -> delta score
+    const scoreChanges = {};
 
     actionsSnap.forEach((aDoc) => {
       const a = aDoc.data();
@@ -171,10 +261,7 @@ initAuth(async (authUser) => {
       // PLAY_SAFE => 0 punten
     });
 
-    // spelers ophalen en scores bijwerken
-    const playersColRef = collection(db, "games", gameId, "players");
-    const playersSnap   = await getDocs(playersColRef);
-
+    const playersSnap = await getDocs(playersColRef);
     const updates = [];
     playersSnap.forEach((pDoc) => {
       const p = pDoc.data();
@@ -185,7 +272,22 @@ initAuth(async (authUser) => {
 
     await Promise.all(updates);
 
-    // game terug naar lobby
+    // Tussenstand loggen
+    const updatedPlayersSnap = await getDocs(playersColRef);
+    const standings = [];
+    updatedPlayersSnap.forEach((pDoc) => {
+      const p = pDoc.data();
+      standings.push(`${p.name}: ${p.score || 0}`);
+    });
+
+    await addLog(gameId, {
+      round: roundNumber,
+      phase: "REVEAL",
+      kind: "SCORE",
+      message: `Tussenstand na ronde ${roundNumber}: ${standings.join(", ")}`,
+    });
+
+    // terug naar lobby
     await updateDoc(gameRef, {
       status: "lobby",
     });
@@ -193,9 +295,8 @@ initAuth(async (authUser) => {
     alert("Ronde afgesloten en scores bijgewerkt.");
   });
 
-  // 5) Speel mee als host → open player.html voor host-speler
+  // 7) Speel mee als host
   playAsHostBtn.addEventListener("click", async () => {
-    const playersColRef = collection(db, "games", gameId, "players");
     const q = query(
       playersColRef,
       where("uid", "==", authUser.uid),
@@ -203,16 +304,17 @@ initAuth(async (authUser) => {
     );
 
     const snap = await getDocs(q);
-
     if (snap.empty) {
       alert("Geen host-speler gevonden. Start het spel opnieuw of join met de code.");
       return;
     }
 
     const playerDoc = snap.docs[0];
-    const playerId = playerDoc.id;
+    const hostPlayerId = playerDoc.id;
 
-    // open speler-scherm in nieuwe tab
-    window.open(`player.html?game=${gameId}&player=${playerId}`, "_blank");
+    window.open(
+      `player.html?game=${gameId}&player=${hostPlayerId}`,
+      "_blank"
+    );
   });
 });
