@@ -17,12 +17,12 @@ const db = getFirestore();
 const params = new URLSearchParams(window.location.search);
 const gameId = params.get("game");
 
-const gameInfo   = document.getElementById("gameInfo");
-const playersDiv = document.getElementById("playersList");
-const roundInfo  = document.getElementById("roundInfo");
-const startBtn   = document.getElementById("startRoundBtn");
-const endBtn     = document.getElementById("endRoundBtn");
-const finishBtn  = document.getElementById("finishGameBtn");
+const gameInfo      = document.getElementById("gameInfo");
+const playersDiv    = document.getElementById("playersList");
+const roundInfo     = document.getElementById("roundInfo");
+const startBtn      = document.getElementById("startRoundBtn");
+const endBtn        = document.getElementById("endRoundBtn");
+const playAsHostBtn = document.getElementById("playAsHostBtn");
 
 let currentRound = 0;
 let unsubActions = null;
@@ -31,12 +31,12 @@ if (!gameId) {
   gameInfo.textContent = "Geen gameId in de URL";
 }
 
-initAuth(async () => {
+initAuth(async (authUser) => {
   if (!gameId) return;
 
   const gameRef = doc(db, "games", gameId);
 
-  // 1) Game live volgen (code, status, ronde, event)
+  // 1) Game live volgen (code, status, ronde, event + acties)
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
       gameInfo.textContent = "Spel niet gevonden";
@@ -45,18 +45,15 @@ initAuth(async () => {
 
     const game = snap.data();
     const roundNumber = game.round || 0;
-    const event =
-      game.currentEventId ? getEventById(game.currentEventId) : null;
+    const event = game.currentEventId
+      ? getEventById(game.currentEventId)
+      : null;
 
     gameInfo.textContent =
       `Code: ${game.code} – Status: ${game.status} – Ronde: ${roundNumber}`;
 
     if (game.status !== "round") {
-      if (game.status === "finished") {
-        roundInfo.textContent = "Spel afgelopen. Bekijk de eindstand hieronder.";
-      } else {
-        roundInfo.textContent = "Nog geen actieve ronde.";
-      }
+      roundInfo.textContent = "Nog geen actieve ronde.";
       if (unsubActions) {
         unsubActions();
         unsubActions = null;
@@ -64,7 +61,7 @@ initAuth(async () => {
       return;
     }
 
-    // Als de ronde verandert: nieuwe listener op acties
+    // Als de ronde al bekend is en we hebben al een listener, niets doen
     if (currentRound === roundNumber && unsubActions) {
       return;
     }
@@ -109,20 +106,21 @@ initAuth(async () => {
     });
   });
 
-  // 2) Spelers live volgen (en eindstand tonen)
+  // 2) Spelers live volgen (gesorteerd scorebord)
   const playersCol = collection(db, "games", gameId, "players");
   onSnapshot(playersCol, (snapshot) => {
-    // sorteer op score aflopend
     const players = [];
     snapshot.forEach((pDoc) => {
       players.push({ id: pDoc.id, ...pDoc.data() });
     });
+
+    // sorteer op score (hoog naar laag)
     players.sort((a, b) => (b.score || 0) - (a.score || 0));
 
-    playersDiv.innerHTML = "<h2>Spelers / Eindstand</h2>";
+    playersDiv.innerHTML = "<h2>Spelers / Scorebord</h2>";
     players.forEach((p, index) => {
-      const div = document.createElement("div");
       const plek = index + 1;
+      const div = document.createElement("div");
       div.textContent =
         `${plek}. ${p.name} ${p.isHost ? "(host)" : ""} – score: ${p.score || 0}`;
       playersDiv.appendChild(div);
@@ -134,12 +132,6 @@ initAuth(async () => {
     const snap = await getDoc(gameRef);
     if (!snap.exists()) return;
     const game = snap.data();
-
-    // Als spel al finished is: niet meer starten
-    if (game.status === "finished") {
-      alert("Spel is al beëindigd.");
-      return;
-    }
 
     const newRound = (game.round || 0) + 1;
     const event = getEventForRound(newRound);
@@ -168,9 +160,6 @@ initAuth(async () => {
     const actionsQuery = query(actionsCol, where("round", "==", roundNumber));
     const actionsSnap  = await getDocs(actionsQuery);
 
-    // simpele regel:
-    // GRAB_LOOT  => +1 punt
-    // PLAY_SAFE  => 0 punten
     const scoreChanges = {}; // playerId -> delta score
 
     actionsSnap.forEach((aDoc) => {
@@ -179,11 +168,12 @@ initAuth(async () => {
       if (a.choice === "GRAB_LOOT") {
         scoreChanges[a.playerId] = (scoreChanges[a.playerId] || 0) + 1;
       }
+      // PLAY_SAFE => 0 punten
     });
 
     // spelers ophalen en scores bijwerken
-    const playersCol   = collection(db, "games", gameId, "players");
-    const playersSnap  = await getDocs(playersCol);
+    const playersColRef = collection(db, "games", gameId, "players");
+    const playersSnap   = await getDocs(playersColRef);
 
     const updates = [];
     playersSnap.forEach((pDoc) => {
@@ -195,7 +185,7 @@ initAuth(async () => {
 
     await Promise.all(updates);
 
-    // game terug naar lobby (nog niet finished)
+    // game terug naar lobby
     await updateDoc(gameRef, {
       status: "lobby",
     });
@@ -203,15 +193,26 @@ initAuth(async () => {
     alert("Ronde afgesloten en scores bijgewerkt.");
   });
 
-  // 5) Spel definitief beëindigen
-  finishBtn.addEventListener("click", async () => {
-    const confirmEnd = confirm("Spel beëindigen? Dit is de eindstand.");
-    if (!confirmEnd) return;
+  // 5) Speel mee als host → open player.html voor host-speler
+  playAsHostBtn.addEventListener("click", async () => {
+    const playersColRef = collection(db, "games", gameId, "players");
+    const q = query(
+      playersColRef,
+      where("uid", "==", authUser.uid),
+      where("isHost", "==", true)
+    );
 
-    await updateDoc(gameRef, {
-      status: "finished",
-    });
+    const snap = await getDocs(q);
 
-    alert("Spel beëindigd. Eindstand staat op het scherm.");
+    if (snap.empty) {
+      alert("Geen host-speler gevonden. Start het spel opnieuw of join met de code.");
+      return;
+    }
+
+    const playerDoc = snap.docs[0];
+    const playerId = playerDoc.id;
+
+    // open speler-scherm in nieuwe tab
+    window.open(`player.html?game=${gameId}&player=${playerId}`, "_blank");
   });
 });
