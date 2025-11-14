@@ -1,101 +1,89 @@
-// Alle Event Cards voor Vossenjacht.
-// Let op: extra velden (category, riskLevel, lootModifier, rulesHint)
-// worden NU nog niet gebruikt in de game-logica, maar zijn al klaar
-// voor later. Host- en player-scherm gebruiken nu vooral title + text.
+// cards.js
+// Alle Event Cards voor Vossenjacht, gebaseerd op EggRun.
+// We hebben 10 unieke events. De Event Track gebruikt sommige meerdere keren
+// (bijv. 3x Rooster Crow). De type-velden gebruiken we later in de engine.
 
 export const EVENTS = [
+  // 4x Den events (kleur-afhankelijke checks)
   {
-    id: "SCOUT_COOP",
-    title: "Verken het kippenhok",
-    text: "De vossen kruipen langs de afrastering. Ze tellen de kippen en zoeken de zwakke plek in het hok.",
-    category: "INFO",           // verkenning / informatie
-    riskLevel: "LOW",           // relatief veilig
-    lootModifier: 0,            // geen directe bonus
-    rulesHint:
-      "Normale ronde. Spelers kunnen deze ronde vooral strategisch nadenken zonder extra risico of bonus."
+    id: "DEN_RED",
+    type: "DEN",
+    denColor: "RED",
+    title: "Rode Den-controle",
+    text: "De boer controleert de rode kant van het erf. Vossen met een rode Den liggen extra onder vuur.",
   },
   {
-    id: "GUARD_DOG",
-    title: "Waakhond slaat aan",
-    text: "De boer zijn hond ruikt onraad. Hij blaft en rent richting het kippenhok.",
-    category: "RISK",           // meer risico
-    riskLevel: "HIGH",
-    lootModifier: 0,
-    rulesHint:
-      "Hoog risico om betrapt te worden. In een latere versie kun je hier een zwaardere straf aan koppelen als veel spelers buit grijpen."
+    id: "DEN_BLUE",
+    type: "DEN",
+    denColor: "BLUE",
+    title: "Blauwe Den-controle",
+    text: "De boer struint langs de blauwe afrastering. Vossen uit de blauwe Den moeten oppassen.",
   },
   {
-    id: "DARK_NIGHT",
-    title: "Pikdonkere nacht",
-    text: "Er is geen maanlicht. De vossen kunnen zich perfect verstoppen, maar zien zelf ook minder.",
-    category: "OPPORTUNITY",    // kansrijk maar riskant
-    riskLevel: "MEDIUM",
-    lootModifier: +1,           // potentiële bonus op buit
-    rulesHint:
-      "In de toekomst kun je hier bijvoorbeeld +1 extra punt geven aan spelers die buit grijpen, maar ook kans op mislukking verhogen."
+    id: "DEN_GREEN",
+    type: "DEN",
+    denColor: "GREEN",
+    title: "Groene Den-controle",
+    text: "De boer loopt langs de groene heg. Vossen uit de groene Den houden hun adem in.",
   },
   {
-    id: "FARMER_LANTERN",
-    title: "Boer met lantaarn",
-    text: "De boer loopt zijn ronde met een lantaarn. Eén foute stap en hij betrapt je.",
-    category: "RISK",
-    riskLevel: "HIGH",
-    lootModifier: 0,
-    rulesHint:
-      "Dit event leent zich goed voor strenge strafregels in latere versies (bijvoorbeeld puntenverlies als teveel vossen tegelijk buit grijpen)."
+    id: "DEN_YELLOW",
+    type: "DEN",
+    denColor: "YELLOW",
+    title: "Gele Den-controle",
+    text: "De boer kijkt rond bij de gele opslag en schuur. Vossen uit de gele Den zitten in de gevarenzone.",
   },
+
+  // Sheepdog Charge
   {
-    id: "OPEN_GATE",
-    title: "Openstaand hek",
-    text: "Iemand is het hek vergeten te sluiten. De toegang tot het erf is ineens een stuk makkelijker.",
-    category: "OPPORTUNITY",
-    riskLevel: "LOW",
-    lootModifier: +1,
-    rulesHint:
-      "Ideale ronde om buit te grijpen. Later kun je hier een vast voordeel aan koppelen, zoals +1 punt extra voor GRAB_LOOT."
+    id: "DOG_CHARGE",
+    type: "DOG",
+    title: "Herderhond-aanval",
+    text: "De herderhond ruikt onraad en stormt het erf op. Wie niet op tijd wegduikt, wordt omver gelopen.",
   },
+
+  // Rooster Crow (3 kopieën in de track, 1 beschrijving)
   {
-    id: "PANIC_INSIDE",
-    title: "Paniek in het kippenhok",
-    text: "De kippen kakelen wild. Niemand weet precies waardoor, maar de chaos werkt in jouw voordeel.",
-    category: "CHAOS",
-    riskLevel: "MEDIUM",
-    lootModifier: 0,
-    rulesHint:
-      "Chaos-event. In toekomstige regels kun je hier random effecten, extra loot of onverwachte straf aan koppelen."
+    id: "ROOSTER_CROW",
+    type: "ROOSTER",
+    title: "Rooster Crow",
+    text: "De haan kraait luid. De nacht loopt op zijn einde en de tijd voor een laatste raid is bijna voorbij.",
   },
+
+  // Hidden Nest
   {
-    id: "CAR_LIGHTS",
-    title: "Koplampen in de verte",
-    text: "Een auto nadert de boerderij. Is het een buurman, of de boer die eerder terugkomt?",
-    category: "PRESSURE",
-    riskLevel: "MEDIUM",
-    lootModifier: 0,
-    rulesHint:
-      "Psychologische druk. Spelers twijfelen of ze nog snel buit pakken of juist op veilig spelen."
+    id: "HIDDEN_NEST",
+    type: "HIDDEN",
+    title: "Verborgen Nest",
+    text: "Diep onder de struiken ligt een verborgen nest. Alleen de dapperste vos vindt het op tijd.",
   },
+
+  // Gate Toll
   {
-    id: "RAINSTORM",
-    title: "Onweersbui",
-    text: "Een harde regenbui barst los. Sporen verdwijnen, maar het terrein wordt glad en glibberig.",
-    category: "CHAOS",
-    riskLevel: "MEDIUM",
-    lootModifier: 0,
-    rulesHint:
-      "Dit event kan later gebruikt worden om bijvoorbeeld risico op mislukking te verlagen (sporen wissen) maar kans op ongeluk te verhogen."
+    id: "GATE_TOLL",
+    type: "TOLL",
+    title: "Tol bij het Hek",
+    text: "De poort kraakt open en dicht. Wie blijft hangen, moet een prijs betalen of wordt gesnapt.",
+  },
+
+  // Magpie Snitch
+  {
+    id: "MAGPIE_SNITCH",
+    type: "SNITCH",
+    title: "Ekster Verklikker",
+    text: "Een nieuwsgierige ekster kraait het uit. Vooral de LEAD FOX loopt gevaar om verraden te worden.",
+  },
+
+  // Paint-Bomb Nest
+  {
+    id: "PAINT_BOMB_NEST",
+    type: "PAINT",
+    title: "Verf-bom Nest",
+    text: "Een nest vol verf-eieren spat uit elkaar. Alle sporen en buit raken door elkaar.",
   },
 ];
 
-// Welke Event hoort bij welke ronde?
-// Momenteel: gewoon door de lijst heen lopen en daarna weer bij het begin.
-// Ronde 1 → SCOUT_COOP, 2 → GUARD_DOG, 3 → DARK_NIGHT, etc.
-export function getEventForRound(roundNumber) {
-  if (!roundNumber || roundNumber <= 0) return null;
-  const index = (roundNumber - 1) % EVENTS.length;
-  return EVENTS[index];
-}
-
-// Zoek een Event op id (gebruikt door host.js en player.js)
+// Helper: zoek event bij id (gebruikt door host.js en player.js)
 export function getEventById(id) {
   return EVENTS.find((e) => e.id === id) || null;
 }
