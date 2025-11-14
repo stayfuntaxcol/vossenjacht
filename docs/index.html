@@ -6,23 +6,27 @@
   <link rel="stylesheet" href="./css/style.css" />
 </head>
 <body>
-  <h1>Vossenjacht</h1>
+  <main class="screen">
+    <h1>Vossenjacht</h1>
+    <p>Multiplayer heist game – Foxes vs Coop.</p>
 
-  <label>
-    Jouw naam:
-    <input id="playerName" type="text" placeholder="Larah Fae" />
-  </label>
+    <section class="panel">
+      <label>
+        Jouw naam:
+        <input id="playerName" type="text" placeholder="Larah Fae" />
+      </label>
 
-  <div style="margin-top: 1rem;">
-    <button id="hostGameBtn">Nieuw spel hosten</button>
-  </div>
+      <div class="row">
+        <button id="hostGameBtn">Nieuw spel hosten</button>
+      </div>
 
-  <div style="margin-top: 1rem;">
-    <input id="joinCode" type="text" placeholder="Game code" />
-    <button id="joinGameBtn">Meedoen</button>
-  </div>
+      <div class="row">
+        <input id="joinCode" type="text" placeholder="Game code" />
+        <button id="joinGameBtn">Meedoen</button>
+      </div>
+    </section>
+  </main>
 
   <script type="module" src="./js/index.js"></script>
 </body>
 </html>
-
