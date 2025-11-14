@@ -34,6 +34,20 @@ initAuth(async () => {
   // 1) Speler live volgen (naam + score)
   const playerRef = doc(db, "games", gameId, "players", playerId);
 
+  onSnapshot(playerRef, (snap) => {
+    if (!snap.exists()) {
+      infoDiv.textContent = "Speler niet gevonden";
+      return;
+    }
+    const player = snap.data();
+    playerName = player.name;
+    const score = player.score || 0;
+    infoDiv.textContent = `Je bent: ${player.name} – score: ${score}`;
+  });
+
+  // 2) Game volgen: status, ronde, event
+  const gameRef = doc(db, "games", gameId);
+
   onSnapshot(gameRef, (gameSnap) => {
     if (!gameSnap.exists()) {
       roundDiv.textContent = "Spel niet gevonden";
@@ -49,8 +63,10 @@ initAuth(async () => {
       currentEvent = null;
     }
 
+    // spel is afgelopen
     if (game.status === "finished") {
-      roundDiv.textContent = "Spel afgelopen. Bekijk de eindstand op het grote scherm.";
+      roundDiv.textContent =
+        "Spel afgelopen. Bekijk de eindstand op het grote scherm.";
       if (unsubActions) {
         unsubActions();
         unsubActions = null;
@@ -58,6 +74,7 @@ initAuth(async () => {
       return;
     }
 
+    // geen actieve ronde
     if (game.status !== "round") {
       roundDiv.textContent = "Wachten op volgende ronde...";
       if (unsubActions) {
@@ -108,42 +125,4 @@ function showChoiceButtons() {
 
   // Event-kaart tonen boven de knoppen
   if (currentEvent) {
-    const evTitle = document.createElement("h2");
-    evTitle.textContent = currentEvent.title;
-    const evText = document.createElement("p");
-    evText.textContent = currentEvent.text;
-    roundDiv.appendChild(evTitle);
-    roundDiv.appendChild(evText);
-  } else {
-    const title = document.createElement("p");
-    title.textContent = `Ronde ${currentRound}: kies je actie`;
-    roundDiv.appendChild(title);
-  }
-
-  const btnA = document.createElement("button");
-  btnA.textContent = "Grijp buit";      // GRAB_LOOT
-  const btnB = document.createElement("button");
-  btnB.textContent = "Dek jezelf in";   // PLAY_SAFE
-
-  btnA.addEventListener("click", () => submitChoice("GRAB_LOOT"));
-  btnB.addEventListener("click", () => submitChoice("PLAY_SAFE"));
-
-  roundDiv.appendChild(btnA);
-  roundDiv.appendChild(document.createTextNode(" "));
-  roundDiv.appendChild(btnB);
-}
-
-async function submitChoice(choice) {
-  roundDiv.innerHTML = "<p>Keuze verzenden...</p>";
-
-  const actionsCol = collection(db, "games", gameId, "actions");
-  await addDoc(actionsCol, {
-    round: currentRound,
-    playerId,
-    playerName,
-    choice,
-    createdAt: serverTimestamp(),
-  });
-
-  // UI wordt daarna bijgewerkt door onSnapshot() in watchOwnAction()
-}
+    const evTitle = document.createElement("h
