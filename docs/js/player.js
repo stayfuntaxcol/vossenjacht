@@ -45,7 +45,51 @@ initAuth(async () => {
     infoDiv.textContent = `Je bent: ${player.name} – score: ${score}`;
   });
 
-  // 2) Game volgen: status, ronde, event
+  // 2) Huidige winnaar / eindscore tonen (op basis van alle spelers)
+  const playersCol = collection(db, "games", gameId, "players");
+  const winnerDiv = document.createElement("div");
+  winnerDiv.id = "winnerInfo";
+  winnerDiv.style.marginTop = "0.5rem";
+  winnerDiv.style.fontSize = "0.9rem";
+  winnerDiv.style.opacity = "0.9";
+
+  // zet het blokje direct onder playerInfo
+  infoDiv.insertAdjacentElement("afterend", winnerDiv);
+
+  onSnapshot(playersCol, (snapshot) => {
+    const players = [];
+    snapshot.forEach((pDoc) => {
+      players.push(pDoc.data());
+    });
+
+    if (players.length === 0) {
+      winnerDiv.textContent = "";
+      return;
+    }
+
+    // sorteer op score (hoog naar laag)
+    players.sort((a, b) => (b.score || 0) - (a.score || 0));
+    const topScore = players[0].score || 0;
+
+    const leaders = players.filter((p) => (p.score || 0) === topScore);
+
+    if (topScore === 0) {
+      // nog niemand punten: geen winnaar-tekst nodig
+      winnerDiv.textContent = "Nog geen punten uitgedeeld.";
+      return;
+    }
+
+    if (leaders.length === 1) {
+      winnerDiv.textContent =
+        `Huidige winnaar: ${leaders[0].name} – ${topScore} punten`;
+    } else {
+      const names = leaders.map((p) => p.name).join(", ");
+      winnerDiv.textContent =
+        `Gelijkspel: ${names} – ${topScore} punten`;
+    }
+  });
+
+  // 3) Game volgen: status, ronde, event
   const gameRef = doc(db, "games", gameId);
   onSnapshot(gameRef, (gameSnap) => {
     if (!gameSnap.exists()) {
@@ -81,7 +125,7 @@ initAuth(async () => {
   });
 });
 
-// 3) Luisteren of jij al een keuze hebt gemaakt in deze ronde
+// 4) Luisteren of jij al een keuze hebt gemaakt in deze ronde
 function watchOwnAction() {
   roundDiv.innerHTML = `<p>Ronde ${currentRound}: laden...</p>`;
 
