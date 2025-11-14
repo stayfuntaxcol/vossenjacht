@@ -2,20 +2,33 @@
 <html lang="nl">
 <head>
   <meta charset="UTF-8" />
-  <title>Vossenjacht – Host</title>
+  <title>Vossenjacht – Community Board</title>
   <link rel="stylesheet" href="./css/style.css" />
 </head>
-<body>
-  <h1>Vossenjacht – Community Board</h1>
+<body class="host-screen">
+  <header>
+    <h1>Vossenjacht – Community Board</h1>
+    <div id="gameInfo" class="game-info"></div>
+  </header>
 
-  <div id="gameInfo"></div>
-  <div id="playersList"></div>
-  <div id="roundInfo"></div>
+  <main class="board-layout">
+    <section class="column">
+      <div id="playersList" class="panel"></div>
 
-<button id="playAsHostBtn">Speel mee als host</button>
-<button id="startRoundBtn">Start ronde</button>
-<button id="endRoundBtn">Ronde afsluiten (scores)</button>
-<button id="finishGameBtn">Beëindig spel</button>
+      <div class="panel controls">
+        <h2>Besturing</h2>
+        <button id="startRoundBtn">Start ronde</button>
+        <button id="endRoundBtn">Ronde afsluiten (scores)</button>
+        <button id="nextPhaseBtn">Volgende fase</button>
+        <button id="playAsHostBtn">Speel mee als host</button>
+      </div>
+    </section>
+
+    <section class="column">
+      <div id="roundInfo" class="panel large"></div>
+      <div id="logPanel" class="panel log"></div>
+    </section>
+  </main>
 
   <script type="module" src="./js/host.js"></script>
 </body>
