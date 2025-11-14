@@ -44,6 +44,7 @@ initAuth((user) => {
       status: "lobby",
       round: 0,
       createdAt: serverTimestamp(),
+      hostUid: user.uid,   
     });
 
     // host als eerste speler
