@@ -1,5 +1,5 @@
 import { initAuth } from "./firebase.js";
-import { getEventForRound, getEventById } from "./cards.js";
+import { getEventById } from "./cards.js";
 import { addLog } from "./log.js";
 import {
   getFirestore,
@@ -29,10 +29,10 @@ const endBtn        = document.getElementById("endRoundBtn");
 const nextPhaseBtn  = document.getElementById("nextPhaseBtn");
 const playAsHostBtn = document.getElementById("playAsHostBtn");
 
-let currentRoundNumber      = 0;
-let currentRoundForActions  = 0;
-let currentPhase            = "MOVE";
-let unsubActions            = null;
+let currentRoundNumber     = 0;
+let currentRoundForActions = 0;
+let currentPhase           = "MOVE";
+let unsubActions           = null;
 
 if (!gameId && gameInfo) {
   gameInfo.textContent = "Geen gameId in de URL";
@@ -189,13 +189,29 @@ initAuth(async (authUser) => {
     const game = snap.data();
 
     const newRound = (game.round || 0) + 1;
-    const event = getEventForRound(newRound);
+
+    const track = game.eventTrack || [];
+    let index =
+      typeof game.eventIndex === "number" ? game.eventIndex : 0;
+
+    let eventId = null;
+    let event   = null;
+
+    if (track.length > 0) {
+      if (index >= track.length) {
+        // eenvoudige wrap-around als je meer dan 12 rondes speelt
+        index = 0;
+      }
+      eventId = track[index];
+      event   = getEventById(eventId);
+    }
 
     await updateDoc(gameRef, {
       status: "round",
       round: newRound,
       phase: "MOVE",
-      currentEventId: event ? event.id : null,
+      currentEventId: eventId,
+      eventIndex: track.length > 0 ? index + 1 : index,
     });
 
     await addLog(gameId, {
@@ -210,7 +226,7 @@ initAuth(async (authUser) => {
         round: newRound,
         phase: "MOVE",
         kind: "EVENT",
-        cardId: event.id,
+        cardId: eventId,
         message: event.title,
       });
     }
@@ -240,7 +256,7 @@ initAuth(async (authUser) => {
     });
   });
 
-  // 6) Ronde afsluiten + scores updaten
+  // 6) Ronde afsluiten + scores updaten (nog simpele versie)
   endBtn.addEventListener("click", async () => {
     const gameSnap = await getDoc(gameRef);
     if (!gameSnap.exists()) return;
