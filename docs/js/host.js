@@ -1,4 +1,5 @@
 import { initAuth } from "./firebase.js";
+import { getEventForRound, getEventById } from "./cards.js";
 import {
   getFirestore,
   doc,
@@ -34,7 +35,7 @@ initAuth(async () => {
 
   const gameRef = doc(db, "games", gameId);
 
-  // 1) Game live volgen
+  // 1) Game live volgen (code, status, ronde, event)
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
       gameInfo.textContent = "Spel niet gevonden";
@@ -43,6 +44,8 @@ initAuth(async () => {
 
     const game = snap.data();
     const roundNumber = game.round || 0;
+    const event =
+      game.currentEventId ? getEventById(game.currentEventId) : null;
 
     gameInfo.textContent =
       `Code: ${game.code} – Status: ${game.status} – Ronde: ${roundNumber}`;
@@ -68,7 +71,23 @@ initAuth(async () => {
 
     if (unsubActions) unsubActions();
     unsubActions = onSnapshot(actionsQuery, (snapActions) => {
-      roundInfo.innerHTML = `<h2>Ronde ${currentRound}</h2>`;
+      roundInfo.innerHTML = "";
+
+      // Event-kaart tonen
+      if (event) {
+        const h2 = document.createElement("h2");
+        h2.textContent = `Ronde ${roundNumber}: ${event.title}`;
+        const pText = document.createElement("p");
+        pText.textContent = event.text;
+        roundInfo.appendChild(h2);
+        roundInfo.appendChild(pText);
+      } else {
+        const h2 = document.createElement("h2");
+        h2.textContent = `Ronde ${roundNumber}`;
+        roundInfo.appendChild(h2);
+      }
+
+      // Overzicht keuzes
       const count = snapActions.size;
       const p = document.createElement("p");
       p.textContent = `Keuzes ontvangen: ${count}`;
@@ -97,17 +116,19 @@ initAuth(async () => {
     });
   });
 
-  // 3) Start (volgende) ronde
+  // 3) Start (volgende) ronde: kies event + zet status
   startBtn.addEventListener("click", async () => {
     const snap = await getDoc(gameRef);
     if (!snap.exists()) return;
     const game = snap.data();
 
     const newRound = (game.round || 0) + 1;
+    const event = getEventForRound(newRound);
 
     await updateDoc(gameRef, {
       status: "round",
       round: newRound,
+      currentEventId: event ? event.id : null,
     });
   });
 
