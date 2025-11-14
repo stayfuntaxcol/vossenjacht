@@ -23,8 +23,9 @@ const roundDiv = document.getElementById("roundArea");
 let playerName    = "";
 let currentRound  = 0;
 let currentEvent  = null;
+let currentPhase  = "MOVE";
 let unsubActions  = null;
-let currentUid    = null;   // ← nieuw: auth uid
+let currentUid    = null;
 
 initAuth(async (authUser) => {
   currentUid = authUser.uid;
@@ -34,7 +35,7 @@ initAuth(async (authUser) => {
     return;
   }
 
-  // 1) Speler live volgen (naam + score)
+  // Speler volgen (naam + score)
   const playerRef = doc(db, "games", gameId, "players", playerId);
 
   onSnapshot(playerRef, (snap) => {
@@ -48,14 +49,11 @@ initAuth(async (authUser) => {
     infoDiv.textContent = `Je bent: ${player.name} – score: ${score}`;
   });
 
-  // 2) Huidige winnaar / eindscore tonen
+  // Huidige winnaar tonen
   const playersCol = collection(db, "games", gameId, "players");
   const winnerDiv = document.createElement("div");
   winnerDiv.id = "winnerInfo";
-  winnerDiv.style.marginTop = "0.5rem";
-  winnerDiv.style.fontSize = "0.9rem";
-  winnerDiv.style.opacity = "0.9";
-
+  winnerDiv.className = "winner-info";
   infoDiv.insertAdjacentElement("afterend", winnerDiv);
 
   onSnapshot(playersCol, (snapshot) => {
@@ -71,7 +69,6 @@ initAuth(async (authUser) => {
 
     players.sort((a, b) => (b.score || 0) - (a.score || 0));
     const topScore = players[0].score || 0;
-
     const leaders = players.filter((p) => (p.score || 0) === topScore);
 
     if (topScore === 0) {
@@ -89,7 +86,7 @@ initAuth(async (authUser) => {
     }
   });
 
-  // 3) Game volgen: status, ronde, event
+  // Game volgen (status, ronde, fase, event)
   const gameRef = doc(db, "games", gameId);
   onSnapshot(gameRef, (gameSnap) => {
     if (!gameSnap.exists()) {
@@ -99,6 +96,7 @@ initAuth(async (authUser) => {
 
     const game = gameSnap.data();
     const roundNumber = game.round || 0;
+    currentPhase = game.phase || "MOVE";
 
     if (game.currentEventId) {
       currentEvent = getEventById(game.currentEventId);
@@ -124,9 +122,9 @@ initAuth(async (authUser) => {
   });
 });
 
-// 4) Luisteren of jij al een keuze hebt gemaakt in deze ronde
+// Check of deze speler al een keuze heeft
 function watchOwnAction() {
-  roundDiv.innerHTML = `<p>Ronde ${currentRound}: laden...</p>`;
+  roundDiv.innerHTML = `<p>Ronde ${currentRound} – fase: ${currentPhase}</p>`;
 
   const actionsCol = collection(db, "games", gameId, "actions");
   const actionsQuery = query(
@@ -151,6 +149,10 @@ function watchOwnAction() {
 function showChoiceButtons() {
   roundDiv.innerHTML = "";
 
+  const header = document.createElement("p");
+  header.textContent = `Ronde ${currentRound} – fase: ${currentPhase}`;
+  roundDiv.appendChild(header);
+
   if (currentEvent) {
     const evTitle = document.createElement("h2");
     evTitle.textContent = currentEvent.title;
@@ -160,7 +162,7 @@ function showChoiceButtons() {
     roundDiv.appendChild(evText);
   } else {
     const title = document.createElement("p");
-    title.textContent = `Ronde ${currentRound}: kies je actie`;
+    title.textContent = "Kies je actie";
     roundDiv.appendChild(title);
   }
 
@@ -185,7 +187,7 @@ async function submitChoice(choice) {
     round: currentRound,
     playerId,
     playerName,
-    playerUid: currentUid,      // ← nieuw: auth uid opslaan
+    playerUid: currentUid,
     choice,
     createdAt: serverTimestamp(),
   });
