@@ -21,23 +21,12 @@ function generateCode(length = 4) {
   return code;
 }
 
-// Fisher-Yates shuffle
-function shuffleArray(array) {
-  const arr = [...array];
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-
 initAuth((user) => {
-  const hostBtn   = document.getElementById("hostGameBtn");
-  const joinBtn   = document.getElementById("joinGameBtn");
+  const hostBtn = document.getElementById("hostGameBtn");
+  const joinBtn = document.getElementById("joinGameBtn");
   const nameInput = document.getElementById("playerName");
   const codeInput = document.getElementById("joinCode");
 
-  // Nieuw spel hosten
   hostBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();
     if (!name) {
@@ -47,56 +36,41 @@ initAuth((user) => {
 
     const code = generateCode();
 
-    // Event Track opbouwen (12 events) gebaseerd op EggRun
-    const baseTrack = [
-      "DEN_RED",
-      "DEN_BLUE",
-      "DEN_GREEN",
-      "DEN_YELLOW",
-      "DOG_CHARGE",
-      "ROOSTER_CROW",
-      "ROOSTER_CROW",
-      "ROOSTER_CROW",
-      "HIDDEN_NEST",
-      "GATE_TOLL",
-      "MAGPIE_SNITCH",
-      "PAINT_BOMB_NEST",
-    ];
-
-    const eventTrack = shuffleArray(baseTrack);
-
-    // Nieuw game-document
+    // nieuw spel (raid nog NIET geïnitialiseerd)
     const gameRef = await addDoc(collection(db, "games"), {
       code,
       status: "lobby",
-      round: 0,
       phase: "MOVE",
+      round: 0,
       currentEventId: null,
       createdAt: serverTimestamp(),
       hostUid: user.uid,
-
-      // Event Track + index
-      eventTrack,
-      eventIndex: 0,
-
-      // Voor later (Rooster Crow / eindconditie):
-      roosterSeen: 0,
+      raidStarted: false,
       raidEndedByRooster: false,
+      roosterSeen: 0,
     });
 
-    // Host als eerste speler
+    // host als eerste speler (EggRun-statevelden alvast klaarzetten)
     await addDoc(collection(db, "games", gameRef.id, "players"), {
       name,
       uid: user.uid,
       isHost: true,
       score: 0,
       joinedAt: serverTimestamp(),
+      joinOrder: null,
+      color: null,
+      inYard: true,
+      dashed: false,
+      burrowUsed: false,
+      decision: null,
+      hand: [],
+      loot: [],
     });
 
+    // naar host-scherm met gameId
     window.location.href = `host.html?game=${gameRef.id}`;
   });
 
-  // Joinen met game code
   joinBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();
     const inputCode = codeInput.value.trim().toUpperCase();
@@ -106,6 +80,7 @@ initAuth((user) => {
       return;
     }
 
+    // zoek spel met deze code
     const q = query(collection(db, "games"), where("code", "==", inputCode));
     const snap = await getDocs(q);
 
@@ -116,6 +91,7 @@ initAuth((user) => {
 
     const gameDoc = snap.docs[0];
 
+    // speler toevoegen met EggRun-velden
     const playerRef = await addDoc(
       collection(db, "games", gameDoc.id, "players"),
       {
@@ -124,9 +100,18 @@ initAuth((user) => {
         isHost: false,
         score: 0,
         joinedAt: serverTimestamp(),
+        joinOrder: null,
+        color: null,
+        inYard: true,
+        dashed: false,
+        burrowUsed: false,
+        decision: null,
+        hand: [],
+        loot: [],
       }
     );
 
+    // naar speler-scherm met game + player id
     window.location.href = `player.html?game=${gameDoc.id}&player=${playerRef.id}`;
   });
 });
