@@ -1,5 +1,98 @@
 body {
-  font-family: system-ui, sans-serif;
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background: #111;
-  color: #f8f8f8;
+  color: #f5f5f5;
+}
+
+h1, h2 {
+  margin: 0 0 0.5rem;
+}
+
+.screen {
+  max-width: 800px;
+  margin: 1rem auto;
+  padding: 1rem;
+}
+
+.panel {
+  background: #1b1b1b;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  margin-top: 0.75rem;
+  box-shadow: 0 0 0 1px #333;
+}
+
+.panel.large {
+  min-height: 200px;
+}
+
+.board-layout {
+  display: flex;
+  gap: 1rem;
+  padding: 1rem;
+}
+
+.board-layout .column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.controls button {
+  display: block;
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+
+button {
+  background: #f97316;
+  border: none;
+  color: #111;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:hover {
+  filter: brightness(1.1);
+}
+
+input[type="text"] {
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid #444;
+  background: #111;
+  color: #f5f5f5;
+}
+
+.row {
+  margin-top: 0.5rem;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.lead-fox {
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  color: #facc15;
+}
+
+.log {
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 0.9rem;
+}
+
+.log-line {
+  padding: 0.15rem 0;
+  border-bottom: 1px solid #222;
+}
+
+.winner-info {
+  margin-top: 0.25rem;
+  font-size: 0.9rem;
+  opacity: 0.85;
 }
