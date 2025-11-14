@@ -1,3 +1,7 @@
+// LOG om te checken of dit bestand geladen wordt
+console.log("firebase.js geladen");
+
+// VERSIE HIER VERVANGEN door jouw versie uit de Firebase snippet
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
 
