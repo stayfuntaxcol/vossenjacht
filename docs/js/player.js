@@ -1,8 +1,8 @@
 import { initAuth } from "./firebase.js";
+import { getEventById } from "./cards.js";
 import {
   getFirestore,
   doc,
-  getDoc,
   collection,
   addDoc,
   query,
@@ -20,9 +20,10 @@ const playerId = params.get("player");
 const infoDiv  = document.getElementById("playerInfo");
 const roundDiv = document.getElementById("roundArea");
 
-let playerName   = "";
-let currentRound = 0;
-let unsubActions = null;
+let playerName    = "";
+let currentRound  = 0;
+let currentEvent  = null;
+let unsubActions  = null;
 
 initAuth(async () => {
   if (!gameId || !playerId) {
@@ -44,9 +45,8 @@ initAuth(async () => {
     infoDiv.textContent = `Je bent: ${player.name} – score: ${score}`;
   });
 
-  // 2) Game volgen om te zien wanneer een ronde actief is
+  // 2) Game volgen: status, ronde, event
   const gameRef = doc(db, "games", gameId);
-
   onSnapshot(gameRef, (gameSnap) => {
     if (!gameSnap.exists()) {
       roundDiv.textContent = "Spel niet gevonden";
@@ -55,6 +55,12 @@ initAuth(async () => {
 
     const game = gameSnap.data();
     const roundNumber = game.round || 0;
+
+    if (game.currentEventId) {
+      currentEvent = getEventById(game.currentEventId);
+    } else {
+      currentEvent = null;
+    }
 
     if (game.status !== "round") {
       roundDiv.textContent = "Wachten op volgende ronde...";
@@ -104,8 +110,19 @@ function watchOwnAction() {
 function showChoiceButtons() {
   roundDiv.innerHTML = "";
 
-  const title = document.createElement("p");
-  title.textContent = `Ronde ${currentRound}: kies je actie`;
+  // Event-kaart tonen boven de knoppen
+  if (currentEvent) {
+    const evTitle = document.createElement("h2");
+    evTitle.textContent = currentEvent.title;
+    const evText = document.createElement("p");
+    evText.textContent = currentEvent.text;
+    roundDiv.appendChild(evTitle);
+    roundDiv.appendChild(evText);
+  } else {
+    const title = document.createElement("p");
+    title.textContent = `Ronde ${currentRound}: kies je actie`;
+    roundDiv.appendChild(title);
+  }
 
   const btnA = document.createElement("button");
   btnA.textContent = "Grijp buit";      // GRAB_LOOT
@@ -115,7 +132,6 @@ function showChoiceButtons() {
   btnA.addEventListener("click", () => submitChoice("GRAB_LOOT"));
   btnB.addEventListener("click", () => submitChoice("PLAY_SAFE"));
 
-  roundDiv.appendChild(title);
   roundDiv.appendChild(btnA);
   roundDiv.appendChild(document.createTextNode(" "));
   roundDiv.appendChild(btnB);
