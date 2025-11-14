@@ -57,9 +57,14 @@ initAuth(async (authUser) => {
       ? getEventById(game.currentEventId)
       : null;
 
+    let extraStatus = "";
+    if (game.raidEndedByRooster) {
+      extraStatus = " – Raid geëindigd door Rooster Crow (3/3)";
+    }
+
     gameInfo.textContent =
       `Code: ${game.code} – Status: ${game.status} – ` +
-      `Ronde: ${currentRoundNumber} – Fase: ${currentPhase}`;
+      `Ronde: ${currentRoundNumber} – Fase: ${currentPhase}${extraStatus}`;
 
     if (game.status !== "round") {
       roundInfo.textContent = "Nog geen actieve ronde.";
@@ -188,6 +193,12 @@ initAuth(async (authUser) => {
     if (!snap.exists()) return;
     const game = snap.data();
 
+    // Als de raid al is geëindigd door de derde Rooster Crow: geen nieuwe rondes meer
+    if (game.raidEndedByRooster) {
+      alert("De raid is geëindigd door de derde Rooster Crow. Er kunnen geen nieuwe rondes meer gestart worden.");
+      return;
+    }
+
     const newRound = (game.round || 0) + 1;
 
     const track = game.eventTrack || [];
@@ -206,12 +217,26 @@ initAuth(async (authUser) => {
       event   = getEventById(eventId);
     }
 
+    // Rooster Crow teller bijhouden
+    const prevRoosterSeen = game.roosterSeen || 0;
+    let newRoosterSeen    = prevRoosterSeen;
+    let raidEndedByRooster = game.raidEndedByRooster || false;
+
+    if (event && event.type === "ROOSTER") {
+      newRoosterSeen = prevRoosterSeen + 1;
+      if (newRoosterSeen >= 3) {
+        raidEndedByRooster = true;
+      }
+    }
+
     await updateDoc(gameRef, {
       status: "round",
       round: newRound,
       phase: "MOVE",
       currentEventId: eventId,
       eventIndex: track.length > 0 ? index + 1 : index,
+      roosterSeen: newRoosterSeen,
+      raidEndedByRooster,
     });
 
     await addLog(gameId, {
@@ -229,6 +254,25 @@ initAuth(async (authUser) => {
         cardId: eventId,
         message: event.title,
       });
+    }
+
+    if (event && event.type === "ROOSTER") {
+      await addLog(gameId, {
+        round: newRound,
+        phase: "MOVE",
+        kind: "EVENT",
+        cardId: eventId,
+        message: `Rooster Crow (${newRoosterSeen}/3).`,
+      });
+
+      if (newRoosterSeen >= 3) {
+        await addLog(gameId, {
+          round: newRound,
+          phase: "MOVE",
+          kind: "SYSTEM",
+          message: "Derde Rooster Crow: na deze ronde eindigt de raid. Er kunnen geen nieuwe rondes meer gestart worden.",
+        });
+      }
     }
   });
 
