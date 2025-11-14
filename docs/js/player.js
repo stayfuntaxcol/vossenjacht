@@ -30,21 +30,23 @@ initAuth(async () => {
     return;
   }
 
-  // 1) Speler inladen
+  // 1) Speler live volgen (naam + score)
   const playerRef = doc(db, "games", gameId, "players", playerId);
-  const snap = await getDoc(playerRef);
 
-  if (!snap.exists()) {
-    infoDiv.textContent = "Speler niet gevonden";
-    return;
-  }
-
-  const player = snap.data();
-  playerName = player.name;
-  infoDiv.textContent = `Je bent: ${player.name}`;
+  onSnapshot(playerRef, (snap) => {
+    if (!snap.exists()) {
+      infoDiv.textContent = "Speler niet gevonden";
+      return;
+    }
+    const player = snap.data();
+    playerName = player.name;
+    const score = player.score || 0;
+    infoDiv.textContent = `Je bent: ${player.name} – score: ${score}`;
+  });
 
   // 2) Game volgen om te zien wanneer een ronde actief is
   const gameRef = doc(db, "games", gameId);
+
   onSnapshot(gameRef, (gameSnap) => {
     if (!gameSnap.exists()) {
       roundDiv.textContent = "Spel niet gevonden";
@@ -63,7 +65,7 @@ initAuth(async () => {
       return;
     }
 
-    // Nieuwe ronde? → nieuwe listener op eigen keuze
+    // Nieuwe ronde? → nieuwe listener op eigen actie
     if (currentRound === roundNumber && unsubActions) {
       return;
     }
@@ -75,7 +77,7 @@ initAuth(async () => {
 
 // 3) Luisteren of jij al een keuze hebt gemaakt in deze ronde
 function watchOwnAction() {
-  roundDiv.innerHTML = `<p>Ronde ${currentRound}: laad...</p>`;
+  roundDiv.innerHTML = `<p>Ronde ${currentRound}: laden...</p>`;
 
   const actionsCol = collection(db, "games", gameId, "actions");
   const actionsQuery = query(
@@ -106,9 +108,9 @@ function showChoiceButtons() {
   title.textContent = `Ronde ${currentRound}: kies je actie`;
 
   const btnA = document.createElement("button");
-  btnA.textContent = "Grijp buit";
+  btnA.textContent = "Grijp buit";      // GRAB_LOOT
   const btnB = document.createElement("button");
-  btnB.textContent = "Dek jezelf in";
+  btnB.textContent = "Dek jezelf in";   // PLAY_SAFE
 
   btnA.addEventListener("click", () => submitChoice("GRAB_LOOT"));
   btnB.addEventListener("click", () => submitChoice("PLAY_SAFE"));
@@ -131,5 +133,5 @@ async function submitChoice(choice) {
     createdAt: serverTimestamp(),
   });
 
-  // UI wordt daarna door onSnapshot() geüpdatet
+  // UI wordt daarna bijgewerkt door onSnapshot() in watchOwnAction()
 }
