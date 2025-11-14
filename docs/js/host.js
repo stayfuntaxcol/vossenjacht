@@ -13,6 +13,7 @@ import {
   getDocs,
   orderBy,
   limit,
+  arrayUnion,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const db = getFirestore();
@@ -34,6 +35,7 @@ let currentRoundNumber     = 0;
 let currentRoundForActions = 0;
 let currentPhase           = "MOVE";
 let unsubActions           = null;
+let latestPlayers          = [];
 
 const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
 
@@ -202,7 +204,9 @@ async function initRaidIfNeeded(gameRef) {
   });
 
   if (!players.length) {
-    alert("Geen spelers gevonden. Laat eerst spelers joinen voordat je de raid start.");
+    alert(
+      "Geen spelers gevonden. Laat eerst spelers joinen voordat je de raid start."
+    );
     return game;
   }
 
@@ -277,6 +281,7 @@ async function initRaidIfNeeded(gameRef) {
       scatterArmed: false,
       opsCount: {},
       leadIndex,
+      movedPlayerIds: [],
     })
   );
 
@@ -339,7 +344,7 @@ initAuth(async (authUser) => {
       return;
     }
 
-    // Actions voor huidige ronde volgen
+    // Actions voor huidige ronde volgen (alleen voor weergave)
     if (currentRoundForActions === currentRoundNumber && unsubActions) {
       return;
     }
@@ -375,7 +380,7 @@ initAuth(async (authUser) => {
 
       const count = snapActions.size;
       const p = document.createElement("p");
-      p.textContent = `Keuzes ontvangen: ${count}`;
+      p.textContent = `Moves / keuzes geregistreerd: ${count}`;
       roundInfo.appendChild(p);
 
       const list = document.createElement("div");
@@ -395,17 +400,21 @@ initAuth(async (authUser) => {
     snapshot.forEach((pDoc) => {
       players.push({ id: pDoc.id, ...pDoc.data() });
     });
+    latestPlayers = players;
 
     playersDiv.innerHTML = "<h2>Spelers / Scorebord</h2>";
 
-    // Lead Fox indicatief (eerste op joinOrder)
     let leadFoxName = "";
     if (players.length > 0) {
       const byOrder = [...players].sort((a, b) => {
         const ao =
-          typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+          typeof a.joinOrder === "number"
+            ? a.joinOrder
+            : Number.MAX_SAFE_INTEGER;
         const bo =
-          typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
+          typeof b.joinOrder === "number"
+            ? b.joinOrder
+            : Number.MAX_SAFE_INTEGER;
         return ao - bo;
       });
       const lead = byOrder[0];
@@ -448,7 +457,9 @@ initAuth(async (authUser) => {
       const div = document.createElement("div");
       div.className = "log-line";
       div.textContent =
-        `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${e.message ?? ""}`;
+        `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${
+          e.message ?? ""
+        }`;
       logPanel.appendChild(div);
     });
   });
@@ -503,6 +514,7 @@ initAuth(async (authUser) => {
       eventIndex: track.length > 0 ? index + 1 : index,
       roosterSeen: newRoosterSeen,
       raidEndedByRooster,
+      movedPlayerIds: [],
     });
 
     await addLog(gameId, {
@@ -550,6 +562,22 @@ initAuth(async (authUser) => {
     const game = snap.data();
 
     const current = game.phase || "MOVE";
+
+    // tijdens MOVE eerst checken of alle vossen in de Yard een MOVE hebben gedaan
+    if (current === "MOVE") {
+      const moved = game.movedPlayerIds || [];
+      const mustMoveCount = latestPlayers.filter(
+        (p) => p.inYard !== false && !p.dashed
+      ).length;
+
+      if (mustMoveCount > 0 && moved.length < mustMoveCount) {
+        alert(
+          `Niet alle vossen hebben hun MOVE gedaan (${moved.length}/${mustMoveCount}).`
+        );
+        return;
+      }
+    }
+
     let next = "MOVE";
     if (current === "MOVE") next = "ACTIONS";
     else if (current === "ACTIONS") next = "DECISION";
@@ -567,7 +595,7 @@ initAuth(async (authUser) => {
     });
   });
 
-  // 6) Ronde afsluiten + scores updaten (nog simpele versie)
+  // 6) Ronde afsluiten + scores updaten (nog oude simpele versie)
   endBtn.addEventListener("click", async () => {
     const gameSnap = await getDoc(gameRef);
     if (!gameSnap.exists()) return;
@@ -591,7 +619,7 @@ initAuth(async (authUser) => {
       if (a.choice === "GRAB_LOOT") {
         scoreChanges[a.playerId] = (scoreChanges[a.playerId] || 0) + 1;
       }
-      // PLAY_SAFE => 0 punten
+      // PLAY_SAFE => 0 punten – deze oude logica gaan we later vervangen
     });
 
     const playersSnap = await getDocs(playersColRef);
@@ -605,7 +633,6 @@ initAuth(async (authUser) => {
 
     await Promise.all(updates);
 
-    // Tussenstand loggen
     const updatedPlayersSnap = await getDocs(playersColRef);
     const standings = [];
     updatedPlayersSnap.forEach((pDoc) => {
@@ -624,7 +651,7 @@ initAuth(async (authUser) => {
       status: "lobby",
     });
 
-    alert("Ronde afgesloten en scores bijgewerkt.");
+    alert("Ronde afgesloten en scores bijgewerkt (oude simpele teller).");
   });
 
   // 7) Speel mee als host
@@ -637,7 +664,9 @@ initAuth(async (authUser) => {
 
     const snap = await getDocs(q);
     if (snap.empty) {
-      alert("Geen host-speler gevonden. Start het spel opnieuw of join met de code.");
+      alert(
+        "Geen host-speler gevonden. Start het spel opnieuw of join met de code."
+      );
       return;
     }
 
