@@ -22,6 +22,7 @@ const playersDiv = document.getElementById("playersList");
 const roundInfo  = document.getElementById("roundInfo");
 const startBtn   = document.getElementById("startRoundBtn");
 const endBtn     = document.getElementById("endRoundBtn");
+const finishBtn  = document.getElementById("finishGameBtn");
 
 let currentRound = 0;
 let unsubActions = null;
@@ -51,7 +52,11 @@ initAuth(async () => {
       `Code: ${game.code} – Status: ${game.status} – Ronde: ${roundNumber}`;
 
     if (game.status !== "round") {
-      roundInfo.textContent = "Nog geen actieve ronde.";
+      if (game.status === "finished") {
+        roundInfo.textContent = "Spel afgelopen. Bekijk de eindstand hieronder.";
+      } else {
+        roundInfo.textContent = "Nog geen actieve ronde.";
+      }
       if (unsubActions) {
         unsubActions();
         unsubActions = null;
@@ -104,23 +109,37 @@ initAuth(async () => {
     });
   });
 
-  // 2) Spelers live volgen
+  // 2) Spelers live volgen (en eindstand tonen)
   const playersCol = collection(db, "games", gameId, "players");
   onSnapshot(playersCol, (snapshot) => {
-    playersDiv.innerHTML = "<h2>Spelers</h2>";
+    // sorteer op score aflopend
+    const players = [];
     snapshot.forEach((pDoc) => {
-      const p = pDoc.data();
+      players.push({ id: pDoc.id, ...pDoc.data() });
+    });
+    players.sort((a, b) => (b.score || 0) - (a.score || 0));
+
+    playersDiv.innerHTML = "<h2>Spelers / Eindstand</h2>";
+    players.forEach((p, index) => {
       const div = document.createElement("div");
-      div.textContent = `${p.name} ${p.isHost ? "(host)" : ""} – score: ${p.score}`;
+      const plek = index + 1;
+      div.textContent =
+        `${plek}. ${p.name} ${p.isHost ? "(host)" : ""} – score: ${p.score || 0}`;
       playersDiv.appendChild(div);
     });
   });
 
-  // 3) Start (volgende) ronde: kies event + zet status
+  // 3) Start (volgende) ronde
   startBtn.addEventListener("click", async () => {
     const snap = await getDoc(gameRef);
     if (!snap.exists()) return;
     const game = snap.data();
+
+    // Als spel al finished is: niet meer starten
+    if (game.status === "finished") {
+      alert("Spel is al beëindigd.");
+      return;
+    }
 
     const newRound = (game.round || 0) + 1;
     const event = getEventForRound(newRound);
@@ -176,11 +195,23 @@ initAuth(async () => {
 
     await Promise.all(updates);
 
-    // game terug naar lobby
+    // game terug naar lobby (nog niet finished)
     await updateDoc(gameRef, {
       status: "lobby",
     });
 
     alert("Ronde afgesloten en scores bijgewerkt.");
+  });
+
+  // 5) Spel definitief beëindigen
+  finishBtn.addEventListener("click", async () => {
+    const confirmEnd = confirm("Spel beëindigen? Dit is de eindstand.");
+    if (!confirmEnd) return;
+
+    await updateDoc(gameRef, {
+      status: "finished",
+    });
+
+    alert("Spel beëindigd. Eindstand staat op het scherm.");
   });
 });
