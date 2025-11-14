@@ -29,9 +29,10 @@ const endBtn        = document.getElementById("endRoundBtn");
 const nextPhaseBtn  = document.getElementById("nextPhaseBtn");
 const playAsHostBtn = document.getElementById("playAsHostBtn");
 
-let currentRoundNumber = 0;
-let currentRoundForActions = 0;
-let unsubActions = null;
+let currentRoundNumber      = 0;
+let currentRoundForActions  = 0;
+let currentPhase            = "MOVE";
+let unsubActions            = null;
 
 if (!gameId && gameInfo) {
   gameInfo.textContent = "Geen gameId in de URL";
@@ -51,13 +52,14 @@ initAuth(async (authUser) => {
 
     const game = snap.data();
     currentRoundNumber = game.round || 0;
-    const phase = game.phase || "MOVE";
-    const event = game.currentEventId
+    currentPhase       = game.phase || "MOVE";
+    const event        = game.currentEventId
       ? getEventById(game.currentEventId)
       : null;
 
     gameInfo.textContent =
-      `Code: ${game.code} – Status: ${game.status} – Ronde: ${currentRoundNumber} – Fase: ${phase}`;
+      `Code: ${game.code} – Status: ${game.status} – ` +
+      `Ronde: ${currentRoundNumber} – Fase: ${currentPhase}`;
 
     if (game.status !== "round") {
       roundInfo.textContent = "Nog geen actieve ronde.";
@@ -85,16 +87,20 @@ initAuth(async (authUser) => {
     unsubActions = onSnapshot(actionsQuery, (snapActions) => {
       roundInfo.innerHTML = "";
 
+      const phaseLabel = currentPhase;
+
       if (event) {
         const h2 = document.createElement("h2");
-        h2.textContent = `Ronde ${currentRoundForActions}: ${event.title}`;
+        h2.textContent =
+          `Ronde ${currentRoundForActions} – fase: ${phaseLabel}: ${event.title}`;
         const pText = document.createElement("p");
         pText.textContent = event.text;
         roundInfo.appendChild(h2);
         roundInfo.appendChild(pText);
       } else {
         const h2 = document.createElement("h2");
-        h2.textContent = `Ronde ${currentRoundForActions}`;
+        h2.textContent =
+          `Ronde ${currentRoundForActions} – fase: ${phaseLabel}`;
         roundInfo.appendChild(h2);
       }
 
@@ -216,12 +222,12 @@ initAuth(async (authUser) => {
     if (!snap.exists()) return;
     const game = snap.data();
 
-    const currentPhase = game.phase || "MOVE";
+    const current = game.phase || "MOVE";
     let next = "MOVE";
-    if (currentPhase === "MOVE") next = "ACTIONS";
-    else if (currentPhase === "ACTIONS") next = "DECISION";
-    else if (currentPhase === "DECISION") next = "REVEAL";
-    else if (currentPhase === "REVEAL") next = "MOVE";
+    if (current === "MOVE") next = "ACTIONS";
+    else if (current === "ACTIONS") next = "DECISION";
+    else if (current === "DECISION") next = "REVEAL";
+    else if (current === "REVEAL") next = "MOVE";
 
     await updateDoc(gameRef, { phase: next });
 
@@ -287,7 +293,6 @@ initAuth(async (authUser) => {
       message: `Tussenstand na ronde ${roundNumber}: ${standings.join(", ")}`,
     });
 
-    // terug naar lobby
     await updateDoc(gameRef, {
       status: "lobby",
     });
