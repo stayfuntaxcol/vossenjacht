@@ -47,6 +47,14 @@ const sackCard        = document.getElementById("sackCard");
 const lootDeckCard    = document.getElementById("lootDeckCard");
 const actionDeckCard  = document.getElementById("actionDeckCard");
 
+// Fullscreen toggle
+const fullscreenBtn   = document.getElementById("fullscreenBtn");
+if (fullscreenBtn) {
+  fullscreenBtn.addEventListener("click", () => {
+    document.body.classList.toggle("fullscreen-board");
+  });
+}
+
 let currentRoundNumber     = 0;
 let currentRoundForActions = 0;
 let currentPhase           = "MOVE";
