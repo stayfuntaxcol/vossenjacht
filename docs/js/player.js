@@ -70,6 +70,16 @@ function canDecideNow(game, player) {
   return true;
 }
 
+function canPlayActionNow(game, player) {
+  if (!game || !player) return false;
+  if (game.status !== "round") return false;
+  if (game.phase !== "ACTIONS") return false;
+  if (game.raidEndedByRooster) return false;
+  if (player.inYard === false) return false;
+  if (player.dashed) return false;
+  return true;
+}
+
 function renderGame() {
   if (!currentGame || !gameStatusDiv || !eventInfoDiv) return;
 
@@ -78,7 +88,6 @@ function renderGame() {
   gameStatusDiv.textContent =
     `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
 
-  // Event info alleen tonen als er een currentEventId is (REVEAL)
   eventInfoDiv.innerHTML = "";
   const ev =
     g.currentEventId && g.phase === "REVEAL"
@@ -103,6 +112,7 @@ function renderGame() {
 
   updateMoveButtonsState();
   updateDecisionButtonsState();
+  renderHand();
 }
 
 function renderPlayer() {
@@ -135,7 +145,6 @@ function renderPlayer() {
   }
   playerInfoDiv.appendChild(stateLine);
 
-  // Loot tonen
   lootPanel.innerHTML = "";
   const loot = p.loot || [];
   if (!loot.length) {
@@ -153,23 +162,9 @@ function renderPlayer() {
     lootPanel.appendChild(list);
   }
 
-  // Hand (nog niet actief in OPS)
-  handPanel.innerHTML = "";
-  const hand = p.hand || [];
-  if (!hand.length) {
-    handPanel.textContent =
-      "Je hebt nog geen Actiekaarten of ze zijn nog niet getrokken.";
-  } else {
-    const h = document.createElement("div");
-    h.style.fontSize = "0.9rem";
-    h.textContent =
-      "Je hand (voor later in de OPS-fase): " +
-      hand.map((c) => c.name).join(", ");
-    handPanel.appendChild(h);
-  }
-
   updateMoveButtonsState();
   updateDecisionButtonsState();
+  renderHand();
 }
 
 function updateMoveButtonsState() {
@@ -276,6 +271,65 @@ function updateDecisionButtonsState() {
   }
 }
 
+function renderHand() {
+  if (!handPanel) return;
+
+  handPanel.innerHTML = "";
+
+  if (!currentPlayer || !currentGame) {
+    handPanel.textContent = "Geen hand geladen.";
+    return;
+  }
+
+  const hand = currentPlayer.hand || [];
+  if (!hand.length) {
+    handPanel.textContent = "Je hebt geen Actiekaarten in je hand.";
+    return;
+  }
+
+  const canPlay = canPlayActionNow(currentGame, currentPlayer);
+
+  const list = document.createElement("div");
+  list.style.display = "flex";
+  list.style.flexDirection = "column";
+  list.style.gap = "0.25rem";
+
+  hand.forEach((card, index) => {
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.justifyContent = "space-between";
+    row.style.alignItems = "center";
+
+    const label = document.createElement("div");
+    label.textContent = `${index + 1}. ${card.name}`;
+    label.style.fontSize = "0.9rem";
+
+    const btn = document.createElement("button");
+    btn.textContent = "Speel";
+    btn.disabled = !canPlay;
+    btn.addEventListener("click", () => playActionCard(index));
+
+    row.appendChild(label);
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+
+  const phaseInfo = document.createElement("p");
+  phaseInfo.style.fontSize = "0.8rem";
+  phaseInfo.style.opacity = "0.7";
+
+  if (!canPlay) {
+    phaseInfo.textContent =
+      "Je kunt alleen kaarten spelen in de ACTIONS-fase terwijl je in de Yard staat.";
+  } else {
+    phaseInfo.textContent =
+      "Speel één of meerdere Actiekaarten. Host bepaalt wanneer de fase eindigt.";
+  }
+
+  handPanel.appendChild(list);
+  handPanel.appendChild(phaseInfo);
+}
+
 async function logMoveAction(game, player, choice, phase = "MOVE") {
   const actionsCol = collection(db, "games", gameId, "actions");
   await addDoc(actionsCol, {
@@ -352,24 +406,31 @@ async function performForage() {
     return;
   }
 
-  const lootDeck = game.lootDeck ? [...game.lootDeck] : [];
-  const sack = game.sack ? [...game.sack] : [];
+  const actionDeck = game.actionDeck ? [...game.actionDeck] : [];
+  const hand = player.hand ? [...player.hand] : [];
 
-  if (!lootDeck.length) {
-    alert("De loot-deck is leeg. Er is geen extra buit meer te vinden.");
+  if (!actionDeck.length) {
+    alert("De Action-deck is leeg. Er zijn geen extra kaarten meer.");
     return;
   }
 
-  const card = lootDeck.pop();
-  sack.push(card);
+  let drawn = 0;
+  for (let i = 0; i < 2; i++) {
+    if (!actionDeck.length) break;
+    hand.push(actionDeck.pop());
+    drawn++;
+  }
+
+  await updateDoc(playerRef, {
+    hand,
+  });
 
   await updateDoc(gameRef, {
-    lootDeck,
-    sack,
+    actionDeck,
     movedPlayerIds: arrayUnion(playerId),
   });
 
-  await logMoveAction(game, player, "MOVE_FORAGE");
+  await logMoveAction(game, player, `MOVE_FORAGE_${drawn}cards`);
 }
 
 async function performScout() {
@@ -388,6 +449,12 @@ async function performScout() {
     return;
   }
 
+  const flags = game.flagsRound || {};
+  if (flags.scatter) {
+    alert("Scatter! is gespeeld: niemand mag Scouten deze ronde.");
+    return;
+  }
+
   const track = game.eventTrack || [];
   if (!track.length) {
     alert("Geen Event Track beschikbaar.");
@@ -401,6 +468,12 @@ async function performScout() {
   const pos = parseInt(posStr, 10);
   if (Number.isNaN(pos) || pos < 1 || pos > track.length) {
     alert("Ongeldige positie.");
+    return;
+  }
+
+  const noPeek = flags.noPeek || [];
+  if (noPeek.includes(pos)) {
+    alert("Deze positie is geblokkeerd door een No-Go Zone.");
     return;
   }
 
@@ -519,6 +592,219 @@ async function selectDecision(kind) {
   await logMoveAction(game, player, `DECISION_${kind}`, "DECISION");
 }
 
+// ====== OPS / Action kaarten ======
+
+async function playActionCard(index) {
+  if (!gameRef || !playerRef) return;
+
+  const gameSnap = await getDoc(gameRef);
+  if (!gameSnap.exists()) return;
+  const game = gameSnap.data();
+
+  const playerSnap = await getDoc(playerRef);
+  if (!playerSnap.exists()) return;
+  const player = playerSnap.data();
+
+  if (!canPlayActionNow(game, player)) {
+    alert("Je kunt nu geen Actiekaarten spelen.");
+    return;
+  }
+
+  const hand = player.hand ? [...player.hand] : [];
+  if (index < 0 || index >= hand.length) return;
+
+  const card = hand[index];
+  const cardName = card.name;
+
+  // kaart uit de hand halen
+  hand.splice(index, 1);
+  await updateDoc(playerRef, { hand });
+
+  await logMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
+
+  // effect toepassen voor subset kaarten
+  switch (cardName) {
+    case "Scatter!":
+      await playScatter(gameRef, game, player);
+      break;
+    case "Den Signal":
+      await playDenSignal(gameRef, game, player);
+      break;
+    case "No-Go Zone":
+      await playNoGoZone(gameRef, game, player);
+      break;
+    case "Kick Up Dust":
+      await playKickUpDust(gameRef, game, player);
+      break;
+    case "Burrow Beacon":
+      await playBurrowBeacon(gameRef, game, player);
+      break;
+    default:
+      alert(
+        "Deze kaart is nog niet volledig geïmplementeerd in de online versie. Gebruik evt. de fysieke regels als huisregel."
+      );
+      break;
+  }
+}
+
+async function playScatter(gameRef, game, player) {
+  const flags = {
+    lockEvents: false,
+    scatter: true,
+    denImmune: {},
+    noPeek: [],
+    predictions: [],
+    ...(game.flagsRound || {}),
+  };
+
+  flags.scatter = true;
+
+  await updateDoc(gameRef, {
+    flagsRound: flags,
+  });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt Scatter! – niemand mag Scouten deze ronde.`,
+  });
+}
+
+async function playDenSignal(gameRef, game, player) {
+  const colorInput = prompt(
+    "Den Signal – welke Den kleur wil je beschermen? (RED / BLUE / GREEN / YELLOW)"
+  );
+  if (!colorInput) return;
+  const color = colorInput.trim().toUpperCase();
+  if (!["RED", "BLUE", "GREEN", "YELLOW"].includes(color)) {
+    alert("Ongeldige kleur.");
+    return;
+  }
+
+  const flags = {
+    lockEvents: false,
+    scatter: false,
+    denImmune: {},
+    noPeek: [],
+    predictions: [],
+    ...(game.flagsRound || {}),
+  };
+
+  flags.denImmune = flags.denImmune || {};
+  flags.denImmune[color] = true;
+
+  await updateDoc(gameRef, {
+    flagsRound: flags,
+  });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt Den Signal – Den ${color} is immuun voor vang-events deze ronde.`,
+  });
+}
+
+async function playNoGoZone(gameRef, game, player) {
+  const track = game.eventTrack || [];
+  if (!track.length) {
+    alert("Geen Event Track beschikbaar.");
+    return;
+  }
+
+  const maxPos = track.length;
+  const posStr = prompt(`No-Go Zone – blokkeer een eventpositie (1-${maxPos})`);
+  if (!posStr) return;
+  const pos = parseInt(posStr, 10);
+  if (Number.isNaN(pos) || pos < 1 || pos > maxPos) {
+    alert("Ongeldige positie.");
+    return;
+  }
+
+  const flags = {
+    lockEvents: false,
+    scatter: false,
+    denImmune: {},
+    noPeek: [],
+    predictions: [],
+    ...(game.flagsRound || {}),
+  };
+
+  const noPeek = flags.noPeek || [];
+  if (!noPeek.includes(pos)) noPeek.push(pos);
+  flags.noPeek = noPeek;
+
+  await updateDoc(gameRef, {
+    flagsRound: flags,
+  });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt No-Go Zone – scout op positie ${pos} is verboden.`,
+  });
+}
+
+async function playKickUpDust(gameRef, game, player) {
+  const track = game.eventTrack ? [...game.eventTrack] : [];
+  if (track.length < 2) {
+    alert("Te weinig events om te shuffelen.");
+    return;
+  }
+
+  const i1 = Math.floor(Math.random() * track.length);
+  let i2 = Math.floor(Math.random() * track.length);
+  if (i2 === i1) {
+    i2 = (i2 + 1) % track.length;
+  }
+
+  const tmp = track[i1];
+  track[i1] = track[i2];
+  track[i2] = tmp;
+
+  await updateDoc(gameRef, {
+    eventTrack: track,
+  });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt Kick Up Dust – twee events wisselen willekeurig van plek.`,
+  });
+}
+
+async function playBurrowBeacon(gameRef, game, player) {
+  const flags = {
+    lockEvents: false,
+    scatter: false,
+    denImmune: {},
+    noPeek: [],
+    predictions: [],
+    ...(game.flagsRound || {}),
+  };
+
+  flags.lockEvents = true;
+
+  await updateDoc(gameRef, {
+    flagsRound: flags,
+  });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt Burrow Beacon – Event Track kan deze ronde niet meer veranderen.`,
+  });
+}
+
 // ====== INIT ======
 
 initAuth(async (user) => {
@@ -545,7 +831,6 @@ initAuth(async (user) => {
     renderPlayer();
   });
 
-  // Buttons
   btnSnatch.addEventListener("click", performSnatch);
   btnForage.addEventListener("click", performForage);
   btnScout.addEventListener("click", performScout);
