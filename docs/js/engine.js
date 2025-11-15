@@ -216,6 +216,9 @@ export async function resolveAfterReveal(gameId) {
     denImmune: {},
     noPeek: [],
     predictions: [],
+    opsLocked: false,
+    followTail: {},
+    scentChecks: [],
     ...(game.flagsRound || {}),
   };
 
@@ -223,6 +226,34 @@ export async function resolveAfterReveal(gameId) {
   if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
     await endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, ev, round);
     return;
+  }
+
+  // ====== Nose for Trouble – juiste voorspelling? ======
+  const predictions = Array.isArray(flagsRound.predictions)
+    ? flagsRound.predictions
+    : [];
+
+  if (predictions.length && lootDeck.length) {
+    for (const pred of predictions) {
+      if (pred.eventId !== eventId) continue;
+      const p = players.find((pl) => pl.id === pred.playerId);
+      if (!p) continue;
+      if (!lootDeck.length) break;
+
+      const card = lootDeck.pop();
+      p.loot = p.loot || [];
+      p.loot.push(card);
+
+      await addLog(gameId, {
+        round,
+        phase: "REVEAL",
+        kind: "EVENT",
+        playerId: p.id,
+        message: `${
+          p.name || "Vos"
+        } had Nose for Trouble juist en krijgt extra buit.`,
+      });
+    }
   }
 
   // ====== Event-specifieke logica ======
@@ -481,6 +512,9 @@ export async function resolveAfterReveal(gameId) {
   flagsRound.denImmune = {};
   flagsRound.noPeek = [];
   flagsRound.predictions = [];
+  flagsRound.opsLocked = false;
+  flagsRound.followTail = {};
+  flagsRound.scentChecks = [];
 
   // Extra loot in de Sack voor volgende ronde
   if (lootDeck.length) {
