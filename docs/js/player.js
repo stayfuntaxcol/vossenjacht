@@ -119,15 +119,16 @@ function canPlayActionNow(game, player) {
   return true;
 }
 
-function isMyOpsTurn(game, player) {
-  if (!game || !player) return false;
+// ⚠️ Belangrijk: gebruik playerId uit de URL, niet player.id
+function isMyOpsTurn(game) {
+  if (!game) return false;
   if (game.phase !== "ACTIONS") return false;
   const order = game.opsTurnOrder || [];
   if (!order.length) return false;
   const idx =
     typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
   if (idx < 0 || idx >= order.length) return false;
-  return order[idx] === player.id;
+  return order[idx] === playerId;
 }
 
 // === RENDERING ===
@@ -348,7 +349,7 @@ function renderHand() {
   const hand = p.hand || [];
 
   const canPlayOverall = canPlayActionNow(g, p);
-  const myTurnOverall  = isMyOpsTurn(g, p);
+  const myTurnOverall  = isMyOpsTurn(g);
 
   if (!hand.length) {
     handPanel.textContent = "Je hebt geen Actiekaarten in je hand.";
@@ -726,7 +727,7 @@ async function playActionCard(index) {
     return;
   }
 
-  if (!isMyOpsTurn(game, player)) {
+  if (!isMyOpsTurn(game)) {
     alert("Je bent niet aan de beurt in de OPS-fase.");
     return;
   }
@@ -794,7 +795,7 @@ async function passAction() {
     return;
   }
 
-  if (!isMyOpsTurn(game, player)) {
+  if (!isMyOpsTurn(game)) {
     alert("Je bent niet aan de beurt in de OPS-fase.");
     return;
   }
