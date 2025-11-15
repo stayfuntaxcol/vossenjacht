@@ -4,7 +4,10 @@
     <meta charset="UTF-8" />
     <title>Vossenjacht – Community Board (Host)</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Bestaande algemene styles (voor index/player) -->
     <link rel="stylesheet" href="./style.css" />
+    <!-- Nieuwe, host-specifieke styles -->
+    <link rel="stylesheet" href="./host.css" />
   </head>
   <body class="host-body">
     <header class="host-header">
@@ -24,100 +27,103 @@
         <button id="playAsHostBtn" class="btn btn-accent">
           Open Host Player View
         </button>
+        <button id="fullscreenBtn" class="btn btn-secondary">
+          Fullscreen Board
+        </button>
       </div>
     </header>
 
     <main class="host-main">
-      <div id="board">
-        <!-- RIJ 1 – STATUS + DECKS / SACK -->
-        <div class="board-row board-row-top">
-          <div class="board-zone board-zone-status">
-            <div id="phaseCard" class="board-card card-status">
-              <div class="card-title">Phase</div>
-              <div class="card-value">–</div>
-              <div class="card-sub">MOVE / ACTIONS / DECISION / REVEAL</div>
-            </div>
-            <div id="leadFoxCard" class="board-card card-status">
-              <div class="card-title">Lead Fox</div>
-              <div class="card-value">–</div>
-              <div class="card-sub">Volgt mee met ronde-rotatie</div>
-            </div>
-            <div id="roosterCard" class="board-card card-status">
-              <div class="card-title">Rooster</div>
-              <div class="card-value">0 / 3</div>
-              <div class="card-sub">Rooster Crow events gezien</div>
-            </div>
-            <div id="beaconCard" class="board-card card-status">
-              <div class="card-title">Beacon</div>
-              <div class="card-value">OFF</div>
-              <div class="card-sub">Lock Events this round</div>
-            </div>
-            <div id="scatterCard" class="board-card card-status">
-              <div class="card-title">Scatter!</div>
-              <div class="card-value">OFF</div>
-              <div class="card-sub">Niemand mag Scouten</div>
-            </div>
-          </div>
-
-          <div class="board-zone board-zone-decks">
-            <div id="lootDeckCard" class="board-card card-deck">
-              <div class="card-title">Loot Deck</div>
-              <div class="card-value">0</div>
-              <div class="card-sub">Face-down buitkaarten</div>
-            </div>
-            <div id="sackCard" class="board-card card-sack">
-              <div class="card-title">Farm Sack</div>
-              <div class="card-value">0</div>
-              <div class="card-sub">Loot in de zak</div>
-            </div>
-            <div id="actionDeckCard" class="board-card card-deck">
-              <div class="card-title">Action Deck</div>
-              <div class="card-value">0</div>
-              <div class="card-sub">Actiekaarten stapel</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- RIJ 2 – EVENT TRACK + RONDE INFO -->
-        <div class="board-row board-row-middle">
-          <div class="board-zone board-zone-events">
-            <div class="zone-label">Event Track</div>
-            <div id="eventTrack"></div>
-          </div>
-
-          <div class="board-zone board-zone-round">
-            <div class="zone-label">Ronde / Event Info</div>
-            <div id="roundInfo" class="round-info-panel">
-              Nog geen ronde actief.
-            </div>
-          </div>
-        </div>
-
-        <!-- RIJ 3 – PLAYERS (YARD / CAUGHT / DASH) + LOG -->
-        <div class="board-row board-row-bottom">
-          <div id="playersList" class="board-zone board-zone-players">
-            <div class="zone-label">Foxes</div>
-
-            <div id="yardZone" class="player-zone player-zone-yard">
-              <div class="player-zone-label">In the Yard</div>
-              <!-- player-cards komen hier -->
-            </div>
-
-            <div class="player-zone-row">
-              <div id="caughtZone" class="player-zone player-zone-caught">
-                <div class="player-zone-label">Caught!</div>
-                <!-- caught player-cards -->
+      <div id="boardShell">
+        <div id="board">
+          <div id="boardInner">
+            <!-- STATUS / HEADLINE ZONE (boven) -->
+            <div class="board-zone board-zone-status">
+              <div id="phaseCard" class="board-card card-status">
+                <div class="card-title">Phase</div>
+                <div class="card-value">–</div>
+                <div class="card-sub">
+                  MOVE / ACTIONS / DECISION / REVEAL
+                </div>
               </div>
-              <div id="dashZone" class="player-zone player-zone-dash">
-                <div class="player-zone-label">Dashed</div>
-                <!-- dashed player-cards -->
+              <div id="leadFoxCard" class="board-card card-status">
+                <div class="card-title">Lead Fox</div>
+                <div class="card-value">–</div>
+                <div class="card-sub">Start speler voor deze ronde</div>
+              </div>
+              <div id="roosterCard" class="board-card card-status">
+                <div class="card-title">Rooster</div>
+                <div class="card-value">0 / 3</div>
+                <div class="card-sub">Rooster Crow events gezien</div>
+              </div>
+              <div id="beaconCard" class="board-card card-status">
+                <div class="card-title">Beacon</div>
+                <div class="card-value">OFF</div>
+                <div class="card-sub">Event Track lock</div>
+              </div>
+              <div id="scatterCard" class="board-card card-status">
+                <div class="card-title">Scatter!</div>
+                <div class="card-value">OFF</div>
+                <div class="card-sub">Niemand mag Scouten</div>
               </div>
             </div>
-          </div>
 
-          <div id="logPanel" class="board-zone board-zone-log">
-            <div class="zone-label">Community Log</div>
-            <!-- logregels vanuit host.js -->
+            <!-- DECKS / SACK ZONE (boven rechts) -->
+            <div class="board-zone board-zone-decks">
+              <div id="lootDeckCard" class="board-card card-deck">
+                <div class="card-title">Loot Deck</div>
+                <div class="card-value">0</div>
+                <div class="card-sub">Face-down buitkaarten</div>
+              </div>
+              <div id="sackCard" class="board-card card-sack">
+                <div class="card-title">Farm Sack</div>
+                <div class="card-value">0</div>
+                <div class="card-sub">Loot in de zak</div>
+              </div>
+              <div id="actionDeckCard" class="board-card card-deck">
+                <div class="card-title">Action Deck</div>
+                <div class="card-value">0</div>
+                <div class="card-sub">Actiekaarten stapel</div>
+              </div>
+            </div>
+
+            <!-- EVENT TRACK (links-midden) -->
+            <div class="board-zone board-zone-events">
+              <div class="zone-label">Event Track</div>
+              <div id="eventTrack"></div>
+            </div>
+
+            <!-- PLAYERS (onder / midden) -->
+            <div id="playersList" class="board-zone board-zone-players">
+              <div class="zone-label">Foxes</div>
+
+              <div id="yardZone" class="player-zone player-zone-yard">
+                <div class="player-zone-label">In the Yard</div>
+                <!-- player cards komen hier -->
+              </div>
+
+              <div class="player-zone-row">
+                <div
+                  id="caughtZone"
+                  class="player-zone player-zone-caught"
+                >
+                  <div class="player-zone-label">Caught!</div>
+                </div>
+                <div id="dashZone" class="player-zone player-zone-dash">
+                  <div class="player-zone-label">Dashed</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- INFO POPUP (rechts-onder: ronde + log) -->
+            <div id="infoPopup" class="board-info-popup">
+              <div id="roundInfo" class="info-section">
+                Nog geen ronde actief.
+              </div>
+              <div id="logPanel" class="info-section">
+                <div class="zone-label">Community Log</div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
