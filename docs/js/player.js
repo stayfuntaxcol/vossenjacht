@@ -25,11 +25,15 @@ const eventInfoDiv  = document.getElementById("eventInfo");
 const lootPanel     = document.getElementById("lootPanel");
 const handPanel     = document.getElementById("handPanel");
 const moveState     = document.getElementById("moveState");
+const decisionState = document.getElementById("decisionState");
 
-const btnSnatch = document.getElementById("btnSnatch");
-const btnForage = document.getElementById("btnForage");
-const btnScout  = document.getElementById("btnScout");
-const btnShift  = document.getElementById("btnShift");
+const btnSnatch  = document.getElementById("btnSnatch");
+const btnForage  = document.getElementById("btnForage");
+const btnScout   = document.getElementById("btnScout");
+const btnShift   = document.getElementById("btnShift");
+const btnLurk    = document.getElementById("btnLurk");
+const btnBurrow  = document.getElementById("btnBurrow");
+const btnDash    = document.getElementById("btnDash");
 
 let gameRef = null;
 let playerRef = null;
@@ -55,6 +59,17 @@ function canMoveNow(game, player) {
   return !moved.includes(playerId);
 }
 
+function canDecideNow(game, player) {
+  if (!game || !player) return false;
+  if (game.status !== "round") return false;
+  if (game.phase !== "DECISION") return false;
+  if (game.raidEndedByRooster) return false;
+  if (player.inYard === false) return false;
+  if (player.dashed) return false;
+  if (player.decision) return false;
+  return true;
+}
+
 function renderGame() {
   if (!currentGame || !gameStatusDiv || !eventInfoDiv) return;
 
@@ -63,13 +78,16 @@ function renderGame() {
   gameStatusDiv.textContent =
     `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
 
-  // Event info
+  // Event info alleen tonen als er een currentEventId is (REVEAL)
   eventInfoDiv.innerHTML = "";
-  const ev = g.currentEventId ? getEventById(g.currentEventId) : null;
+  const ev =
+    g.currentEventId && g.phase === "REVEAL"
+      ? getEventById(g.currentEventId)
+      : null;
 
   if (!ev) {
     const p = document.createElement("p");
-    p.textContent = "Nog geen event geactiveerd.";
+    p.textContent = "Nog geen Event Card onthuld (pas zichtbaar bij REVEAL).";
     eventInfoDiv.appendChild(p);
   } else {
     const title = document.createElement("div");
@@ -84,6 +102,7 @@ function renderGame() {
   }
 
   updateMoveButtonsState();
+  updateDecisionButtonsState();
 }
 
 function renderPlayer() {
@@ -125,16 +144,16 @@ function renderPlayer() {
     const list = document.createElement("div");
     list.style.fontSize = "0.9rem";
     loot.forEach((card, idx) => {
-      const line = document.createElement("div");
       const label = card.t || "Loot";
       const val = card.v || 0;
+      const line = document.createElement("div");
       line.textContent = `${idx + 1}. ${label} (waarde ${val})`;
       list.appendChild(line);
     });
     lootPanel.appendChild(list);
   }
 
-  // Hand (voor later – nu alleen debug weergave)
+  // Hand (nog niet actief in OPS)
   handPanel.innerHTML = "";
   const hand = p.hand || [];
   if (!hand.length) {
@@ -144,12 +163,13 @@ function renderPlayer() {
     const h = document.createElement("div");
     h.style.fontSize = "0.9rem";
     h.textContent =
-      "Je hand (wordt later actief in de OPS-fase): " +
+      "Je hand (voor later in de OPS-fase): " +
       hand.map((c) => c.name).join(", ");
     handPanel.appendChild(h);
   }
 
   updateMoveButtonsState();
+  updateDecisionButtonsState();
 }
 
 function updateMoveButtonsState() {
@@ -164,22 +184,22 @@ function updateMoveButtonsState() {
     return;
   }
 
-  const canMove = canMoveNow(currentGame, currentPlayer);
+  const g = currentGame;
+  const p = currentPlayer;
+  const canMove = canMoveNow(g, p);
+  const moved = g.movedPlayerIds || [];
 
   btnSnatch.disabled = !canMove;
   btnForage.disabled = !canMove;
   btnScout.disabled  = !canMove;
   btnShift.disabled  = !canMove;
 
-  const g = currentGame;
-  const moved = g.movedPlayerIds || [];
-
   if (!canMove) {
     if (g.phase !== "MOVE") {
       moveState.textContent = `Je kunt nu geen MOVE doen (fase: ${g.phase}).`;
-    } else if (currentPlayer.inYard === false) {
+    } else if (p.inYard === false) {
       moveState.textContent = "Je bent niet meer in de Yard.";
-    } else if (currentPlayer.dashed) {
+    } else if (p.dashed) {
       moveState.textContent = "Je hebt al DASH gekozen in een eerdere ronde.";
     } else if (moved.includes(playerId)) {
       moveState.textContent = "Je hebt jouw MOVE voor deze ronde al gedaan.";
@@ -194,11 +214,73 @@ function updateMoveButtonsState() {
   }
 }
 
-async function logMoveAction(game, player, choice) {
+function updateDecisionButtonsState() {
+  if (!btnLurk || !btnBurrow || !btnDash || !decisionState) return;
+
+  if (!currentGame || !currentPlayer) {
+    btnLurk.disabled = true;
+    btnBurrow.disabled = true;
+    btnDash.disabled = true;
+    decisionState.textContent = "Geen game of speler geladen.";
+    return;
+  }
+
+  const g = currentGame;
+  const p = currentPlayer;
+
+  if (g.phase !== "DECISION") {
+    btnLurk.disabled = true;
+    btnBurrow.disabled = true;
+    btnDash.disabled = true;
+    decisionState.textContent = "DECISION is nog niet aan de beurt.";
+    return;
+  }
+
+  if (p.inYard === false) {
+    btnLurk.disabled = true;
+    btnBurrow.disabled = true;
+    btnDash.disabled = true;
+    decisionState.textContent =
+      "Je zit niet meer in de Yard en doet niet mee aan deze DECISION.";
+    return;
+  }
+
+  if (p.dashed) {
+    btnLurk.disabled = true;
+    btnBurrow.disabled = true;
+    btnDash.disabled = true;
+    decisionState.textContent =
+      "Je hebt al eerder DASH gekozen en doet niet meer mee in de Yard.";
+    return;
+  }
+
+  if (p.decision) {
+    btnLurk.disabled = true;
+    btnBurrow.disabled = true;
+    btnDash.disabled = true;
+    decisionState.textContent = `Je DECISION voor deze ronde is: ${p.decision}.`;
+    return;
+  }
+
+  const can = canDecideNow(g, p);
+  btnLurk.disabled = !can;
+  btnBurrow.disabled = !can;
+  btnDash.disabled = !can;
+
+  if (can) {
+    decisionState.textContent =
+      "Kies jouw DECISION: LURK, BURROW of DASH.";
+  } else {
+    decisionState.textContent =
+      "Je kunt nu geen DECISION kiezen.";
+  }
+}
+
+async function logMoveAction(game, player, choice, phase = "MOVE") {
   const actionsCol = collection(db, "games", gameId, "actions");
   await addDoc(actionsCol, {
     round: game.round || 0,
-    phase: "MOVE",
+    phase,
     playerId,
     playerName: player.name || "",
     choice,
@@ -207,12 +289,14 @@ async function logMoveAction(game, player, choice) {
 
   await addLog(gameId, {
     round: game.round || 0,
-    phase: "MOVE",
+    phase,
     kind: "ACTION",
     playerId,
-    message: `${player.name || "Speler"} doet MOVE: ${choice}`,
+    message: `${player.name || "Speler"}: ${choice}`,
   });
 }
+
+// ====== MOVE acties ======
 
 async function performSnatch() {
   if (!gameRef || !playerRef) return;
@@ -249,7 +333,7 @@ async function performSnatch() {
     movedPlayerIds: arrayUnion(playerId),
   });
 
-  await logMoveAction(game, player, "SNATCH");
+  await logMoveAction(game, player, "MOVE_SNATCH");
 }
 
 async function performForage() {
@@ -285,7 +369,7 @@ async function performForage() {
     movedPlayerIds: arrayUnion(playerId),
   });
 
-  await logMoveAction(game, player, "FORAGE");
+  await logMoveAction(game, player, "MOVE_FORAGE");
 }
 
 async function performScout() {
@@ -332,7 +416,7 @@ async function performScout() {
     movedPlayerIds: arrayUnion(playerId),
   });
 
-  await logMoveAction(game, player, `SCOUT #${pos}`);
+  await logMoveAction(game, player, `MOVE_SCOUT_${pos}`);
 }
 
 async function performShift() {
@@ -397,10 +481,46 @@ async function performShift() {
     movedPlayerIds: arrayUnion(playerId),
   });
 
-  await logMoveAction(game, player, `SHIFT ${pos1}<->${pos2}`);
+  await logMoveAction(game, player, `MOVE_SHIFT_${pos1}<->${pos2}`);
 }
 
-// Init
+// ====== DECISION acties ======
+
+async function selectDecision(kind) {
+  if (!gameRef || !playerRef) return;
+
+  const gameSnap = await getDoc(gameRef);
+  if (!gameSnap.exists()) return;
+  const game = gameSnap.data();
+
+  const playerSnap = await getDoc(playerRef);
+  if (!playerSnap.exists()) return;
+  const player = playerSnap.data();
+
+  if (!canDecideNow(game, player)) {
+    alert("Je kunt nu geen DECISION kiezen.");
+    return;
+  }
+
+  if (kind === "BURROW" && player.burrowUsed) {
+    alert("Je hebt BURROW al eerder gebruikt deze raid.");
+    return;
+  }
+
+  const update = {
+    decision: kind,
+  };
+  if (kind === "BURROW" && !player.burrowUsed) {
+    update.burrowUsed = true;
+  }
+
+  await updateDoc(playerRef, update);
+
+  await logMoveAction(game, player, `DECISION_${kind}`, "DECISION");
+}
+
+// ====== INIT ======
+
 initAuth(async (user) => {
   if (!gameId || !playerId) return;
 
@@ -430,4 +550,8 @@ initAuth(async (user) => {
   btnForage.addEventListener("click", performForage);
   btnScout.addEventListener("click", performScout);
   btnShift.addEventListener("click", performShift);
+
+  btnLurk.addEventListener("click", () => selectDecision("LURK"));
+  btnBurrow.addEventListener("click", () => selectDecision("BURROW"));
+  btnDash.addEventListener("click", () => selectDecision("DASH"));
 });
