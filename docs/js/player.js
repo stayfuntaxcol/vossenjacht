@@ -345,70 +345,78 @@ function renderHand() {
 
   const g = currentGame;
   const p = currentPlayer;
-
   const hand = p.hand || [];
+
+  const canPlayOverall = canPlayActionNow(g, p);
+  const myTurnOverall  = isMyOpsTurn(g, p);
+
   if (!hand.length) {
     handPanel.textContent = "Je hebt geen Actiekaarten in je hand.";
-  } else {
-    const canPlay = canPlayActionNow(g, p);
-    const myTurn  = isMyOpsTurn(g, p);
-
-    const list = document.createElement("div");
-    list.style.display = "flex";
-    list.style.flexDirection = "column";
-    list.style.gap = "0.25rem";
-
-    hand.forEach((card, index) => {
-      const row = document.createElement("div");
-      row.style.display = "flex";
-      row.style.justifyContent = "space-between";
-      row.style.alignItems = "center";
-
-      const label = document.createElement("div");
-      label.textContent = `${index + 1}. ${card.name}`;
-      label.style.fontSize = "0.9rem";
-
-      const btn = document.createElement("button");
-      btn.textContent = "Speel";
-      btn.disabled = !(canPlay && myTurn);
-      btn.addEventListener("click", () => playActionCard(index));
-
-      row.appendChild(label);
-      row.appendChild(btn);
-      list.appendChild(row);
-    });
-
-    handPanel.appendChild(list);
-
-    const canPlay = canPlayActionNow(g, p);
-    const myTurn2 = isMyOpsTurn(g, p);
-
     if (opsTurnInfo) {
       if (g.phase !== "ACTIONS") {
         opsTurnInfo.textContent = "OPS-fase is nu niet actief.";
-      } else if (!canPlay) {
+      } else if (!canPlayOverall) {
         opsTurnInfo.textContent =
           "Je kunt nu geen Action Cards spelen (niet in de Yard of al gedashed).";
-      } else if (!myTurn2) {
+      } else if (!myTurnOverall) {
         opsTurnInfo.textContent =
-          "Niet jouw beurt in OPS – wacht tot je weer aan de beurt bent.";
+          "Niet jouw beurt in OPS – wacht tot je weer aan de beurt bent. Je kunt wel PASS kiezen als je aan de beurt bent.";
       } else {
         opsTurnInfo.textContent =
-          "Jij bent nu aan de beurt in OPS – speel één kaart of kies PASS.";
+          "Jij bent nu aan de beurt in OPS – je hebt geen kaarten, je kunt alleen PASS kiezen.";
       }
     }
-
     if (btnPass) {
-      btnPass.disabled = !(canPlay && myTurn2);
+      btnPass.disabled = !(canPlayOverall && myTurnOverall);
+    }
+    ensureActionFeedbackEl();
+    return;
+  }
+
+  const list = document.createElement("div");
+  list.style.display = "flex";
+  list.style.flexDirection = "column";
+  list.style.gap = "0.25rem";
+
+  hand.forEach((card, index) => {
+    const row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.justifyContent = "space-between";
+    row.style.alignItems = "center";
+
+    const label = document.createElement("div");
+    label.textContent = `${index + 1}. ${card.name}`;
+    label.style.fontSize = "0.9rem";
+
+    const btn = document.createElement("button");
+    btn.textContent = "Speel";
+    btn.disabled = !(canPlayOverall && myTurnOverall);
+    btn.addEventListener("click", () => playActionCard(index));
+
+    row.appendChild(label);
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+
+  handPanel.appendChild(list);
+
+  if (opsTurnInfo) {
+    if (g.phase !== "ACTIONS") {
+      opsTurnInfo.textContent = "OPS-fase is nu niet actief.";
+    } else if (!canPlayOverall) {
+      opsTurnInfo.textContent =
+        "Je kunt nu geen Action Cards spelen (niet in de Yard of al gedashed).";
+    } else if (!myTurnOverall) {
+      opsTurnInfo.textContent =
+        "Niet jouw beurt in OPS – wacht tot je weer aan de beurt bent.";
+    } else {
+      opsTurnInfo.textContent =
+        "Jij bent nu aan de beurt in OPS – speel één kaart of kies PASS.";
     }
   }
 
-  if (!hand.length && btnPass) {
-    const g = currentGame;
-    const p = currentPlayer;
-    const canPlay = canPlayActionNow(g, p);
-    const myTurn  = isMyOpsTurn(g, p);
-    btnPass.disabled = !(canPlay && myTurn);
+  if (btnPass) {
+    btnPass.disabled = !(canPlayOverall && myTurnOverall);
   }
 
   ensureActionFeedbackEl();
