@@ -13,7 +13,6 @@ import {
   getDocs,
   orderBy,
   limit,
-  arrayUnion,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const db = getFirestore();
@@ -100,14 +99,14 @@ function buildLootDeck() {
   return shuffleArray(deck);
 }
 
-// Render de Event Track (2x6) zoals EggRun
+// ====== EVENT TRACK RENDERING ======
+
 function renderEventTrack(game) {
   if (!eventTrackDiv) return;
 
-  const track = game.eventTrack || [];
-  const eventIndex =
-    typeof game.eventIndex === "number" ? game.eventIndex : 0;
-  const currentEventId = game.currentEventId || null;
+  const track   = game.eventTrack || [];
+  const revealed = game.eventRevealed || [];
+  const currentId = game.currentEventId || null;
   const roosterSeen = game.roosterSeen || 0;
 
   eventTrackDiv.innerHTML = "";
@@ -126,7 +125,6 @@ function renderEventTrack(game) {
     return;
   }
 
-  // tel aantal Rooster-kaarten in de track
   const totalRoosters = track.filter((id) => id === "ROOSTER_CROW").length || 3;
 
   const statusLine = document.createElement("p");
@@ -137,23 +135,14 @@ function renderEventTrack(game) {
   const grid = document.createElement("div");
   grid.className = "event-track-grid";
 
-  // currentIndex = index van huidig event (laatst getrokken)
-  // eventIndex wijst naar *volgende* kaart in de track
-  const currentIndex =
-    currentEventId && eventIndex > 0 ? eventIndex - 1 : -1;
-
   track.forEach((eventId, i) => {
     const ev = getEventById(eventId);
-    let state = "future";
+    const isRevealed = !!revealed[i];
 
-    if (currentIndex === -1) {
-      state = "future"; // nog geen ronde gestart
-    } else if (i < currentIndex) {
-      state = "past";
-    } else if (i === currentIndex) {
-      state = "current";
-    } else {
-      state = "future";
+    let state = "future";
+    if (isRevealed) {
+      if (currentId && eventId === currentId) state = "current";
+      else state = "past";
     }
 
     const slot = document.createElement("div");
@@ -171,7 +160,8 @@ function renderEventTrack(game) {
     const title = document.createElement("div");
     title.className = "event-slot-title";
 
-    if (state === "future") {
+    if (!isRevealed) {
+      // face-down tot REVEAL
       title.textContent = "??";
     } else if (ev) {
       title.textContent = ev.title;
@@ -186,7 +176,8 @@ function renderEventTrack(game) {
   eventTrackDiv.appendChild(grid);
 }
 
-// Initialiseert een raid à la EggRun v17d als dat nog niet gedaan is
+// ====== RAID INIT (EggRun newRaid) ======
+
 async function initRaidIfNeeded(gameRef) {
   const snap = await getDoc(gameRef);
   if (!snap.exists()) return null;
@@ -204,13 +195,10 @@ async function initRaidIfNeeded(gameRef) {
   });
 
   if (!players.length) {
-    alert(
-      "Geen spelers gevonden. Laat eerst spelers joinen voordat je de raid start."
-    );
+    alert("Geen spelers gevonden. Laat eerst spelers joinen voordat je de raid start.");
     return game;
   }
 
-  // Sorteer op joinedAt zodat we een stabiele join-volgorde hebben
   const sorted = [...players].sort((a, b) => {
     const aSec = a.joinedAt && a.joinedAt.seconds ? a.joinedAt.seconds : 0;
     const bSec = b.joinedAt && b.joinedAt.seconds ? b.joinedAt.seconds : 0;
@@ -254,7 +242,6 @@ async function initRaidIfNeeded(gameRef) {
     );
   });
 
-  // 1 kaart naar de Sack zoals newRaid -> addLootToSack
   const sack = [];
   if (lootDeck.length) {
     sack.push(lootDeck.pop());
@@ -267,10 +254,10 @@ async function initRaidIfNeeded(gameRef) {
       status: "raid",
       phase: "MOVE",
       round: 0,
-      currentEventId: null,
+      currentEventId: null,        // nog geen event zichtbaar
       eventTrack,
       eventRevealed,
-      eventIndex: 0,
+      eventIndex: 0,               // wijst naar volgende te onthullen event
       roosterSeen: 0,
       raidEndedByRooster: false,
       raidStarted: true,
@@ -299,6 +286,8 @@ async function initRaidIfNeeded(gameRef) {
   return newSnap.exists() ? newSnap.data() : null;
 }
 
+// ====== MAIN ======
+
 if (!gameId && gameInfo) {
   gameInfo.textContent = "Geen gameId in de URL";
 }
@@ -318,12 +307,11 @@ initAuth(async (authUser) => {
 
     const game = snap.data();
     currentRoundNumber = game.round || 0;
-    currentPhase = game.phase || "MOVE";
-    const event = game.currentEventId
+    currentPhase       = game.phase || "MOVE";
+    const event        = game.currentEventId
       ? getEventById(game.currentEventId)
       : null;
 
-    // Event Track altijd renderen
     renderEventTrack(game);
 
     let extraStatus = "";
@@ -344,14 +332,14 @@ initAuth(async (authUser) => {
       return;
     }
 
-    // Actions voor huidige ronde volgen (alleen voor weergave)
+    // Actions voor huidige ronde volgen (alleen weergave)
     if (currentRoundForActions === currentRoundNumber && unsubActions) {
       return;
     }
 
     currentRoundForActions = currentRoundNumber;
 
-    const actionsCol = collection(db, "games", gameId, "actions");
+    const actionsCol   = collection(db, "games", gameId, "actions");
     const actionsQuery = query(
       actionsCol,
       where("round", "==", currentRoundForActions)
@@ -363,7 +351,8 @@ initAuth(async (authUser) => {
 
       const phaseLabel = currentPhase;
 
-      if (event) {
+      if (event && currentPhase === "REVEAL") {
+        // Event-kaart pas tonen bij REVEAL
         const h2 = document.createElement("h2");
         h2.textContent =
           `Ronde ${currentRoundForActions} – fase: ${phaseLabel}: ${event.title}`;
@@ -444,27 +433,25 @@ initAuth(async (authUser) => {
   });
 
   // 3) Logboek volgen
-  const logCol = collection(db, "games", gameId, "log");
+  const logCol   = collection(db, "games", gameId, "log");
   const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
 
   onSnapshot(logQuery, (snap) => {
     const entries = [];
     snap.forEach((docSnap) => entries.push(docSnap.data()));
-    entries.reverse(); // oud → nieuw
+    entries.reverse();
 
     logPanel.innerHTML = "<h2>Logboek</h2>";
     entries.forEach((e) => {
       const div = document.createElement("div");
       div.className = "log-line";
       div.textContent =
-        `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${
-          e.message ?? ""
-        }`;
+        `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${e.message ?? ""}`;
       logPanel.appendChild(div);
     });
   });
 
-  // 4) Start (volgende) ronde
+  // 4) Start (volgende) ronde – event NIET onthullen
   startBtn.addEventListener("click", async () => {
     const game = await initRaidIfNeeded(gameRef);
     if (!game) return;
@@ -478,42 +465,11 @@ initAuth(async (authUser) => {
 
     const newRound = (game.round || 0) + 1;
 
-    const track = game.eventTrack || [];
-    let index =
-      typeof game.eventIndex === "number" ? game.eventIndex : 0;
-
-    let eventId = null;
-    let event = null;
-
-    if (track.length > 0) {
-      if (index >= track.length) {
-        // eenvoudige wrap-around als je meer dan 12 rondes speelt
-        index = 0;
-      }
-      eventId = track[index];
-      event = getEventById(eventId);
-    }
-
-    // Rooster Crow teller bijhouden
-    const prevRoosterSeen = game.roosterSeen || 0;
-    let newRoosterSeen = prevRoosterSeen;
-    let raidEndedByRooster = game.raidEndedByRooster || false;
-
-    if (event && event.type === "ROOSTER") {
-      newRoosterSeen = prevRoosterSeen + 1;
-      if (newRoosterSeen >= 3) {
-        raidEndedByRooster = true;
-      }
-    }
-
     await updateDoc(gameRef, {
       status: "round",
       round: newRound,
       phase: "MOVE",
-      currentEventId: eventId,
-      eventIndex: track.length > 0 ? index + 1 : index,
-      roosterSeen: newRoosterSeen,
-      raidEndedByRooster,
+      // currentEventId blijft null tot REVEAL
       movedPlayerIds: [],
     });
 
@@ -523,39 +479,9 @@ initAuth(async (authUser) => {
       kind: "SYSTEM",
       message: `Ronde ${newRound} gestart.`,
     });
-
-    if (event) {
-      await addLog(gameId, {
-        round: newRound,
-        phase: "MOVE",
-        kind: "EVENT",
-        cardId: eventId,
-        message: event.title,
-      });
-    }
-
-    if (event && event.type === "ROOSTER") {
-      await addLog(gameId, {
-        round: newRound,
-        phase: "MOVE",
-        kind: "EVENT",
-        cardId: eventId,
-        message: `Rooster Crow (${newRoosterSeen}/3).`,
-      });
-
-      if (newRoosterSeen >= 3) {
-        await addLog(gameId, {
-          round: newRound,
-          phase: "MOVE",
-          kind: "SYSTEM",
-          message:
-            "Derde Rooster Crow: na deze ronde eindigt de raid. Er kunnen geen nieuwe rondes meer gestart worden.",
-        });
-      }
-    }
   });
 
-  // 5) Volgende fase (MOVE → ACTIONS → DECISION → REVEAL → MOVE)
+  // 5) Volgende fase – inclusief REVEAL-logica
   nextPhaseBtn.addEventListener("click", async () => {
     const snap = await getDoc(gameRef);
     if (!snap.exists()) return;
@@ -563,7 +489,7 @@ initAuth(async (authUser) => {
 
     const current = game.phase || "MOVE";
 
-    // tijdens MOVE eerst checken of alle vossen in de Yard een MOVE hebben gedaan
+    // tijdens MOVE: check of iedereen in de Yard een MOVE heeft
     if (current === "MOVE") {
       const moved = game.movedPlayerIds || [];
       const mustMoveCount = latestPlayers.filter(
@@ -578,15 +504,87 @@ initAuth(async (authUser) => {
       }
     }
 
+    const roundNumber = game.round || 0;
+
+    // SPECIAAL: DECISION → REVEAL = event-kaart omdraaien
+    if (current === "DECISION") {
+      const track = game.eventTrack || [];
+      let eventIndex =
+        typeof game.eventIndex === "number" ? game.eventIndex : 0;
+
+      if (!track.length || eventIndex >= track.length) {
+        alert("Er zijn geen events meer op de Track om te onthullen.");
+        return;
+      }
+
+      const eventId = track[eventIndex];
+      const ev = getEventById(eventId);
+
+      const revealed = game.eventRevealed
+        ? [...game.eventRevealed]
+        : track.map(() => false);
+      revealed[eventIndex] = true;
+
+      let newRoosterSeen = game.roosterSeen || 0;
+      let raidEndedByRooster = game.raidEndedByRooster || false;
+
+      const updatePayload = {
+        phase: "REVEAL",
+        currentEventId: eventId,
+        eventRevealed: revealed,
+        eventIndex: eventIndex + 1,
+      };
+
+      if (ev && ev.type === "ROOSTER") {
+        newRoosterSeen += 1;
+        updatePayload.roosterSeen = newRoosterSeen;
+        if (newRoosterSeen >= 3) {
+          raidEndedByRooster = true;
+          updatePayload.raidEndedByRooster = true;
+        }
+      }
+
+      await updateDoc(gameRef, updatePayload);
+
+      await addLog(gameId, {
+        round: roundNumber,
+        phase: "REVEAL",
+        kind: "EVENT",
+        cardId: eventId,
+        message: ev ? ev.title : eventId,
+      });
+
+      if (ev && ev.type === "ROOSTER") {
+        await addLog(gameId, {
+          round: roundNumber,
+          phase: "REVEAL",
+          kind: "EVENT",
+          cardId: eventId,
+          message: `Rooster Crow (${newRoosterSeen}/3).`,
+        });
+
+        if (raidEndedByRooster) {
+          await addLog(gameId, {
+            round: roundNumber,
+            phase: "REVEAL",
+            kind: "SYSTEM",
+            message:
+              "Derde Rooster Crow: na deze ronde eindigt de raid. Er kunnen geen nieuwe rondes meer gestart worden.",
+          });
+        }
+      }
+
+      return;
+    }
+
+    // overige fasewissels: MOVE→ACTIONS, ACTIONS→DECISION, REVEAL→MOVE
     let next = "MOVE";
     if (current === "MOVE") next = "ACTIONS";
     else if (current === "ACTIONS") next = "DECISION";
-    else if (current === "DECISION") next = "REVEAL";
     else if (current === "REVEAL") next = "MOVE";
 
     await updateDoc(gameRef, { phase: next });
 
-    const roundNumber = game.round || 0;
     await addLog(gameId, {
       round: roundNumber,
       phase: next,
@@ -595,7 +593,7 @@ initAuth(async (authUser) => {
     });
   });
 
-  // 6) Ronde afsluiten + scores updaten (nog oude simpele versie)
+  // 6) Ronde afsluiten (oude simpele score-teller – later vervangen door EggRun-scoreRaid)
   endBtn.addEventListener("click", async () => {
     const gameSnap = await getDoc(gameRef);
     if (!gameSnap.exists()) return;
@@ -607,9 +605,9 @@ initAuth(async (authUser) => {
       return;
     }
 
-    const actionsCol = collection(db, "games", gameId, "actions");
+    const actionsCol   = collection(db, "games", gameId, "actions");
     const actionsQuery = query(actionsCol, where("round", "==", roundNumber));
-    const actionsSnap = await getDocs(actionsQuery);
+    const actionsSnap  = await getDocs(actionsQuery);
 
     const scoreChanges = {};
 
@@ -619,7 +617,6 @@ initAuth(async (authUser) => {
       if (a.choice === "GRAB_LOOT") {
         scoreChanges[a.playerId] = (scoreChanges[a.playerId] || 0) + 1;
       }
-      // PLAY_SAFE => 0 punten – deze oude logica gaan we later vervangen
     });
 
     const playersSnap = await getDocs(playersColRef);
@@ -664,9 +661,7 @@ initAuth(async (authUser) => {
 
     const snap = await getDocs(q);
     if (snap.empty) {
-      alert(
-        "Geen host-speler gevonden. Start het spel opnieuw of join met de code."
-      );
+      alert("Geen host-speler gevonden. Start het spel opnieuw of join met de code.");
       return;
     }
 
