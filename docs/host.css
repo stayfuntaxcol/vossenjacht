@@ -238,6 +238,7 @@
 /* Dit zijn de “kaart placeholders” (status + decks + players) */
 /* 2:3 ratio: b.v. 100x150 op het bord, schaalbaar met zoom */
 .board-card {
+  position: relative;
   background: linear-gradient(145deg, #020617, #020617, #020617, #0b1120);
   border-radius: 10px;
   border: 1px solid rgba(148, 163, 184, 0.45);
@@ -584,6 +585,56 @@
   background: rgba(248, 113, 113, 0.2);
   color: #fecaca;
   border-color: rgba(248, 113, 113, 0.6);
+}
+
+/* =========================================================
+   CARD ART IMAGES – BEACON / SCATTER / HOST PLAYER
+   ========================================================= */
+
+/* Beacon & Scatter & Host player gebruiken jouw Canva-afbeeldingen */
+#beaconCard,
+#scatterCard,
+.card-player-host {
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  overflow: hidden;
+}
+
+/* Zorg dat paden kloppen met docs/assets/… */
+#beaconCard {
+  background-image: url("./assets/card_beacon.png");
+}
+
+#scatterCard {
+  background-image: url("./assets/card_scatter.png");
+}
+
+.card-player-host {
+  background-image: url("./assets/card_player_host.png");
+}
+
+/* Donkere overlay bovenop de image voor leesbare tekst */
+#beaconCard::before,
+#scatterCard::before,
+.card-player-host::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to top,
+    rgba(15, 23, 42, 0.86),
+    rgba(15, 23, 42, 0.28)
+  );
+  pointer-events: none;
+}
+
+/* Tekst en inhoud boven de overlay */
+#beaconCard > *,
+#scatterCard > *,
+.card-player-host > * {
+  position: relative;
+  z-index: 1;
 }
 
 /* =========================================================
