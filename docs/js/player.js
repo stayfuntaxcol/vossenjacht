@@ -11,6 +11,7 @@ import {
   addDoc,
   serverTimestamp,
   arrayUnion,
+  getDocs,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const db = getFirestore();
@@ -81,8 +82,7 @@ function setActionFeedback(msg) {
 }
 
 /**
- * Zorgt dat flagsRound altijd een compleet object is met
- * alle standaard velden, plus bestaande velden uit de game.
+ * flagsRound altijd met alle standaard velden vullen.
  */
 function mergeRoundFlags(game) {
   const base = {
@@ -96,6 +96,75 @@ function mergeRoundFlags(game) {
     scentChecks: [],
   };
   return { ...base, ...(game.flagsRound || {}) };
+}
+
+function isInYardLocal(p) {
+  return p.inYard !== false && !p.dashed;
+}
+
+async function fetchPlayersForGame() {
+  const col = collection(db, "games", gameId, "players");
+  const snap = await getDocs(col);
+  const players = [];
+  snap.forEach((docSnap) => {
+    players.push({ id: docSnap.id, ...docSnap.data() });
+  });
+  return players;
+}
+
+async function chooseOtherPlayerPrompt(title) {
+  const players = await fetchPlayersForGame();
+  const others = players.filter(
+    (p) => p.id !== playerId && isInYardLocal(p)
+  );
+
+  if (!others.length) {
+    alert("Er zijn geen andere vossen in de Yard om te kiezen.");
+    return null;
+  }
+
+  const lines = others.map((p, idx) => `${idx + 1}. ${p.name || "Vos"}`);
+  const choiceStr = prompt(
+    `${title}\n` + lines.join("\n")
+  );
+  if (!choiceStr) return null;
+  const idx = parseInt(choiceStr, 10) - 1;
+  if (Number.isNaN(idx) || idx < 0 || idx >= others.length) {
+    alert("Ongeldige keuze.");
+    return null;
+  }
+  return others[idx];
+}
+
+async function maybeShowScentCheckInfo(game) {
+  const flags = mergeRoundFlags(game);
+  const checks = Array.isArray(flags.scentChecks) ? flags.scentChecks : [];
+  const myChecks = checks.filter((c) => c.viewerId === playerId);
+  if (!myChecks.length) return;
+
+  for (const ch of myChecks) {
+    try {
+      const pref = doc(db, "games", gameId, "players", ch.targetId);
+      const snap = await getDoc(pref);
+      if (!snap.exists()) continue;
+      const p = snap.data();
+      const name = p.name || "Vos";
+      const dec = p.decision || "(nog geen keuze)";
+      alert(`[Scent Check] ${name} heeft op dit moment DECISION: ${dec}.`);
+    } catch (err) {
+      console.error("ScentCheck peek error", err);
+    }
+  }
+}
+
+function sortPlayersByJoinOrder(players) {
+  return [...players].sort((a, b) => {
+    const ao =
+      typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+    const bo =
+      typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
+    return ao - bo;
+  });
 }
 
 if (!gameId || !playerId) {
@@ -706,6 +775,17 @@ async function selectDecision(kind) {
   const game = gameSnap.data();
   const player = playerSnap.data();
 
+  // Eerst Scent Check info tonen, als die er is
+  await maybeShowScentCheckInfo(game);
+
+  const flags = mergeRoundFlags(game);
+  const ft = flags.followTail || {};
+  if (ft[playerId]) {
+    setActionFeedback(
+      "Follow the Tail is actief: jouw uiteindelijke DECISION zal gelijk worden aan de keuze van de gekozen vos."
+    );
+  }
+
   if (!canDecideNow(game, player)) {
     alert("Je kunt nu geen DECISION kiezen.");
     return;
@@ -799,6 +879,24 @@ async function playActionCard(index) {
       break;
     case "Nose for Trouble":
       await playNoseForTrouble(game, player);
+      break;
+    case "Scent Check":
+      await playScentCheck(game, player);
+      break;
+    case "Follow the Tail":
+      await playFollowTail(game, player);
+      break;
+    case "Alpha Call":
+      await playAlphaCall(game, player);
+      break;
+    case "Pack Tinker":
+      await playPackTinker(game, player);
+      break;
+    case "Mask Swap":
+      await playMaskSwap(game, player);
+      break;
+    case "Countermove":
+      await playCountermove(game, player);
       break;
     default:
       alert(
@@ -1088,7 +1186,7 @@ async function playNoseForTrouble(game, player) {
   });
 
   await addLog(gameId, {
-    round: game.round || 0,
+    round,
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
@@ -1099,6 +1197,247 @@ async function playNoseForTrouble(game, player) {
 
   setActionFeedback(
     `Nose for Trouble: je hebt "${ev ? ev.title : chosenId}" voorspeld als volgende Event.`
+  );
+}
+
+// Scent Check – kijk naar DECISION van 1 speler en koppel voor deze ronde
+async function playScentCheck(game, player) {
+  const target = await chooseOtherPlayerPrompt(
+    "Scent Check – kies een vos om te besnuffelen"
+  );
+  if (!target) return;
+
+  // Directe peek, als er al een DECISION is
+  try {
+    const pref = doc(db, "games", gameId, "players", target.id);
+    const snap = await getDoc(pref);
+    if (snap.exists()) {
+      const t = snap.data();
+      const dec = t.decision || "(nog geen keuze)";
+      alert(
+        `[Scent Check] ${t.name || "Vos"} heeft op dit moment DECISION: ${dec}.`
+      );
+    }
+  } catch (err) {
+    console.error("ScentCheck immediate peek error", err);
+  }
+
+  const flags = mergeRoundFlags(game);
+  const list = Array.isArray(flags.scentChecks)
+    ? [...flags.scentChecks]
+    : [];
+  list.push({
+    viewerId: playerId,
+    targetId: target.id,
+  });
+  flags.scentChecks = list;
+
+  await updateDoc(gameRef, {
+    flagsRound: flags,
+  });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt Scent Check op ${
+      target.name || "een vos"
+    }.`,
+  });
+
+  setActionFeedback(
+    `Scent Check: je volgt deze ronde de beslissing van ${target.name || "de gekozen vos"} van dichtbij.`
+  );
+}
+
+// Follow the Tail – jouw DECISION volgt die van een andere speler
+async function playFollowTail(game, player) {
+  const target = await chooseOtherPlayerPrompt(
+    "Follow the Tail – kies een vos om te volgen"
+  );
+  if (!target) return;
+
+  const flags = mergeRoundFlags(game);
+  const ft = flags.followTail || {};
+  ft[playerId] = target.id;
+  flags.followTail = ft;
+
+  await updateDoc(gameRef, {
+    flagsRound: flags,
+  });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt Follow the Tail en volgt de keuze van ${
+      target.name || "een vos"
+    }.`,
+  });
+
+  setActionFeedback(
+    `Follow the Tail: jouw uiteindelijke DECISION zal gelijk zijn aan die van ${target.name || "de gekozen vos"}.`
+  );
+}
+
+// Alpha Call – kies een nieuwe Lead Fox
+async function playAlphaCall(game, player) {
+  const players = await fetchPlayersForGame();
+  const ordered = sortPlayersByJoinOrder(players);
+
+  if (!ordered.length) {
+    alert("Geen spelers gevonden om Lead Fox van te maken.");
+    return;
+  }
+
+  const lines = ordered.map((p, idx) => `${idx + 1}. ${p.name || "Vos"}`);
+  const choiceStr = prompt(
+    "Alpha Call – kies wie de nieuwe Lead Fox wordt:\n" + lines.join("\n")
+  );
+  if (!choiceStr) return;
+  const idx = parseInt(choiceStr, 10) - 1;
+  if (Number.isNaN(idx) || idx < 0 || idx >= ordered.length) {
+    alert("Ongeldige keuze.");
+    return;
+  }
+
+  const newLead = ordered[idx];
+
+  await updateDoc(gameRef, {
+    leadIndex: idx,
+  });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt Alpha Call – Lead Fox wordt nu ${
+      newLead.name || "een vos"
+    }.`,
+  });
+
+  setActionFeedback(
+    `Alpha Call: Lead Fox is nu ${newLead.name || "de gekozen vos"}.`
+  );
+}
+
+// Pack Tinker – wissel 2 Event-posities naar keuze
+async function playPackTinker(game, player) {
+  const flags = mergeRoundFlags(game);
+  if (flags.lockEvents) {
+    alert(
+      "Burrow Beacon is actief – de Event Track is gelocked en kan niet meer veranderen."
+    );
+    return;
+  }
+
+  const track = game.eventTrack ? [...game.eventTrack] : [];
+  if (!track.length) {
+    alert("Geen Event Track beschikbaar.");
+    return;
+  }
+
+  const maxPos = track.length;
+  const p1Str = prompt(`Pack Tinker – eerste eventpositie (1-${maxPos})`);
+  if (!p1Str) return;
+  const p2Str = prompt(`Pack Tinker – tweede eventpositie (1-${maxPos})`);
+  if (!p2Str) return;
+
+  const pos1 = parseInt(p1Str, 10);
+  const pos2 = parseInt(p2Str, 10);
+  if (
+    Number.isNaN(pos1) ||
+    Number.isNaN(pos2) ||
+    pos1 < 1 ||
+    pos1 > maxPos ||
+    pos2 < 1 ||
+    pos2 > maxPos ||
+    pos1 === pos2
+  ) {
+    alert("Ongeldige posities voor Pack Tinker.");
+    return;
+  }
+
+  const i1 = pos1 - 1;
+  const i2 = pos2 - 1;
+
+  const tmp = track[i1];
+  track[i1] = track[i2];
+  track[i2] = tmp;
+
+  await updateDoc(gameRef, {
+    eventTrack: track,
+  });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt Pack Tinker – events op posities ${pos1} en ${pos2} wisselen van plek.`,
+  });
+
+  setActionFeedback(
+    `Pack Tinker: je hebt events op posities ${pos1} en ${pos2} gewisseld.`
+  );
+}
+
+// Mask Swap – shuffle alle Den-kleuren van vossen in de Yard
+async function playMaskSwap(game, player) {
+  const players = await fetchPlayersForGame();
+  const inYard = players.filter(isInYardLocal);
+
+  if (inYard.length < 2) {
+    alert("Te weinig vossen in de Yard om Mask Swap uit te voeren.");
+    return;
+  }
+
+  const colors = inYard.map((p) => (p.color || "").toUpperCase());
+  // eenvoudige shuffle
+  for (let i = colors.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [colors[i], colors[j]] = [colors[j], colors[i]];
+  }
+
+  const updates = [];
+  inYard.forEach((p, idx) => {
+    const pref = doc(db, "games", gameId, "players", p.id);
+    updates.push(updateDoc(pref, { color: colors[idx] || null }));
+  });
+  await Promise.all(updates);
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt Mask Swap – alle Den-kleuren in de Yard worden gehusseld.`,
+  });
+
+  setActionFeedback(
+    "Mask Swap: Den-kleuren van alle vossen in de Yard zijn gehusseld."
+  );
+}
+
+// Countermove – vereenvoudigde placeholder
+async function playCountermove(game, player) {
+  alert(
+    "Countermove is in deze digitale versie nog niet volledig interactief (out-of-turn) geïmplementeerd.\nJe kunt hem voorlopig als 'blanco kaart' beschouwen of als huisregel afspreken."
+  );
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt Countermove (digitale effect nog niet actief).`,
+  });
+
+  setActionFeedback(
+    "Countermove gespeeld – in deze versie nog zonder automatisch effect (gebruik eventueel een huisregel)."
   );
 }
 
