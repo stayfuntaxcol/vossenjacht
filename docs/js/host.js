@@ -1,6 +1,7 @@
 import { initAuth } from "./firebase.js";
 import { getEventById } from "./cards.js";
 import { addLog } from "./log.js";
+import { resolveAfterReveal } from "./engine.js";
 import {
   getFirestore,
   doc,
@@ -104,9 +105,9 @@ function buildLootDeck() {
 function renderEventTrack(game) {
   if (!eventTrackDiv) return;
 
-  const track   = game.eventTrack || [];
-  const revealed = game.eventRevealed || [];
-  const currentId = game.currentEventId || null;
+  const track      = game.eventTrack || [];
+  const revealed   = game.eventRevealed || [];
+  const currentId  = game.currentEventId || null;
   const roosterSeen = game.roosterSeen || 0;
 
   eventTrackDiv.innerHTML = "";
@@ -125,7 +126,8 @@ function renderEventTrack(game) {
     return;
   }
 
-  const totalRoosters = track.filter((id) => id === "ROOSTER_CROW").length || 3;
+  const totalRoosters =
+    track.filter((id) => id === "ROOSTER_CROW").length || 3;
 
   const statusLine = document.createElement("p");
   statusLine.className = "event-track-status";
@@ -161,7 +163,6 @@ function renderEventTrack(game) {
     title.className = "event-slot-title";
 
     if (!isRevealed) {
-      // face-down tot REVEAL
       title.textContent = "??";
     } else if (ev) {
       title.textContent = ev.title;
@@ -176,7 +177,7 @@ function renderEventTrack(game) {
   eventTrackDiv.appendChild(grid);
 }
 
-// ====== RAID INIT (EggRun newRaid) ======
+// ====== RAID INIT ======
 
 async function initRaidIfNeeded(gameRef) {
   const snap = await getDoc(gameRef);
@@ -195,7 +196,9 @@ async function initRaidIfNeeded(gameRef) {
   });
 
   if (!players.length) {
-    alert("Geen spelers gevonden. Laat eerst spelers joinen voordat je de raid start.");
+    alert(
+      "Geen spelers gevonden. Laat eerst spelers joinen voordat je de raid start."
+    );
     return game;
   }
 
@@ -254,10 +257,10 @@ async function initRaidIfNeeded(gameRef) {
       status: "raid",
       phase: "MOVE",
       round: 0,
-      currentEventId: null,        // nog geen event zichtbaar
+      currentEventId: null,
       eventTrack,
       eventRevealed,
-      eventIndex: 0,               // wijst naar volgende te onthullen event
+      eventIndex: 0,
       roosterSeen: 0,
       raidEndedByRooster: false,
       raidStarted: true,
@@ -298,7 +301,7 @@ initAuth(async (authUser) => {
   const gameRef = doc(db, "games", gameId);
   const playersColRef = collection(db, "games", gameId, "players");
 
-  // 1) Game live volgen
+  // Game live
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
       gameInfo.textContent = "Spel niet gevonden";
@@ -307,10 +310,11 @@ initAuth(async (authUser) => {
 
     const game = snap.data();
     currentRoundNumber = game.round || 0;
-    currentPhase       = game.phase || "MOVE";
-    const event        = game.currentEventId
-      ? getEventById(game.currentEventId)
-      : null;
+    currentPhase = game.phase || "MOVE";
+    const event =
+      game.currentEventId && game.phase === "REVEAL"
+        ? getEventById(game.currentEventId)
+        : null;
 
     renderEventTrack(game);
 
@@ -326,20 +330,18 @@ initAuth(async (authUser) => {
     if (game.status !== "round" && game.status !== "raid") {
       roundInfo.textContent = "Nog geen actieve ronde.";
       if (unsubActions) {
-        unsubActions();
         unsubActions = null;
       }
       return;
     }
 
-    // Actions voor huidige ronde volgen (alleen weergave)
     if (currentRoundForActions === currentRoundNumber && unsubActions) {
       return;
     }
 
     currentRoundForActions = currentRoundNumber;
 
-    const actionsCol   = collection(db, "games", gameId, "actions");
+    const actionsCol = collection(db, "games", gameId, "actions");
     const actionsQuery = query(
       actionsCol,
       where("round", "==", currentRoundForActions)
@@ -351,8 +353,7 @@ initAuth(async (authUser) => {
 
       const phaseLabel = currentPhase;
 
-      if (event && currentPhase === "REVEAL") {
-        // Event-kaart pas tonen bij REVEAL
+      if (event) {
         const h2 = document.createElement("h2");
         h2.textContent =
           `Ronde ${currentRoundForActions} – fase: ${phaseLabel}: ${event.title}`;
@@ -383,7 +384,7 @@ initAuth(async (authUser) => {
     });
   });
 
-  // 2) Spelers volgen (scorebord + LEAD FOX)
+  // Spelers / scoreboard
   onSnapshot(playersColRef, (snapshot) => {
     const players = [];
     snapshot.forEach((pDoc) => {
@@ -427,13 +428,15 @@ initAuth(async (authUser) => {
       const plek = index + 1;
       const div = document.createElement("div");
       div.textContent =
-        `${plek}. ${p.name} ${p.isHost ? "(host)" : ""} – score: ${p.score || 0}`;
+        `${plek}. ${p.name} ${p.isHost ? "(host)" : ""} – score: ${
+          p.score || 0
+        }`;
       playersDiv.appendChild(div);
     });
   });
 
-  // 3) Logboek volgen
-  const logCol   = collection(db, "games", gameId, "log");
+  // Logboek
+  const logCol = collection(db, "games", gameId, "log");
   const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
 
   onSnapshot(logQuery, (snap) => {
@@ -446,12 +449,14 @@ initAuth(async (authUser) => {
       const div = document.createElement("div");
       div.className = "log-line";
       div.textContent =
-        `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${e.message ?? ""}`;
+        `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${
+          e.message ?? ""
+        }`;
       logPanel.appendChild(div);
     });
   });
 
-  // 4) Start (volgende) ronde – event NIET onthullen
+  // Start ronde
   startBtn.addEventListener("click", async () => {
     const game = await initRaidIfNeeded(gameRef);
     if (!game) return;
@@ -469,7 +474,7 @@ initAuth(async (authUser) => {
       status: "round",
       round: newRound,
       phase: "MOVE",
-      // currentEventId blijft null tot REVEAL
+      currentEventId: null,
       movedPlayerIds: [],
     });
 
@@ -481,15 +486,16 @@ initAuth(async (authUser) => {
     });
   });
 
-  // 5) Volgende fase – inclusief REVEAL-logica
+  // Volgende fase + REVEAL
   nextPhaseBtn.addEventListener("click", async () => {
     const snap = await getDoc(gameRef);
     if (!snap.exists()) return;
     const game = snap.data();
 
     const current = game.phase || "MOVE";
+    const roundNumber = game.round || 0;
 
-    // tijdens MOVE: check of iedereen in de Yard een MOVE heeft
+    // MOVE: check of alle vossen in de Yard hebben bewogen
     if (current === "MOVE") {
       const moved = game.movedPlayerIds || [];
       const mustMoveCount = latestPlayers.filter(
@@ -504,10 +510,21 @@ initAuth(async (authUser) => {
       }
     }
 
-    const roundNumber = game.round || 0;
-
-    // SPECIAAL: DECISION → REVEAL = event-kaart omdraaien
+    // DECISION: check of alle vossen in de Yard een keuze hebben gemaakt
     if (current === "DECISION") {
+      const active = latestPlayers.filter(
+        (p) => p.inYard !== false && !p.dashed
+      );
+      const decided = active.filter((p) => !!p.decision).length;
+
+      if (active.length > 0 && decided < active.length) {
+        alert(
+          `Niet alle vossen hebben een DECISION gekozen (${decided}/${active.length}).`
+        );
+        return;
+      }
+
+      // DECISION → REVEAL: Event onthullen + EggRun-resolve
       const track = game.eventTrack || [];
       let eventIndex =
         typeof game.eventIndex === "number" ? game.eventIndex : 0;
@@ -519,7 +536,6 @@ initAuth(async (authUser) => {
 
       const eventId = track[eventIndex];
       const ev = getEventById(eventId);
-
       const revealed = game.eventRevealed
         ? [...game.eventRevealed]
         : track.map(() => false);
@@ -535,7 +551,7 @@ initAuth(async (authUser) => {
         eventIndex: eventIndex + 1,
       };
 
-      if (ev && ev.type === "ROOSTER") {
+      if (eventId === "ROOSTER_CROW") {
         newRoosterSeen += 1;
         updatePayload.roosterSeen = newRoosterSeen;
         if (newRoosterSeen >= 3) {
@@ -554,7 +570,7 @@ initAuth(async (authUser) => {
         message: ev ? ev.title : eventId,
       });
 
-      if (ev && ev.type === "ROOSTER") {
+      if (eventId === "ROOSTER_CROW") {
         await addLog(gameId, {
           round: roundNumber,
           phase: "REVEAL",
@@ -562,22 +578,23 @@ initAuth(async (authUser) => {
           cardId: eventId,
           message: `Rooster Crow (${newRoosterSeen}/3).`,
         });
-
         if (raidEndedByRooster) {
           await addLog(gameId, {
             round: roundNumber,
             phase: "REVEAL",
             kind: "SYSTEM",
             message:
-              "Derde Rooster Crow: na deze ronde eindigt de raid. Er kunnen geen nieuwe rondes meer gestart worden.",
+              "Derde Rooster Crow: dashers verdelen de Sack en daarna eindigt de raid.",
           });
         }
       }
 
+      // EggRun-eventlogica uitvoeren
+      await resolveAfterReveal(gameId);
       return;
     }
 
-    // overige fasewissels: MOVE→ACTIONS, ACTIONS→DECISION, REVEAL→MOVE
+    // andere fasewissels: MOVE→ACTIONS, ACTIONS→DECISION, REVEAL→MOVE
     let next = "MOVE";
     if (current === "MOVE") next = "ACTIONS";
     else if (current === "ACTIONS") next = "DECISION";
@@ -593,7 +610,7 @@ initAuth(async (authUser) => {
     });
   });
 
-  // 6) Ronde afsluiten (oude simpele score-teller – later vervangen door EggRun-scoreRaid)
+  // Einde ronde – oude simpele score (laten we staan, maar straks vervangen door echte eindscore)
   endBtn.addEventListener("click", async () => {
     const gameSnap = await getDoc(gameRef);
     if (!gameSnap.exists()) return;
@@ -605,9 +622,9 @@ initAuth(async (authUser) => {
       return;
     }
 
-    const actionsCol   = collection(db, "games", gameId, "actions");
+    const actionsCol = collection(db, "games", gameId, "actions");
     const actionsQuery = query(actionsCol, where("round", "==", roundNumber));
-    const actionsSnap  = await getDocs(actionsQuery);
+    const actionsSnap = await getDocs(actionsQuery);
 
     const scoreChanges = {};
 
@@ -651,7 +668,7 @@ initAuth(async (authUser) => {
     alert("Ronde afgesloten en scores bijgewerkt (oude simpele teller).");
   });
 
-  // 7) Speel mee als host
+  // Speel mee als host
   playAsHostBtn.addEventListener("click", async () => {
     const q = query(
       playersColRef,
@@ -661,7 +678,9 @@ initAuth(async (authUser) => {
 
     const snap = await getDocs(q);
     if (snap.empty) {
-      alert("Geen host-speler gevonden. Start het spel opnieuw of join met de code.");
+      alert(
+        "Geen host-speler gevonden. Start het spel opnieuw of join met de code."
+      );
       return;
     }
 
