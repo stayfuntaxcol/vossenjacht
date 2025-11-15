@@ -92,7 +92,7 @@
 }
 
 /* =========================================================
-   BOARD CONTAINER (16:9 + GRID)
+   BOARD CONTAINER (16:9 + 5x8 GRID)
    ========================================================= */
 
 #boardShell {
@@ -112,13 +112,13 @@
 
 #boardInner {
   position: absolute;
-  inset: 5%;
+  inset: 5%; /* 5% margin = binnenkader */
   border-radius: 14px;
   background: radial-gradient(circle at top, #111827, #020617);
   overflow: hidden;
 }
 
-/* 5x8 grid overlay (plattegrond) */
+/* 5x8 grid overlay – puur visueel, geen echte slots */
 #boardInner::before {
   content: "";
   position: absolute;
@@ -137,15 +137,19 @@
       transparent 1px
     );
   background-size: calc(100% / 5) 100%, 100% calc(100% / 8);
-  opacity: 0.3;
+  opacity: 0.25;
   pointer-events: none;
 }
 
-/* Zones positioneren binnen de plattegrond */
+/* =========================================================
+   ZONE POSITIES – NIET OVERLAPPEND
+   (afgeleid van 5 kolommen x 8 rijen)
+   ========================================================= */
 
+/* Basis zone-stijl */
 .board-zone {
   position: absolute;
-  background: rgba(15, 23, 42, 0.8);
+  background: rgba(15, 23, 42, 0.82);
   border-radius: 12px;
   border: 1px solid rgba(148, 163, 184, 0.25);
   padding: 0.4rem;
@@ -156,52 +160,53 @@
   backdrop-filter: blur(4px);
 }
 
-/* Status boven-links (2 rijen, ±3 kolommen) */
+/* Status (boven-links) – ca. 3 kolommen x 2 rijen */
 .board-zone-status {
-  top: 0.5rem;
-  left: 0.5rem;
-  right: 40%;
-  height: 22%;
+  top: 2%;
+  left: 2%;
+  width: 58%;   /* kolommen 1–3 */
+  height: 22%;  /* rijen 1–2 */
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem;
   align-items: stretch;
 }
 
-/* Decks + Sack boven-rechts */
+/* Decks + Sack (boven-rechts) – ca. 2 kolommen x 2 rijen */
 .board-zone-decks {
-  top: 0.5rem;
-  right: 0.5rem;
-  width: 32%;
-  height: 22%;
+  top: 2%;
+  right: 2%;
+  width: 36%;  /* kolommen 4–5 */
+  height: 22%; /* rijen 1–2 */
   display: flex;
   gap: 0.35rem;
   justify-content: space-between;
+  align-items: stretch;
 }
 
-/* Event track links-midden (ongeveer rijen 3-6) */
+/* Event Track (links-midden) – ca. 3 kolommen x 4 rijen */
 .board-zone-events {
-  left: 0.5rem;
-  top: 25%;
-  width: 55%;
-  height: 45%;
+  top: 26%;    /* onder status/decks */
+  left: 2%;
+  width: 58%;  /* kolommen 1–3 */
+  height: 40%; /* rijen 3–6 */
 }
 
-/* Players onder-midden (Yard + Caught/Dash) */
+/* Players (onder-links) – ca. 3 kolommen x 3 rijen */
 .board-zone-players {
-  left: 12%;
-  bottom: 0.5rem;
-  width: 60%;
-  height: 33%;
+  bottom: 2%;
+  left: 2%;
+  width: 58%;  /* kolommen 1–3 */
+  height: 30%; /* rijen 6–8 */
 }
 
-/* Info popup rechts-onder */
+/* Info popup (rechts-onder) – ca. 2 kolommen x 4 rijen */
 .board-info-popup {
   position: absolute;
-  right: 0.5rem;
-  bottom: 0.5rem;
-  width: 30%;
-  height: 36%;
+  right: 2%;
+  bottom: 2%;
+  width: 36%;  /* kolommen 4–5 */
+  height: 44%; /* rijen ~5–8 */
   background: rgba(15, 23, 42, 0.95);
   border-radius: 12px;
   border: 1px solid rgba(148, 163, 184, 0.4);
@@ -210,8 +215,10 @@
   flex-direction: column;
   gap: 0.25rem;
   font-size: 0.8rem;
+  z-index: 3;
 }
 
+/* Info-secties binnen popup */
 .info-section {
   flex: 1;
   overflow: auto;
@@ -225,20 +232,22 @@
 }
 
 /* =========================================================
-   GENERIC BOARD CARDS (status/decks/players)
+   GENERIC BOARD CARDS – 2:3 VERHOUDING
    ========================================================= */
 
+/* Dit zijn de “kaart placeholders” (status + decks + players) */
+/* 2:3 ratio: b.v. 100x150 op het bord, schaalbaar met zoom */
 .board-card {
   background: linear-gradient(145deg, #020617, #020617, #020617, #0b1120);
   border-radius: 10px;
   border: 1px solid rgba(148, 163, 184, 0.45);
   padding: 0.4rem 0.45rem;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  min-width: 90px;
-  min-height: 70px;
+  width: 100px;
+  height: 150px; /* 2:3 */
   box-shadow: 0 8px 14px rgba(0, 0, 0, 0.65);
 }
 
@@ -263,7 +272,7 @@
 }
 
 .card-status {
-  min-width: 120px;
+  /* zelfde basismaat, enkel andere inhoud */
 }
 
 .card-status-on {
@@ -272,11 +281,10 @@
     0 10px 20px rgba(22, 163, 74, 0.4);
 }
 
-/* Sack & decks */
-
+/* Sack & decks – zelfde maat, andere kleuren kan later */
 .card-sack,
 .card-deck {
-  min-width: 110px;
+  /* zelfde 2:3 ratio als board-card */
 }
 
 /* Rooster dots */
@@ -299,7 +307,7 @@
 }
 
 /* =========================================================
-   EVENT TRACK GRID
+   EVENT TRACK GRID (Event Cards)
    ========================================================= */
 
 .event-track-status {
@@ -310,16 +318,17 @@
 
 .event-track-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 0.25rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.3rem;
   font-size: 0.7rem;
 }
 
+/* Event cards – 2:3-ish, maar iets platter voor leesbaarheid */
 .event-slot {
   border-radius: 8px;
   border: 1px solid rgba(148, 163, 184, 0.3);
   padding: 0.25rem 0.3rem;
-  min-height: 40px;
+  min-height: 70px;
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
@@ -408,12 +417,12 @@
 }
 
 .player-zone-yard {
-  min-height: 110px;
+  min-height: 120px;
 }
 
 .player-zone-caught,
 .player-zone-dash {
-  min-height: 75px;
+  min-height: 80px;
   flex: 1;
 }
 
@@ -434,12 +443,12 @@
   pointer-events: none;
 }
 
-/* Player cards */
+/* Player cards – zelfde 2:3 maat als andere kaarten */
 
 .card-player {
   position: relative;
-  width: 110px;
-  height: 90px;
+  width: 100px;
+  height: 150px; /* 2:3 */
   padding: 0.35rem 0.4rem;
   display: flex;
   flex-direction: column;
