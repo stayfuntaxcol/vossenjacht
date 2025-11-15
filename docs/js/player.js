@@ -26,6 +26,7 @@ const lootPanel     = document.getElementById("lootPanel");
 const handPanel     = document.getElementById("handPanel");
 const moveState     = document.getElementById("moveState");
 const decisionState = document.getElementById("decisionState");
+const opsTurnInfo   = document.getElementById("opsTurnInfo");
 
 const btnSnatch  = document.getElementById("btnSnatch");
 const btnForage  = document.getElementById("btnForage");
@@ -34,6 +35,7 @@ const btnShift   = document.getElementById("btnShift");
 const btnLurk    = document.getElementById("btnLurk");
 const btnBurrow  = document.getElementById("btnBurrow");
 const btnDash    = document.getElementById("btnDash");
+const btnPass    = document.getElementById("btnPass");
 
 let gameRef = null;
 let playerRef = null;
@@ -41,8 +43,7 @@ let playerRef = null;
 let currentGame = null;
 let currentPlayer = null;
 
-// === OPS-feedback & 1-kaart-per-fase lock ===
-let actionLock = false;
+// Feedback onder OPS-panel
 let actionFeedbackEl = null;
 
 function ensureActionFeedbackEl() {
@@ -118,6 +119,17 @@ function canPlayActionNow(game, player) {
   return true;
 }
 
+function isMyOpsTurn(game, player) {
+  if (!game || !player) return false;
+  if (game.phase !== "ACTIONS") return false;
+  const order = game.opsTurnOrder || [];
+  if (!order.length) return false;
+  const idx =
+    typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
+  if (idx < 0 || idx >= order.length) return false;
+  return order[idx] === player.id;
+}
+
 // === RENDERING ===
 
 function renderGame() {
@@ -128,9 +140,8 @@ function renderGame() {
   gameStatusDiv.textContent =
     `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
 
-  // Lock resetten zodra we niet meer in ACTIONS zitten
+  // OPS-feedback wissen zodra we uit ACTIONS gaan
   if (g.phase !== "ACTIONS") {
-    actionLock = false;
     setActionFeedback("");
   }
 
@@ -184,7 +195,8 @@ function renderPlayer() {
   stateLine.style.marginTop = "0.25rem";
 
   if (p.dashed) {
-    stateLine.textContent = "Status: DASHED (je hebt de Yard verlaten met buit).";
+    stateLine.textContent =
+      "Status: DASHED (je hebt de Yard verlaten met buit).";
   } else if (p.inYard === false) {
     stateLine.textContent = "Status: gevangen (niet meer in de Yard).";
   } else {
@@ -243,7 +255,8 @@ function updateMoveButtonsState() {
     } else if (p.inYard === false) {
       moveState.textContent = "Je bent niet meer in de Yard.";
     } else if (p.dashed) {
-      moveState.textContent = "Je hebt al DASH gekozen in een eerdere ronde.";
+      moveState.textContent =
+        "Je hebt al DASH gekozen in een eerdere ronde.";
     } else if (moved.includes(playerId)) {
       moveState.textContent = "Je hebt jouw MOVE voor deze ronde al gedaan.";
     } else if (g.status !== "round") {
@@ -326,61 +339,78 @@ function renderHand() {
 
   if (!currentPlayer || !currentGame) {
     handPanel.textContent = "Geen hand geladen.";
+    if (opsTurnInfo) opsTurnInfo.textContent = "";
     return;
   }
 
-  const hand = currentPlayer.hand || [];
+  const g = currentGame;
+  const p = currentPlayer;
+
+  const hand = p.hand || [];
   if (!hand.length) {
     handPanel.textContent = "Je hebt geen Actiekaarten in je hand.";
-    return;
-  }
-
-  const canPlay = canPlayActionNow(currentGame, currentPlayer);
-
-  const list = document.createElement("div");
-  list.style.display = "flex";
-  list.style.flexDirection = "column";
-  list.style.gap = "0.25rem";
-
-  hand.forEach((card, index) => {
-    const row = document.createElement("div");
-    row.style.display = "flex";
-    row.style.justifyContent = "space-between";
-    row.style.alignItems = "center";
-
-    const label = document.createElement("div");
-    label.textContent = `${index + 1}. ${card.name}`;
-    label.style.fontSize = "0.9rem";
-
-    const btn = document.createElement("button");
-    btn.textContent = "Speel";
-    btn.disabled = !canPlay || actionLock;
-    btn.addEventListener("click", () => playActionCard(index));
-
-    row.appendChild(label);
-    row.appendChild(btn);
-    list.appendChild(row);
-  });
-
-  const phaseInfo = document.createElement("p");
-  phaseInfo.style.fontSize = "0.8rem";
-  phaseInfo.style.opacity = "0.7";
-
-  if (!canPlay) {
-    phaseInfo.textContent =
-      "Je kunt alleen kaarten spelen in de ACTIONS-fase terwijl je in de Yard staat.";
-  } else if (actionLock) {
-    phaseInfo.textContent =
-      "Je hebt al een Action Card gespeeld in deze fase.";
   } else {
-    phaseInfo.textContent =
-      "Speel maximaal één Action Card in deze ACTIONS-fase. Host bepaalt wanneer de fase eindigt.";
+    const canPlay = canPlayActionNow(g, p);
+    const myTurn  = isMyOpsTurn(g, p);
+
+    const list = document.createElement("div");
+    list.style.display = "flex";
+    list.style.flexDirection = "column";
+    list.style.gap = "0.25rem";
+
+    hand.forEach((card, index) => {
+      const row = document.createElement("div");
+      row.style.display = "flex";
+      row.style.justifyContent = "space-between";
+      row.style.alignItems = "center";
+
+      const label = document.createElement("div");
+      label.textContent = `${index + 1}. ${card.name}`;
+      label.style.fontSize = "0.9rem";
+
+      const btn = document.createElement("button");
+      btn.textContent = "Speel";
+      btn.disabled = !(canPlay && myTurn);
+      btn.addEventListener("click", () => playActionCard(index));
+
+      row.appendChild(label);
+      row.appendChild(btn);
+      list.appendChild(row);
+    });
+
+    handPanel.appendChild(list);
+
+    const canPlay = canPlayActionNow(g, p);
+    const myTurn2 = isMyOpsTurn(g, p);
+
+    if (opsTurnInfo) {
+      if (g.phase !== "ACTIONS") {
+        opsTurnInfo.textContent = "OPS-fase is nu niet actief.";
+      } else if (!canPlay) {
+        opsTurnInfo.textContent =
+          "Je kunt nu geen Action Cards spelen (niet in de Yard of al gedashed).";
+      } else if (!myTurn2) {
+        opsTurnInfo.textContent =
+          "Niet jouw beurt in OPS – wacht tot je weer aan de beurt bent.";
+      } else {
+        opsTurnInfo.textContent =
+          "Jij bent nu aan de beurt in OPS – speel één kaart of kies PASS.";
+      }
+    }
+
+    if (btnPass) {
+      btnPass.disabled = !(canPlay && myTurn2);
+    }
   }
 
-  handPanel.appendChild(list);
-  handPanel.appendChild(phaseInfo);
+  if (!hand.length && btnPass) {
+    const g = currentGame;
+    const p = currentPlayer;
+    const canPlay = canPlayActionNow(g, p);
+    const myTurn  = isMyOpsTurn(g, p);
+    btnPass.disabled = !(canPlay && myTurn);
+  }
 
-  // Zorg dat feedback-element bestaat
   ensureActionFeedbackEl();
 }
 
@@ -415,6 +445,15 @@ async function logMoveAction(
     playerId,
     message: `${player.name || "Speler"}: ${choice}`,
   });
+}
+
+// Kleine helper voor OPS-doorrotatie
+function computeNextOpsIndex(game) {
+  const order = game.opsTurnOrder || [];
+  if (!order.length) return 0;
+  const idx =
+    typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
+  return (idx + 1) % order.length;
 }
 
 // === MOVE acties ===
@@ -459,7 +498,9 @@ async function performSnatch() {
 
   const label = card.t || "Loot";
   const val = card.v ?? "?";
-  setActionFeedback(`SNATCH: je hebt een ${label} (waarde ${val}) uit de buitstapel getrokken.`);
+  setActionFeedback(
+    `SNATCH: je hebt een ${label} (waarde ${val}) uit de buitstapel getrokken.`
+  );
 }
 
 async function performForage() {
@@ -477,7 +518,9 @@ async function performForage() {
     return;
   }
 
-  const actionDeck = Array.isArray(game.actionDeck) ? [...game.actionDeck] : [];
+  const actionDeck = Array.isArray(game.actionDeck)
+    ? [...game.actionDeck]
+    : [];
   const hand = Array.isArray(player.hand) ? [...player.hand] : [];
 
   if (!actionDeck.length) {
@@ -663,12 +706,6 @@ async function selectDecision(kind) {
 async function playActionCard(index) {
   if (!gameRef || !playerRef) return;
 
-  // Maximaal 1 kaart per ACTIONS-fase
-  if (actionLock) {
-    alert("Je mag maar één Action Card spelen in deze fase.");
-    return;
-  }
-
   const gameSnap = await getDoc(gameRef);
   const playerSnap = await getDoc(playerRef);
   if (!gameSnap.exists() || !playerSnap.exists()) return;
@@ -678,6 +715,11 @@ async function playActionCard(index) {
 
   if (!canPlayActionNow(game, player)) {
     alert("Je kunt nu geen Actiekaarten spelen.");
+    return;
+  }
+
+  if (!isMyOpsTurn(game, player)) {
+    alert("Je bent niet aan de beurt in de OPS-fase.");
     return;
   }
 
@@ -717,9 +759,50 @@ async function playActionCard(index) {
       break;
   }
 
-  actionLock = true;
+  // beurt doorgeven in OPS – en passes resetten
+  const nextIndex = computeNextOpsIndex(game);
+  await updateDoc(gameRef, {
+    opsTurnIndex: nextIndex,
+    opsConsecutivePasses: 0,
+  });
+
   setActionFeedback(
     `Je speelde "${cardName}". Het effect is uitgevoerd (zie ook de Community log).`
+  );
+}
+
+async function passAction() {
+  if (!gameRef || !playerRef) return;
+
+  const gameSnap = await getDoc(gameRef);
+  const playerSnap = await getDoc(playerRef);
+  if (!gameSnap.exists() || !playerSnap.exists()) return;
+
+  const game = gameSnap.data();
+  const player = playerSnap.data();
+
+  if (!canPlayActionNow(game, player)) {
+    alert("Je kunt nu geen PASS doen in deze fase.");
+    return;
+  }
+
+  if (!isMyOpsTurn(game, player)) {
+    alert("Je bent niet aan de beurt in de OPS-fase.");
+    return;
+  }
+
+  const nextIndex = computeNextOpsIndex(game);
+  const newPasses = (game.opsConsecutivePasses || 0) + 1;
+
+  await updateDoc(gameRef, {
+    opsTurnIndex: nextIndex,
+    opsConsecutivePasses: newPasses,
+  });
+
+  await logMoveAction(game, player, "ACTION_PASS", "ACTIONS");
+
+  setActionFeedback(
+    "Je hebt PASS gekozen. Als de ronde omgaat en iemand weer een kaart speelt, kun je later opnieuw meedoen."
   );
 }
 
@@ -920,4 +1003,6 @@ initAuth(async () => {
   btnLurk.addEventListener("click", () => selectDecision("LURK"));
   btnBurrow.addEventListener("click", () => selectDecision("BURROW"));
   btnDash.addEventListener("click", () => selectDecision("DASH"));
+
+  btnPass.addEventListener("click", passAction);
 });
