@@ -36,6 +36,7 @@ let currentRoundForActions = 0;
 let currentPhase           = "MOVE";
 let unsubActions           = null;
 let latestPlayers          = [];
+let latestGame             = null;
 
 const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
 
@@ -67,7 +68,7 @@ function shuffleArray(array) {
 }
 
 function buildEventTrack() {
-  // Dit is nog een placeholder – later: 7 core + 3 variabel (10 total)
+  // Placeholder – later: 7 core + 3 variabel (10 total)
   const baseTrack = [
     "DEN_RED",
     "DEN_BLUE",
@@ -112,9 +113,9 @@ function buildLootDeck() {
 function renderEventTrack(game) {
   if (!eventTrackDiv) return;
 
-  const track      = game.eventTrack || [];
-  const revealed   = game.eventRevealed || [];
-  const currentId  = game.currentEventId || null;
+  const track       = game.eventTrack || [];
+  const revealed    = game.eventRevealed || [];
+  const currentId   = game.currentEventId || null;
   const roosterSeen = game.roosterSeen || 0;
 
   eventTrackDiv.innerHTML = "";
@@ -307,6 +308,7 @@ initAuth(async (authUser) => {
   const gameRef = doc(db, "games", gameId);
   const playersColRef = collection(db, "games", gameId, "players");
 
+  // ==== GAME SNAPSHOT ====
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
       gameInfo.textContent = "Spel niet gevonden";
@@ -314,8 +316,11 @@ initAuth(async (authUser) => {
     }
 
     const game = snap.data();
+    latestGame = { id: snap.id, ...game };
+
     currentRoundNumber = game.round || 0;
     currentPhase = game.phase || "MOVE";
+
     const event =
       game.currentEventId && game.phase === "REVEAL"
         ? getEventById(game.currentEventId)
@@ -392,6 +397,7 @@ initAuth(async (authUser) => {
     });
   });
 
+  // ==== PLAYERS SNAPSHOT / COMMUNITY BOARD ====
   onSnapshot(playersColRef, (snapshot) => {
     const players = [];
     snapshot.forEach((pDoc) => {
@@ -401,47 +407,135 @@ initAuth(async (authUser) => {
 
     playersDiv.innerHTML = "<h2>Spelers / Scorebord</h2>";
 
+    if (!players.length) {
+      const empty = document.createElement("p");
+      empty.textContent = "Nog geen spelers verbonden.";
+      empty.className = "score-empty";
+      playersDiv.appendChild(empty);
+      return;
+    }
+
+    // Volgorde o.b.v. joinOrder
+    const ordered = [...players].sort((a, b) => {
+      const ao =
+        typeof a.joinOrder === "number"
+          ? a.joinOrder
+          : Number.MAX_SAFE_INTEGER;
+      const bo =
+        typeof b.joinOrder === "number"
+          ? b.joinOrder
+          : Number.MAX_SAFE_INTEGER;
+      return ao - bo;
+    });
+
+    const activeOrdered = ordered.filter(
+      (p) => p.inYard !== false && !p.dashed
+    );
+    const baseList = activeOrdered.length ? activeOrdered : ordered;
+
+    let leadIdx =
+      latestGame && typeof latestGame.leadIndex === "number"
+        ? latestGame.leadIndex
+        : 0;
+
+    if (leadIdx < 0) leadIdx = 0;
+    if (baseList.length) {
+      leadIdx = leadIdx % baseList.length;
+    } else {
+      leadIdx = 0;
+    }
+
     let leadFoxName = "";
-    if (players.length > 0) {
-      const byOrder = [...players].sort((a, b) => {
-        const ao =
-          typeof a.joinOrder === "number"
-            ? a.joinOrder
-            : Number.MAX_SAFE_INTEGER;
-        const bo =
-          typeof b.joinOrder === "number"
-            ? b.joinOrder
-            : Number.MAX_SAFE_INTEGER;
-        return ao - bo;
-      });
-      const lead = byOrder[0];
+    let leadFoxId = null;
+    if (baseList.length) {
+      const lead = baseList[leadIdx];
       if (lead) {
-        leadFoxName = lead.name;
+        leadFoxName = lead.name || "";
+        leadFoxId = lead.id;
       }
     }
 
+    // LEAD FOX-banner bovenaan
     if (leadFoxName) {
       const lf = document.createElement("div");
-      lf.textContent = `LEAD FOX (indicatief): ${leadFoxName}`;
-      lf.className = "lead-fox";
+      lf.className = "lead-fox-banner";
+      lf.innerHTML = `
+        <span class="lead-label">LEAD FOX</span>
+        <span class="lead-name">${leadFoxName}</span>
+      `;
       playersDiv.appendChild(lf);
     }
+
+    // Scorebord met status-badges
+    const list = document.createElement("div");
+    list.className = "scoreboard-list";
 
     const byScore = [...players].sort(
       (a, b) => (b.score || 0) - (a.score || 0)
     );
 
-    byScore.forEach((p, index) => {
-      const plek = index + 1;
-      const div = document.createElement("div");
-      div.textContent =
-        `${plek}. ${p.name} ${p.isHost ? "(host)" : ""} – score: ${
-          p.score || 0
-        }`;
-      playersDiv.appendChild(div);
+    byScore.forEach((p) => {
+      const row = document.createElement("div");
+      row.className = "score-row";
+      if (leadFoxId && p.id === leadFoxId) {
+        row.classList.add("score-row-lead");
+      }
+
+      const left = document.createElement("div");
+      left.className = "score-main";
+
+      const nameSpan = document.createElement("span");
+      nameSpan.className = "score-name";
+      nameSpan.textContent = p.name || "(naam onbekend)";
+      left.appendChild(nameSpan);
+
+      if (p.isHost) {
+        const hostChip = document.createElement("span");
+        hostChip.className = "chip chip-host";
+        hostChip.textContent = "HOST";
+        left.appendChild(hostChip);
+      }
+
+      if (leadFoxId && p.id === leadFoxId) {
+        const leadChip = document.createElement("span");
+        leadChip.className = "chip chip-lead";
+        leadChip.textContent = "LEAD";
+        left.appendChild(leadChip);
+      }
+
+      // Status-badge
+      let statusLabel = "";
+      let statusClass = "";
+      if (p.dashed) {
+        statusLabel = "DASHED";
+        statusClass = "chip-status chip-status-dashed";
+      } else if (p.inYard === false) {
+        statusLabel = "CAUGHT";
+        statusClass = "chip-status chip-status-caught";
+      } else {
+        statusLabel = "IN YARD";
+        statusClass = "chip-status chip-status-yard";
+      }
+
+      const statusSpan = document.createElement("span");
+      statusSpan.className = "chip " + statusClass;
+      statusSpan.textContent = statusLabel;
+      left.appendChild(statusSpan);
+
+      const right = document.createElement("div");
+      right.className = "score-score";
+      right.textContent = `${p.score || 0} pts`;
+
+      row.appendChild(left);
+      row.appendChild(right);
+
+      list.appendChild(row);
     });
+
+    playersDiv.appendChild(list);
   });
 
+  // ==== LOGPANEL ====
   const logCol = collection(db, "games", gameId, "log");
   const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
 
@@ -462,6 +556,7 @@ initAuth(async (authUser) => {
     });
   });
 
+  // ==== START ROUND (Lead Fox rotatie) ====
   startBtn.addEventListener("click", async () => {
     const game = await initRaidIfNeeded(gameRef);
     if (!game) return;
@@ -473,7 +568,48 @@ initAuth(async (authUser) => {
       return;
     }
 
-    const newRound = (game.round || 0) + 1;
+    const previousRound = game.round || 0;
+    const newRound = previousRound + 1;
+
+    // Bepaal nieuwe Lead Fox (rotatie op basis van joinOrder + actieve vossen)
+    const ordered = [...latestPlayers].sort((a, b) => {
+      const ao =
+        typeof a.joinOrder === "number"
+          ? a.joinOrder
+          : Number.MAX_SAFE_INTEGER;
+      const bo =
+        typeof b.joinOrder === "number"
+          ? b.joinOrder
+          : Number.MAX_SAFE_INTEGER;
+      return ao - bo;
+    });
+
+    const activeOrdered = ordered.filter(
+      (p) => p.inYard !== false && !p.dashed
+    );
+    const baseList = activeOrdered.length ? activeOrdered : ordered;
+
+    let leadIndex =
+      typeof game.leadIndex === "number" ? game.leadIndex : 0;
+
+    if (baseList.length) {
+      // Normaliseer index binnen huidige lijst
+      leadIndex =
+        ((leadIndex % baseList.length) + baseList.length) % baseList.length;
+
+      // Vanaf ronde 2 en verder schuift Lead Fox door
+      if (previousRound >= 1) {
+        leadIndex = (leadIndex + 1) % baseList.length;
+      }
+    } else {
+      leadIndex = 0;
+    }
+
+    let leadName = "";
+    if (baseList.length) {
+      const lf = baseList[leadIndex];
+      if (lf) leadName = lf.name || "";
+    }
 
     await updateDoc(gameRef, {
       status: "round",
@@ -484,16 +620,20 @@ initAuth(async (authUser) => {
       opsTurnOrder: [],
       opsTurnIndex: 0,
       opsConsecutivePasses: 0,
+      leadIndex,
     });
 
     await addLog(gameId, {
       round: newRound,
       phase: "MOVE",
       kind: "SYSTEM",
-      message: `Ronde ${newRound} gestart.`,
+      message: leadName
+        ? `Ronde ${newRound} gestart. Lead Fox: ${leadName}.`
+        : `Ronde ${newRound} gestart.`,
     });
   });
 
+  // ==== FASE-SWITCHER (MOVE/ACTIONS/DECISION/REVEAL) ====
   nextPhaseBtn.addEventListener("click", async () => {
     const snap = await getDoc(gameRef);
     if (!snap.exists()) return;
@@ -556,9 +696,7 @@ initAuth(async (authUser) => {
 
       const opsTurnOrder = [];
       for (let i = 0; i < baseOrder.length; i++) {
-        opsTurnOrder.push(
-          baseOrder[(leadIndex + i) % baseOrder.length]
-        );
+        opsTurnOrder.push(baseOrder[(leadIndex + i) % baseOrder.length]);
       }
 
       await updateDoc(gameRef, {
@@ -579,7 +717,7 @@ initAuth(async (authUser) => {
       return;
     }
 
-    // ACTIONS -> DECISION (allemaal gepast)
+    // ACTIONS -> DECISION (als iedereen na elkaar PASS heeft gekozen)
     if (current === "ACTIONS") {
       const active = latestPlayers.filter(
         (p) => p.inYard !== false && !p.dashed
@@ -689,7 +827,7 @@ initAuth(async (authUser) => {
       return;
     }
 
-    // REVEAL -> MOVE (volgende ronde / afronding)
+    // REVEAL -> terug naar MOVE (voor volgende ronde)
     if (current === "REVEAL") {
       await updateDoc(gameRef, { phase: "MOVE" });
 
@@ -705,7 +843,7 @@ initAuth(async (authUser) => {
     }
   });
 
-  // Oud test-knopje, voorlopig laten we 'm zitten (werkt nog met simpele score)
+  // Oud test-knopje (scores), laten we nog even staan
   endBtn.addEventListener("click", async () => {
     const gameSnap = await getDoc(gameRef);
     if (!gameSnap.exists()) return;
@@ -763,6 +901,7 @@ initAuth(async (authUser) => {
     alert("Ronde afgesloten en scores bijgewerkt (oude test-teller).");
   });
 
+  // Host als speler openen
   playAsHostBtn.addEventListener("click", async () => {
     const q = query(
       playersColRef,
