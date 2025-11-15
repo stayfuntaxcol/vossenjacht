@@ -1,3 +1,4 @@
+// VOSSENJACHT player.js – versie met Scent Check confirm + veilige Action-kaarten
 import { initAuth } from "./firebase.js";
 import { addLog } from "./log.js";
 import { getEventById } from "./cards.js";
@@ -796,6 +797,25 @@ async function selectDecision(kind) {
     return;
   }
 
+  const label =
+    kind === "LURK"
+      ? "LURK (blijven)"
+      : kind === "BURROW"
+      ? "BURROW (schuilen)"
+      : kind === "DASH"
+      ? "DASH (wegrennen)"
+      : kind;
+
+  const ok = confirm(
+    `Je staat op het punt ${label} te kiezen als jouw definitieve beslissing voor deze ronde. Bevestigen?`
+  );
+  if (!ok) {
+    setActionFeedback(
+      "Je DECISION is nog niet vastgelegd – je kunt nog even nadenken."
+    );
+    return;
+  }
+
   const update = {
     decision: kind,
   };
@@ -848,64 +868,73 @@ async function playActionCard(index) {
     return;
   }
 
-  // kaart uit de hand halen
-  hand.splice(index, 1);
-  await updateDoc(playerRef, { hand });
+  // Probeer het effect eerst uit te voeren; alleen bij succes verdwijnt de kaart uit je hand
+  let executed = false;
 
-  await logMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
-
-  // effect toepassen
   switch (cardName) {
     case "Scatter!":
-      await playScatter(game, player);
+      executed = await playScatter(game, player);
       break;
     case "Den Signal":
-      await playDenSignal(game, player);
+      executed = await playDenSignal(game, player);
       break;
     case "No-Go Zone":
-      await playNoGoZone(game, player);
+      executed = await playNoGoZone(game, player);
       break;
     case "Kick Up Dust":
-      await playKickUpDust(game, player);
+      executed = await playKickUpDust(game, player);
       break;
     case "Burrow Beacon":
-      await playBurrowBeacon(game, player);
+      executed = await playBurrowBeacon(game, player);
       break;
     case "Molting Mask":
-      await playMoltingMask(game, player);
+      executed = await playMoltingMask(game, player);
       break;
     case "Hold Still":
-      await playHoldStill(game, player);
+      executed = await playHoldStill(game, player);
       break;
     case "Nose for Trouble":
-      await playNoseForTrouble(game, player);
+      executed = await playNoseForTrouble(game, player);
       break;
     case "Scent Check":
-      await playScentCheck(game, player);
+      executed = await playScentCheck(game, player);
       break;
     case "Follow the Tail":
-      await playFollowTail(game, player);
+      executed = await playFollowTail(game, player);
       break;
     case "Alpha Call":
-      await playAlphaCall(game, player);
+      executed = await playAlphaCall(game, player);
       break;
     case "Pack Tinker":
-      await playPackTinker(game, player);
+      executed = await playPackTinker(game, player);
       break;
     case "Mask Swap":
-      await playMaskSwap(game, player);
+      executed = await playMaskSwap(game, player);
       break;
     case "Countermove":
-      await playCountermove(game, player);
+      executed = await playCountermove(game, player);
       break;
     default:
       alert(
         "Deze kaart is nog niet volledig geïmplementeerd in de online versie. Gebruik eventueel de fysieke regels als huisregel."
       );
+      executed = false;
       break;
   }
 
-  // beurt doorgeven in OPS – en passes resetten
+  if (!executed) {
+    setActionFeedback(
+      `De kaart "${cardName}" kon nu niet worden gespeeld. Hij blijft in je hand.`
+    );
+    return;
+  }
+
+  // kaart uit de hand halen, loggen en beurt doorgeven
+  hand.splice(index, 1);
+  await updateDoc(playerRef, { hand });
+
+  await logMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
+
   const nextIndex = computeNextOpsIndex(game);
   await updateDoc(gameRef, {
     opsTurnIndex: nextIndex,
@@ -968,6 +997,12 @@ async function playScatter(game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt Scatter! – niemand mag Scouten deze ronde.`,
   });
+
+  setActionFeedback(
+    "Scatter! is actief – niemand mag Scouten deze ronde."
+  );
+
+  return true;
 }
 
 // Den Signal – 1 Den kleur immuun
@@ -975,11 +1010,11 @@ async function playDenSignal(game, player) {
   const colorInput = prompt(
     "Den Signal – welke Den kleur wil je beschermen? (RED / BLUE / GREEN / YELLOW)"
   );
-  if (!colorInput) return;
+  if (!colorInput) return false;
   const color = colorInput.trim().toUpperCase();
   if (!["RED", "BLUE", "GREEN", "YELLOW"].includes(color)) {
     alert("Ongeldige kleur.");
-    return;
+    return false;
   }
 
   const flags = mergeRoundFlags(game);
@@ -998,6 +1033,12 @@ async function playDenSignal(game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt Den Signal – Den ${color} is immuun voor vang-events deze ronde.`,
   });
+
+  setActionFeedback(
+    `Den Signal: Den ${color} is immuun voor vang-events deze ronde.`
+  );
+
+  return true;
 }
 
 // No-Go Zone – blokkeer 1 eventpositie voor Scout
@@ -1005,16 +1046,16 @@ async function playNoGoZone(game, player) {
   const track = game.eventTrack || [];
   if (!track.length) {
     alert("Geen Event Track beschikbaar.");
-    return;
+    return false;
   }
 
   const maxPos = track.length;
   const posStr = prompt(`No-Go Zone – blokkeer een eventpositie (1-${maxPos})`);
-  if (!posStr) return;
+  if (!posStr) return false;
   const pos = parseInt(posStr, 10);
   if (Number.isNaN(pos) || pos < 1 || pos > maxPos) {
     alert("Ongeldige positie.");
-    return;
+    return false;
   }
 
   const flags = mergeRoundFlags(game);
@@ -1034,6 +1075,12 @@ async function playNoGoZone(game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt No-Go Zone – Scouten op positie ${pos} is verboden.`,
   });
+
+  setActionFeedback(
+    `No-Go Zone: positie ${pos} kan deze ronde niet gescout worden.`
+  );
+
+  return true;
 }
 
 // Kick Up Dust – twee events random wisselen
@@ -1043,13 +1090,13 @@ async function playKickUpDust(game, player) {
     alert(
       "Burrow Beacon is actief – de Event Track is gelocked en kan niet meer veranderen."
     );
-    return;
+    return false;
   }
 
   const track = game.eventTrack ? [...game.eventTrack] : [];
   if (track.length < 2) {
     alert("Te weinig events om te shuffelen.");
-    return;
+    return false;
   }
 
   const i1 = Math.floor(Math.random() * track.length);
@@ -1073,6 +1120,12 @@ async function playKickUpDust(game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt Kick Up Dust – twee events wisselen willekeurig van plek.`,
   });
+
+  setActionFeedback(
+    "Kick Up Dust: twee Event Cards hebben van positie gewisseld."
+  );
+
+  return true;
 }
 
 // Burrow Beacon – Event Track kan niet meer veranderen
@@ -1091,6 +1144,12 @@ async function playBurrowBeacon(game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt Burrow Beacon – Event Track kan deze ronde niet meer veranderen.`,
   });
+
+  setActionFeedback(
+    "Burrow Beacon: de Event Track is gelocked – geen SHIFT of schudden meer deze ronde."
+  );
+
+  return true;
 }
 
 // Molting Mask – nieuwe Den kleur (simpele digitale variant)
@@ -1116,6 +1175,8 @@ async function playMoltingMask(game, player) {
   setActionFeedback(
     `Molting Mask: je Den kleur is nu ${newColor}.`
   );
+
+  return true;
 }
 
 // Hold Still – lockt OPS: alleen Countermove mag nog
@@ -1139,6 +1200,8 @@ async function playHoldStill(game, player) {
   setActionFeedback(
     "Hold Still is actief – alleen Countermove mag nog gespeeld worden, of PASS."
   );
+
+  return true;
 }
 
 // Nose for Trouble – voorspel het volgende Event
@@ -1146,7 +1209,7 @@ async function playNoseForTrouble(game, player) {
   const track = game.eventTrack || [];
   if (!track.length) {
     alert("Geen Event Track beschikbaar.");
-    return;
+    return false;
   }
 
   // unieklijst van eventIds op de track
@@ -1161,11 +1224,11 @@ async function playNoseForTrouble(game, player) {
     "Nose for Trouble – kies het volgende Event dat je verwacht:\n" +
       menuLines.join("\n")
   );
-  if (!choiceStr) return;
+  if (!choiceStr) return false;
   const idx = parseInt(choiceStr, 10) - 1;
   if (Number.isNaN(idx) || idx < 0 || idx >= uniqueIds.length) {
     alert("Ongeldige keuze.");
-    return;
+    return false;
   }
 
   const chosenId = uniqueIds[idx];
@@ -1186,7 +1249,7 @@ async function playNoseForTrouble(game, player) {
   });
 
   await addLog(gameId, {
-    round,
+    round: game.round || 0,
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
@@ -1198,6 +1261,8 @@ async function playNoseForTrouble(game, player) {
   setActionFeedback(
     `Nose for Trouble: je hebt "${ev ? ev.title : chosenId}" voorspeld als volgende Event.`
   );
+
+  return true;
 }
 
 // Scent Check – kijk naar DECISION van 1 speler en koppel voor deze ronde
@@ -1205,7 +1270,7 @@ async function playScentCheck(game, player) {
   const target = await chooseOtherPlayerPrompt(
     "Scent Check – kies een vos om te besnuffelen"
   );
-  if (!target) return;
+  if (!target) return false;
 
   // Directe peek, als er al een DECISION is
   try {
@@ -1247,8 +1312,10 @@ async function playScentCheck(game, player) {
   });
 
   setActionFeedback(
-    `Scent Check: je volgt deze ronde de beslissing van ${target.name || "de gekozen vos"} van dichtbij.`
+    `Scent Check: je volgt deze ronde de beslissingen van ${target.name || "de gekozen vos"} van dichtbij.`
   );
+
+  return true;
 }
 
 // Follow the Tail – jouw DECISION volgt die van een andere speler
@@ -1256,7 +1323,7 @@ async function playFollowTail(game, player) {
   const target = await chooseOtherPlayerPrompt(
     "Follow the Tail – kies een vos om te volgen"
   );
-  if (!target) return;
+  if (!target) return false;
 
   const flags = mergeRoundFlags(game);
   const ft = flags.followTail || {};
@@ -1280,6 +1347,8 @@ async function playFollowTail(game, player) {
   setActionFeedback(
     `Follow the Tail: jouw uiteindelijke DECISION zal gelijk zijn aan die van ${target.name || "de gekozen vos"}.`
   );
+
+  return true;
 }
 
 // Alpha Call – kies een nieuwe Lead Fox
@@ -1289,18 +1358,18 @@ async function playAlphaCall(game, player) {
 
   if (!ordered.length) {
     alert("Geen spelers gevonden om Lead Fox van te maken.");
-    return;
+    return false;
   }
 
   const lines = ordered.map((p, idx) => `${idx + 1}. ${p.name || "Vos"}`);
   const choiceStr = prompt(
     "Alpha Call – kies wie de nieuwe Lead Fox wordt:\n" + lines.join("\n")
   );
-  if (!choiceStr) return;
+  if (!choiceStr) return false;
   const idx = parseInt(choiceStr, 10) - 1;
   if (Number.isNaN(idx) || idx < 0 || idx >= ordered.length) {
     alert("Ongeldige keuze.");
-    return;
+    return false;
   }
 
   const newLead = ordered[idx];
@@ -1322,6 +1391,8 @@ async function playAlphaCall(game, player) {
   setActionFeedback(
     `Alpha Call: Lead Fox is nu ${newLead.name || "de gekozen vos"}.`
   );
+
+  return true;
 }
 
 // Pack Tinker – wissel 2 Event-posities naar keuze
@@ -1331,20 +1402,20 @@ async function playPackTinker(game, player) {
     alert(
       "Burrow Beacon is actief – de Event Track is gelocked en kan niet meer veranderen."
     );
-    return;
+    return false;
   }
 
   const track = game.eventTrack ? [...game.eventTrack] : [];
   if (!track.length) {
     alert("Geen Event Track beschikbaar.");
-    return;
+    return false;
   }
 
   const maxPos = track.length;
   const p1Str = prompt(`Pack Tinker – eerste eventpositie (1-${maxPos})`);
-  if (!p1Str) return;
+  if (!p1Str) return false;
   const p2Str = prompt(`Pack Tinker – tweede eventpositie (1-${maxPos})`);
-  if (!p2Str) return;
+  if (!p2Str) return false;
 
   const pos1 = parseInt(p1Str, 10);
   const pos2 = parseInt(p2Str, 10);
@@ -1358,7 +1429,7 @@ async function playPackTinker(game, player) {
     pos1 === pos2
   ) {
     alert("Ongeldige posities voor Pack Tinker.");
-    return;
+    return false;
   }
 
   const i1 = pos1 - 1;
@@ -1383,6 +1454,8 @@ async function playPackTinker(game, player) {
   setActionFeedback(
     `Pack Tinker: je hebt events op posities ${pos1} en ${pos2} gewisseld.`
   );
+
+  return true;
 }
 
 // Mask Swap – shuffle alle Den-kleuren van vossen in de Yard
@@ -1392,7 +1465,7 @@ async function playMaskSwap(game, player) {
 
   if (inYard.length < 2) {
     alert("Te weinig vossen in de Yard om Mask Swap uit te voeren.");
-    return;
+    return false;
   }
 
   const colors = inYard.map((p) => (p.color || "").toUpperCase());
@@ -1420,14 +1493,12 @@ async function playMaskSwap(game, player) {
   setActionFeedback(
     "Mask Swap: Den-kleuren van alle vossen in de Yard zijn gehusseld."
   );
+
+  return true;
 }
 
-// Countermove – vereenvoudigde placeholder
+// Countermove – voorlopig simpele versie, telt wel als gespeelde kaart
 async function playCountermove(game, player) {
-  alert(
-    "Countermove is in deze digitale versie nog niet volledig interactief (out-of-turn) geïmplementeerd.\nJe kunt hem voorlopig als 'blanco kaart' beschouwen of als huisregel afspreken."
-  );
-
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -1437,8 +1508,10 @@ async function playCountermove(game, player) {
   });
 
   setActionFeedback(
-    "Countermove gespeeld – in deze versie nog zonder automatisch effect (gebruik eventueel een huisregel)."
+    "Countermove gespeeld – in deze versie nog zonder automatisch tegen-effect (gebruik eventueel een huisregel)."
   );
+
+  return true;
 }
 
 // === INIT ===
