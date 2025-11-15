@@ -41,6 +41,46 @@ let playerRef = null;
 let currentGame = null;
 let currentPlayer = null;
 
+// === OPS feedback & per-fase lock ===
+let actionLock = false;
+let actionFeedbackEl = null;
+
+function ensureActionFeedbackEl() {
+  if (actionFeedbackEl) return;
+  if (!handPanel) return;
+
+  const p = document.createElement("p");
+  p.id = "actionFeedback";
+  p.style.marginTop = "0.5rem";
+  p.style.fontSize = "0.85rem";
+  p.style.opacity = "0.8";
+
+  if (handPanel.parentElement) {
+    handPanel.parentElement.appendChild(p);
+  } else {
+    handPanel.appendChild(p);
+  }
+  actionFeedbackEl = p;
+}
+
+function setActionFeedback(msg) {
+  ensureActionFeedbackEl();
+  if (!actionFeedbackEl) return;
+
+  if (!msg) {
+    actionFeedbackEl.textContent = "";
+    return;
+  }
+
+  const time = new Date().toLocaleTimeString("nl-NL", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
+  actionFeedbackEl.textContent = `[${time}] ${msg}`;
+}
+
 if (!gameId || !playerId) {
   if (gameStatusDiv) {
     gameStatusDiv.textContent = "Ontbrekende game- of speler-id in de URL.";
@@ -84,6 +124,12 @@ function renderGame() {
   if (!currentGame || !gameStatusDiv || !eventInfoDiv) return;
 
   const g = currentGame;
+
+  // Niet in ACTIONS-fase? Lock reset + feedback leeg.
+  if (g.phase !== "ACTIONS") {
+    actionLock = false;
+    setActionFeedback("");
+  }
 
   gameStatusDiv.textContent =
     `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
@@ -287,7 +333,7 @@ function renderHand() {
     return;
   }
 
-  const canPlay = canPlayActionNow(currentGame, currentPlayer);
+  const canPlay = canPlayActionNow(currentGame, currentPlayer) && !actionLock;
 
   const list = document.createElement("div");
   list.style.display = "flex";
@@ -320,10 +366,10 @@ function renderHand() {
 
   if (!canPlay) {
     phaseInfo.textContent =
-      "Je kunt alleen kaarten spelen in de ACTIONS-fase terwijl je in de Yard staat.";
+      "Je kunt alleen kaarten spelen in de ACTIONS-fase terwijl je in de Yard staat (max 1 kaart per ronde).";
   } else {
     phaseInfo.textContent =
-      "Speel één of meerdere Actiekaarten. Host bepaalt wanneer de fase eindigt.";
+      "Speel één Actiekaart in deze fase. Host bepaalt wanneer de fase eindigt.";
   }
 
   handPanel.appendChild(list);
@@ -352,6 +398,7 @@ async function logMoveAction(game, player, choice, phase = "MOVE") {
 
 // ====== MOVE acties ======
 
+// SNATCH: pakt nu uit de buitstapel (lootDeck), NIET uit de Sack
 async function performSnatch() {
   if (!gameRef || !playerRef) return;
 
@@ -368,26 +415,24 @@ async function performSnatch() {
     return;
   }
 
-  const sack = game.sack ? [...game.sack] : [];
-  if (!sack.length) {
-    alert("Er ligt geen buit in de Sack om te pakken.");
+  const lootDeck = Array.isArray(game.lootDeck) ? [...game.lootDeck] : [];
+  if (!lootDeck.length) {
+    alert("De buitstapel is leeg. Je kunt nu geen SNATCH doen.");
     return;
   }
 
-  const card = sack.pop();
-  const loot = player.loot ? [...player.loot] : [];
+  const card = lootDeck.pop();
+  const loot = Array.isArray(player.loot) ? [...player.loot] : [];
   loot.push(card);
 
-  await updateDoc(playerRef, {
-    loot,
-  });
+  await updateDoc(playerRef, { loot });
 
   await updateDoc(gameRef, {
-    sack,
+    lootDeck,
     movedPlayerIds: arrayUnion(playerId),
   });
 
-  await logMoveAction(game, player, "MOVE_SNATCH");
+  await logMoveAction(game, player, "MOVE_SNATCH_FROM_DECK");
 }
 
 async function performForage() {
@@ -597,6 +642,12 @@ async function selectDecision(kind) {
 async function playActionCard(index) {
   if (!gameRef || !playerRef) return;
 
+  // Max 1 kaart per ACTIONS-fase
+  if (actionLock) {
+    alert("Je mag in deze fase maar één Action Card spelen.");
+    return;
+  }
+
   const gameSnap = await getDoc(gameRef);
   if (!gameSnap.exists()) return;
   const game = gameSnap.data();
@@ -622,7 +673,7 @@ async function playActionCard(index) {
 
   await logMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
 
-  // effect toepassen voor subset kaarten
+  // effect toepassen
   switch (cardName) {
     case "Scatter!":
       await playScatter(gameRef, game, player);
@@ -643,10 +694,17 @@ async function playActionCard(index) {
       alert(
         "Deze kaart is nog niet volledig geïmplementeerd in de online versie. Gebruik evt. de fysieke regels als huisregel."
       );
+      setActionFeedback(
+        `Je speelde "${cardName}". In de online versie heeft deze nu geen extra effect (gebruik tafelregels).`
+      );
       break;
   }
+
+  // Na een gespeelde kaart: lock aan
+  actionLock = true;
 }
 
+// Scatter!: blokkeert Scout deze ronde
 async function playScatter(gameRef, game, player) {
   const flags = {
     lockEvents: false,
@@ -670,8 +728,11 @@ async function playScatter(gameRef, game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt Scatter! – niemand mag Scouten deze ronde.`,
   });
+
+  setActionFeedback("Scatter! – deze ronde kan niemand Scouten.");
 }
 
+// Den Signal: 1 Den kleur immuun voor vang-events
 async function playDenSignal(gameRef, game, player) {
   const colorInput = prompt(
     "Den Signal – welke Den kleur wil je beschermen? (RED / BLUE / GREEN / YELLOW)"
@@ -706,8 +767,11 @@ async function playDenSignal(gameRef, game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt Den Signal – Den ${color} is immuun voor vang-events deze ronde.`,
   });
+
+  setActionFeedback(`Den Signal – Den ${color} is deze ronde immuun voor vang-events.`);
 }
 
+// No-Go Zone: blokkeert 1 eventpositie voor Scout
 async function playNoGoZone(gameRef, game, player) {
   const track = game.eventTrack || [];
   if (!track.length) {
@@ -748,8 +812,11 @@ async function playNoGoZone(gameRef, game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt No-Go Zone – scout op positie ${pos} is verboden.`,
   });
+
+  setActionFeedback(`No-Go Zone – positie ${pos} is geblokkeerd voor Scout.`);
 }
 
+// Kick Up Dust: twee events wisselen willekeurig
 async function playKickUpDust(gameRef, game, player) {
   const track = game.eventTrack ? [...game.eventTrack] : [];
   if (track.length < 2) {
@@ -778,8 +845,11 @@ async function playKickUpDust(gameRef, game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt Kick Up Dust – twee events wisselen willekeurig van plek.`,
   });
+
+  setActionFeedback("Kick Up Dust – twee Event-kaarten hebben van plek gewisseld.");
 }
 
+// Burrow Beacon: event track locken
 async function playBurrowBeacon(gameRef, game, player) {
   const flags = {
     lockEvents: false,
@@ -803,6 +873,8 @@ async function playBurrowBeacon(gameRef, game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt Burrow Beacon – Event Track kan deze ronde niet meer veranderen.`,
   });
+
+  setActionFeedback("Burrow Beacon – Event Track is deze ronde gelocked.");
 }
 
 // ====== INIT ======
