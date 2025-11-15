@@ -256,6 +256,33 @@ export async function resolveAfterReveal(gameId) {
     }
   }
 
+  // ====== Follow the Tail – beslissingen laten volgen ======
+  const followMap = flagsRound.followTail || {};
+  const followPairs = Object.entries(followMap);
+  if (followPairs.length) {
+    for (const [followerId, targetId] of followPairs) {
+      const follower = players.find((p) => p.id === followerId);
+      const target = players.find((p) => p.id === targetId);
+      if (!follower || !target) continue;
+      if (!isInYardForEvents(follower)) continue;
+
+      if (target.decision) {
+        follower.decision = target.decision;
+        await addLog(gameId, {
+          round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          playerId: follower.id,
+          message: `${
+            follower.name || "Vos"
+          } volgt de keuze van ${target.name || "een vos"} (Follow the Tail: ${
+            target.decision
+          }).`,
+        });
+      }
+    }
+  }
+
   // ====== Event-specifieke logica ======
 
   if (eventId.startsWith("DEN_")) {
