@@ -1,16 +1,18 @@
 /* ==========================================
-   GLOBAL CARD UNITS & GRID SETTINGS
+   GLOBAL CARD SIZE (2:3) + COLORS
    ========================================== */
 
 :root {
-  /* 1 UNIT = 1 kaart (overal dezelfde 2:3 verhouding) */
-  --card-h: 90px;
-  --card-w: calc(var(--card-h) * 0.6667); /* 2:3 */
-  --grid-gap: 8px;
+  /* 1 kaart in het board (unit) */
+  --card-h: 150px;
+  --card-w: 100px; /* 2:3 verhouding */
+  --gap-lg: 24px;
+  --gap-md: 16px;
+  --gap-sm: 8px;
 }
 
 /* ==========================================
-   HOST LAYOUT & BUTTONS
+   BASIC LAYOUT / HEADER
    ========================================== */
 
 .host-body {
@@ -32,7 +34,6 @@
 .host-game-info {
   font-size: 0.9rem;
   font-weight: 500;
-  color: #e5e7eb;
 }
 
 .host-controls {
@@ -54,8 +55,7 @@
   font-size: 0.8rem;
   font-weight: 500;
   cursor: pointer;
-  transition: transform 0.08s ease, box-shadow 0.08s ease,
-    background-color 0.08s ease, opacity 0.08s ease;
+  transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.08s ease;
   white-space: nowrap;
 }
 
@@ -92,11 +92,11 @@
 }
 
 /* ==========================================
-   16:9 BOARD CONTAINER
+   BOARD 16:9
    ========================================== */
 
 #boardShell {
-  max-width: 1200px;
+  max-width: 1360px;
   margin: 0 auto;
 }
 
@@ -104,7 +104,7 @@
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: radial-gradient(circle at top, #1f2937, #020617);
+  background: radial-gradient(circle at top, #1e293b, #020617);
   border-radius: 18px;
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.9);
   overflow: hidden;
@@ -112,324 +112,272 @@
 
 #boardInner {
   position: relative;
-  inset: 0;
   width: 100%;
   height: 100%;
+  padding: 24px 32px;
+  box-sizing: border-box;
   border-radius: 16px;
-  background: radial-gradient(circle at top, #111827, #020617);
-  overflow: hidden;
-}
-
-/* optioneel: subtiele raster-lijnen */
-#boardInner::before {
-  content: "";
-  position: absolute;
-  inset: 4%;
-  border-radius: 14px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
-  opacity: 0.25;
-  pointer-events: none;
+  background: radial-gradient(circle at top, #0f172a, #020617);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-lg);
 }
 
 /* ==========================================
-   8 x 6 UNIT GRID
-   ========================================== */
-
-#boardGrid {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  display: grid;
-  grid-template-columns: repeat(8, var(--card-w));
-  grid-template-rows: repeat(6, var(--card-h));
-  gap: var(--grid-gap);
-}
-
-/* ==========================================
-   GENERIC CARD STYLE (1 UNIT)
+   GENERIC CARD
    ========================================== */
 
 .board-card {
   position: relative;
   width: var(--card-w);
   height: var(--card-h);
-  background: linear-gradient(145deg, #020617, #020617, #0b1120);
-  border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.55);
-  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.7);
-  padding: 0.35rem 0.45rem;
-  font-size: 0.75rem;
+  background: linear-gradient(145deg, #0ea5e9 0%, #22c55e 40%, #0f172a 100%);
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.9);
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.7);
+  padding: 0.4rem 0.5rem;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
-  overflow: hidden;
+  justify-content: flex-end;
+  font-size: 0.8rem;
+  color: #020617;
+}
+
+.board-card::before {
+  /* wolkje / lucht-effect */
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(15, 23, 42, 0.1), rgba(255, 255, 255, 0.8));
+  opacity: 0.8;
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+.board-card-inner {
+  position: relative;
+  z-index: 1;
 }
 
 .card-title {
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #9ca3af;
+  color: #0f172a;
 }
 
 .card-value {
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   font-weight: 600;
-  color: #e5e7eb;
-  margin-top: 0.05rem;
 }
 
-.card-sub {
-  font-size: 0.7rem;
-  color: #9ca3af;
-  margin-top: 0.15rem;
+/* extra accent voor deck/stack */
+.card-stack {
+  border: 2px solid rgba(15, 23, 42, 0.9);
 }
 
-.card-status-on {
-  border-color: rgba(52, 211, 153, 0.9);
-  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.5),
-    0 10px 20px rgba(22, 163, 74, 0.5);
+/* verstopte kaarten (phase/leadfox) */
+.hidden {
+  display: none;
 }
 
-/* Rooster dots */
+/* ==========================================
+   BOARD ROWS
+   ========================================== */
 
-.rooster-track {
+.board-row {
   display: flex;
-  gap: 0.15rem;
-  margin-top: 0.25rem;
-}
-
-.rooster-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: rgba(148, 163, 184, 0.4);
-}
-
-.rooster-dot-on {
-  background: #f97316;
-}
-
-/* ==========================================
-   GRID PLACEMENT PER UNIT
-   ========================================== */
-
-/* TOP ROW (row 1) */
-#sackCard {
-  grid-row: 1;
-  grid-column: 1;
-}
-
-#lootDeckCard {
-  grid-row: 1;
-  grid-column: 2;
-}
-
-#beaconCard {
-  grid-row: 1;
-  grid-column: 3;
-}
-
-#scatterCard {
-  grid-row: 1;
-  grid-column: 4;
-}
-
-#actionDeckCard {
-  grid-row: 1;
-  grid-column: 5;
-}
-
-#roosterCard {
-  grid-row: 1;
-  grid-column: 8; /* rechtsboven */
-}
-
-/* EVENT ZONE (rows 2–3, cols 2–7: 2 x 6 Event cards) */
-#eventTrack {
-  grid-row: 2 / span 2;
-  grid-column: 2 / span 6;
-}
-
-/* PLAYERS ZONES */
-#yardZone {
-  grid-row: 4;
-  grid-column: 1 / span 8;
-}
-
-#dashZone {
-  grid-row: 5;
-  grid-column: 1 / span 2;
-}
-
-#caughtZone {
-  grid-row: 5;
-  grid-column: 7 / span 2;
-}
-
-/* BOTTOM LEFT: Phase + Lead Fox */
-#phaseCard {
-  grid-row: 6;
-  grid-column: 1;
-}
-
-#leadFoxCard {
-  grid-row: 6;
-  grid-column: 2;
-}
-
-/* BOTTOM RIGHT: info panel (Log popup) */
-#infoPanel {
-  grid-row: 6;
-  grid-column: 7 / span 2;
-}
-
-/* ==========================================
-   EVENT ZONE (2 x 6 EVENT CARDS)
-   ========================================== */
-
-.event-zone {
+  align-items: flex-start;
   width: 100%;
-  height: 100%;
-  border-radius: 12px;
-  border: 1px dashed rgba(148, 163, 184, 0.6);
-  padding: 0.25rem;
+}
+
+/* ---------- TOP ROW ---------- */
+
+.board-top {
+  justify-content: space-between;
+}
+
+.top-left,
+.top-center,
+.top-right {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--gap-sm);
+}
+
+/* ---------- MIDDLE: EVENTS + CAUGHT ---------- */
+
+.board-middle {
+  flex: 1;
+  justify-content: space-between;
+  align-items: stretch;
+  gap: var(--gap-lg);
+}
+
+.event-area {
+  flex: 1 1 auto;
+  border-radius: 18px;
+  border: 2px dashed #f59e0b;
+  padding: 12px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: 8px;
 }
 
-.event-track-status {
-  font-size: 0.75rem;
-  color: #9ca3af;
+.event-area-label {
+  font-size: 0.8rem;
+  color: #facc15;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
-/* interne grid: 2 rijen x 6 kolommen, kaarten blijven 1 unit */
+/* container voor 12 event cards (2 x 6) */
+.event-track {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* wordt gevuld door host.js */
 .event-track-grid {
-  margin-top: 0.1rem;
   display: grid;
   grid-template-columns: repeat(6, var(--card-w));
   grid-auto-rows: var(--card-h);
-  gap: 0.25rem;
+  gap: var(--gap-sm);
 }
 
-/* Event cards = 1 unit */
+/* event cards zijn ook 2:3-kaarten */
 .event-slot {
-  position: relative;
   width: var(--card-w);
   height: var(--card-h);
   border-radius: 10px;
-  border: 1px solid rgba(148, 163, 184, 0.35);
+  border: 1px solid rgba(15, 23, 42, 0.7);
   padding: 0.35rem 0.4rem;
+  box-sizing: border-box;
+  background: radial-gradient(circle at top, #dbeafe, #22c55e);
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
-  background: radial-gradient(
-    circle at top,
-    rgba(30, 64, 175, 0.4),
-    rgba(15, 23, 42, 0.96)
-  );
-  overflow: hidden;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: #0f172a;
 }
 
 .event-slot-index {
   font-size: 0.65rem;
-  color: #9ca3af;
+  color: #4b5563;
 }
 
 .event-slot-title {
   font-size: 0.8rem;
-  font-weight: 500;
-  color: #e5e7eb;
-  margin-top: 0.05rem;
+  font-weight: 600;
 }
 
+/* visuele staten */
 .event-state-future {
-  opacity: 0.65;
+  opacity: 0.6;
 }
 
 .event-state-current {
-  border-color: rgba(56, 189, 248, 0.9);
-  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.7);
+  box-shadow: 0 0 0 2px #38bdf8;
 }
 
 .event-state-past {
-  opacity: 0.95;
-  background: radial-gradient(
-    circle at top,
-    rgba(22, 163, 74, 0.4),
-    rgba(15, 23, 42, 0.96)
-  );
+  opacity: 0.9;
+  background: radial-gradient(circle at top, #bbf7d0, #22c55e);
 }
 
-/* ==========================================
-   PLAYER ZONES + PLAYER CARDS
-   ========================================== */
+/* ---------- CAUGHT ZONE ---------- */
 
 .player-zone {
   position: relative;
-  width: 100%;
-  height: 100%;
-  border-radius: 12px;
-  border: 1px dashed rgba(148, 163, 184, 0.6);
-  padding: 0.25rem;
+  border-radius: 18px;
+  border: 2px dashed #f97316;
+  padding: 10px;
   box-sizing: border-box;
   display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  overflow: hidden;
-  background: rgba(15, 23, 42, 0.9);
-}
-
-.player-zone-yard {
-  justify-content: center;
-}
-
-.player-zone-dash {
-  justify-content: flex-start;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--gap-sm);
+  min-height: calc(var(--card-h) + 20px);
+  background: rgba(15, 23, 42, 0.8);
 }
 
 .player-zone-caught {
-  justify-content: flex-end;
+  width: 220px;
 }
 
+/* label in hoek */
 .player-zone-label {
   position: absolute;
-  top: 0.2rem;
-  left: 0.45rem;
-  font-size: 0.7rem;
+  top: 6px;
+  left: 12px;
+  font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #9ca3af;
-  pointer-events: none;
+  color: #fed7aa;
 }
 
-/* Player cards = 1 unit, zelfde 2:3 verhouding */
+/* ==========================================
+   BOTTOM ROW: DASH / PLAYERS / LOG
+   ========================================== */
+
+.board-bottom {
+  justify-content: space-between;
+  align-items: stretch;
+  gap: var(--gap-lg);
+}
+
+/* DASH left */
+
+.player-zone-dash {
+  width: 220px;
+}
+
+/* PLAYERS YARD center */
+
+.players-yard-area {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.players-yard-label {
+  font-size: 0.9rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #e5e7eb;
+}
+
+.player-zone-yard {
+  width: 100%;
+  justify-content: center;
+  background: transparent;
+  border-color: transparent;
+  min-height: var(--card-h);
+}
+
+/* spelerskaarten */
 
 .card-player {
   position: relative;
   width: var(--card-w);
   height: var(--card-h);
   padding: 0.35rem 0.4rem;
+  box-sizing: border-box;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.9);
+  background: linear-gradient(145deg, #0ea5e9, #22c55e, #0f172a);
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.7);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   font-size: 0.75rem;
-  background: linear-gradient(145deg, #020617, #020617, #0b1120);
-  border-radius: 9px;
-  border: 1px solid rgba(148, 163, 184, 0.6);
-  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.7);
+  color: #020617;
 }
-
-.card-player-lead {
-  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.9),
-    0 12px 22px rgba(0, 0, 0, 0.9);
-  transform: translateY(-1px);
-}
-
-/* inhoud van spelerkaart */
 
 .card-header {
   display: flex;
@@ -439,19 +387,18 @@
 }
 
 .card-name {
-  font-weight: 500;
+  font-weight: 600;
   font-size: 0.8rem;
-  color: #e5e7eb;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .card-den {
   width: 10px;
   height: 10px;
   border-radius: 999px;
-  border: 1px solid #0f172a;
+  border: 1px solid #020617;
 }
 
 /* den kleuren */
@@ -483,9 +430,7 @@
 }
 
 .card-score {
-  font-size: 0.8rem;
   font-weight: 600;
-  color: #e5e7eb;
 }
 
 .card-tags {
@@ -509,131 +454,86 @@
   padding: 0.1rem 0.5rem;
   font-size: 0.65rem;
   font-weight: 500;
-  background: rgba(148, 163, 184, 0.25);
-  color: #e5e7eb;
-  border: 1px solid transparent;
+  background: rgba(15, 23, 42, 0.12);
+  border: 1px solid rgba(15, 23, 42, 0.4);
 }
 
 .chip-host {
   background: rgba(249, 115, 22, 0.2);
-  color: #fed7aa;
-  border-color: rgba(249, 115, 22, 0.6);
+  border-color: rgba(249, 115, 22, 0.7);
 }
 
 .chip-status-yard {
   background: rgba(34, 197, 94, 0.2);
-  color: #bbf7d0;
-  border-color: rgba(34, 197, 94, 0.6);
+  border-color: rgba(34, 197, 94, 0.7);
 }
 
 .chip-status-dashed {
   background: rgba(56, 189, 248, 0.2);
-  color: #e0f2fe;
-  border-color: rgba(56, 189, 248, 0.6);
+  border-color: rgba(56, 189, 248, 0.7);
 }
 
 .chip-status-caught {
   background: rgba(248, 113, 113, 0.2);
-  color: #fecaca;
-  border-color: rgba(248, 113, 113, 0.6);
+  border-color: rgba(248, 113, 113, 0.7);
 }
 
-/* ==========================================
-   CARD ART IMAGES – BEACON / SCATTER / HOST
-   ========================================== */
-
-#beaconCard,
-#scatterCard,
-.card-player-host {
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-  overflow: hidden;
+.card-player-lead {
+  box-shadow: 0 0 0 2px #38bdf8, 0 12px 24px rgba(0, 0, 0, 0.8);
 }
 
-#beaconCard {
-  background-image: url("./assets/card_beacon.png");
-}
+/* LOG POPUP right */
 
-#scatterCard {
-  background-image: url("./assets/card_scatter.png");
-}
-
-.card-player-host {
-  background-image: url("./assets/card_player_host.png");
-}
-
-/* donkere overlay voor leesbare tekst */
-
-#beaconCard::before,
-#scatterCard::before,
-.card-player-host::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(
-    to top,
-    rgba(15, 23, 42, 0.86),
-    rgba(15, 23, 42, 0.28)
-  );
-  pointer-events: none;
-}
-
-#beaconCard > *,
-#scatterCard > *,
-.card-player-host > * {
-  position: relative;
-  z-index: 1;
-}
-
-/* ==========================================
-   INFO PANEL (ROUND INFO + LOG POPUP)
-   ========================================== */
-
-.info-panel {
-  width: 100%;
-  height: 100%;
-  border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.6);
-  background: rgba(15, 23, 42, 0.96);
+.log-area {
+  width: 260px;
+  height: 260px;
+  border-radius: 18px;
+  border: 2px solid rgba(15, 23, 42, 0.9);
+  background: linear-gradient(145deg, #0ea5e9, #22c55e, #0f172a);
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.8);
+  padding: 8px;
   box-sizing: border-box;
-  padding: 0.35rem;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.8rem;
+  gap: 6px;
 }
 
-.info-section {
-  flex: 1;
-  overflow: auto;
+.round-info {
+  flex: 0 0 auto;
+  max-height: 40%;
+  overflow-y: auto;
+  font-size: 0.8rem;
+  color: #020617;
+  background: rgba(255, 255, 255, 0.75);
+  border-radius: 10px;
+  padding: 6px;
+  box-sizing: border-box;
 }
 
 #roundInfo h2 {
   font-size: 0.9rem;
   margin: 0 0 0.2rem;
+  color: #0f172a;
 }
 
 #roundInfo p {
-  margin: 0 0 0.2rem;
+  margin: 0 0 0.15rem;
 }
 
-.round-actions-list {
-  margin-top: 0.3rem;
-  max-height: 7rem;
+.log-panel {
+  flex: 1;
   overflow-y: auto;
-  font-size: 0.75rem;
+  font-size: 0.78rem;
+  background: rgba(15, 23, 42, 0.9);
+  color: #e5e7eb;
+  border-radius: 10px;
+  padding: 6px 6px 6px 8px;
+  box-sizing: border-box;
 }
 
-.round-action-line {
-  padding: 0.1rem 0;
-  border-bottom: 1px dashed rgba(55, 65, 81, 0.6);
-}
-
+/* wordt gevuld door host.js */
 .log-lines {
-  font-size: 0.75rem;
-  margin-top: 0.1rem;
-  padding-right: 0.25rem;
+  font-size: 0.78rem;
   max-height: 100%;
   overflow-y: auto;
 }
@@ -641,11 +541,12 @@
 .log-line {
   padding: 0.1rem 0;
   border-bottom: 1px dashed rgba(55, 65, 81, 0.7);
-  color: #e5e7eb;
 }
 
-.score-empty {
-  font-size: 0.8rem;
+.zone-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
   color: #9ca3af;
 }
 
