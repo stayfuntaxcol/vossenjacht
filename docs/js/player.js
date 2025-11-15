@@ -80,6 +80,24 @@ function setActionFeedback(msg) {
   actionFeedbackEl.textContent = `[${time}] ${msg}`;
 }
 
+/**
+ * Zorgt dat flagsRound altijd een compleet object is met
+ * alle standaard velden, plus bestaande velden uit de game.
+ */
+function mergeRoundFlags(game) {
+  const base = {
+    lockEvents: false,
+    scatter: false,
+    denImmune: {},
+    noPeek: [],
+    predictions: [],
+    opsLocked: false,
+    followTail: {},
+    scentChecks: [],
+  };
+  return { ...base, ...(game.flagsRound || {}) };
+}
+
 if (!gameId || !playerId) {
   if (gameStatusDiv) {
     gameStatusDiv.textContent = "Ontbrekende game- of speler-id in de URL.";
@@ -569,7 +587,7 @@ async function performScout() {
     return;
   }
 
-  const flags = game.flagsRound || {};
+  const flags = mergeRoundFlags(game);
   if (flags.scatter) {
     alert("Scatter! is gespeeld: niemand mag Scouten deze ronde.");
     return;
@@ -627,7 +645,7 @@ async function performShift() {
     return;
   }
 
-  const flags = game.flagsRound || {};
+  const flags = mergeRoundFlags(game);
   if (flags.lockEvents) {
     alert("Events zijn gelocked (Burrow Beacon). Je kunt niet meer shiften.");
     return;
@@ -738,13 +756,25 @@ async function playActionCard(index) {
   const card = hand[index];
   const cardName = card.name;
 
+  // Check Hold Still: alleen Countermove mag nog gespeeld worden
+  const flagsBefore = mergeRoundFlags(game);
+  if (flagsBefore.opsLocked && cardName !== "Countermove") {
+    alert(
+      "Hold Still is actief: er mogen geen nieuwe Action Cards meer worden gespeeld, behalve Countermove."
+    );
+    setActionFeedback(
+      "Hold Still is actief – je kunt alleen Countermove spelen of PASS."
+    );
+    return;
+  }
+
   // kaart uit de hand halen
   hand.splice(index, 1);
   await updateDoc(playerRef, { hand });
 
   await logMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
 
-  // effect toepassen voor subset kaarten
+  // effect toepassen
   switch (cardName) {
     case "Scatter!":
       await playScatter(game, player);
@@ -760,6 +790,15 @@ async function playActionCard(index) {
       break;
     case "Burrow Beacon":
       await playBurrowBeacon(game, player);
+      break;
+    case "Molting Mask":
+      await playMoltingMask(game, player);
+      break;
+    case "Hold Still":
+      await playHoldStill(game, player);
+      break;
+    case "Nose for Trouble":
+      await playNoseForTrouble(game, player);
       break;
     default:
       alert(
@@ -817,15 +856,7 @@ async function passAction() {
 
 // Scatter! – niemand mag Scouten deze ronde
 async function playScatter(game, player) {
-  const flags = {
-    lockEvents: false,
-    scatter: false,
-    denImmune: {},
-    noPeek: [],
-    predictions: [],
-    ...(game.flagsRound || {}),
-  };
-
+  const flags = mergeRoundFlags(game);
   flags.scatter = true;
 
   await updateDoc(gameRef, {
@@ -853,14 +884,7 @@ async function playDenSignal(game, player) {
     return;
   }
 
-  const flags = {
-    lockEvents: false,
-    scatter: false,
-    denImmune: {},
-    noPeek: [],
-    predictions: [],
-    ...(game.flagsRound || {}),
-  };
+  const flags = mergeRoundFlags(game);
 
   flags.denImmune = flags.denImmune || {};
   flags.denImmune[color] = true;
@@ -895,14 +919,7 @@ async function playNoGoZone(game, player) {
     return;
   }
 
-  const flags = {
-    lockEvents: false,
-    scatter: false,
-    denImmune: {},
-    noPeek: [],
-    predictions: [],
-    ...(game.flagsRound || {}),
-  };
+  const flags = mergeRoundFlags(game);
 
   const noPeek = flags.noPeek || [];
   if (!noPeek.includes(pos)) noPeek.push(pos);
@@ -923,6 +940,14 @@ async function playNoGoZone(game, player) {
 
 // Kick Up Dust – twee events random wisselen
 async function playKickUpDust(game, player) {
+  const flags = mergeRoundFlags(game);
+  if (flags.lockEvents) {
+    alert(
+      "Burrow Beacon is actief – de Event Track is gelocked en kan niet meer veranderen."
+    );
+    return;
+  }
+
   const track = game.eventTrack ? [...game.eventTrack] : [];
   if (track.length < 2) {
     alert("Te weinig events om te shuffelen.");
@@ -954,15 +979,7 @@ async function playKickUpDust(game, player) {
 
 // Burrow Beacon – Event Track kan niet meer veranderen
 async function playBurrowBeacon(game, player) {
-  const flags = {
-    lockEvents: false,
-    scatter: false,
-    denImmune: {},
-    noPeek: [],
-    predictions: [],
-    ...(game.flagsRound || {}),
-  };
-
+  const flags = mergeRoundFlags(game);
   flags.lockEvents = true;
 
   await updateDoc(gameRef, {
@@ -976,6 +993,113 @@ async function playBurrowBeacon(game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt Burrow Beacon – Event Track kan deze ronde niet meer veranderen.`,
   });
+}
+
+// Molting Mask – nieuwe Den kleur (simpele digitale variant)
+async function playMoltingMask(game, player) {
+  const colors = ["RED", "BLUE", "GREEN", "YELLOW"];
+  const current = (player.color || "").toUpperCase();
+  const pool = colors.filter((c) => c !== current);
+  const newColor =
+    pool.length > 0
+      ? pool[Math.floor(Math.random() * pool.length)]
+      : colors[Math.floor(Math.random() * colors.length)];
+
+  await updateDoc(playerRef, { color: newColor });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt Molting Mask – nieuwe Den kleur: ${newColor}.`,
+  });
+
+  setActionFeedback(
+    `Molting Mask: je Den kleur is nu ${newColor}.`
+  );
+}
+
+// Hold Still – lockt OPS: alleen Countermove mag nog
+async function playHoldStill(game, player) {
+  const flags = mergeRoundFlags(game);
+  flags.opsLocked = true;
+
+  await updateDoc(gameRef, {
+    flagsRound: flags,
+  });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message:
+      `${player.name || "Speler"} speelt Hold Still – geen nieuwe Action Cards meer deze ronde, behalve Countermove.`,
+  });
+
+  setActionFeedback(
+    "Hold Still is actief – alleen Countermove mag nog gespeeld worden, of PASS."
+  );
+}
+
+// Nose for Trouble – voorspel het volgende Event
+async function playNoseForTrouble(game, player) {
+  const track = game.eventTrack || [];
+  if (!track.length) {
+    alert("Geen Event Track beschikbaar.");
+    return;
+  }
+
+  // unieklijst van eventIds op de track
+  const uniqueIds = [...new Set(track)];
+  const menuLines = uniqueIds.map((id, idx) => {
+    const ev = getEventById(id);
+    const title = ev ? ev.title : id;
+    return `${idx + 1}. ${title}`;
+  });
+
+  const choiceStr = prompt(
+    "Nose for Trouble – kies het volgende Event dat je verwacht:\n" +
+      menuLines.join("\n")
+  );
+  if (!choiceStr) return;
+  const idx = parseInt(choiceStr, 10) - 1;
+  if (Number.isNaN(idx) || idx < 0 || idx >= uniqueIds.length) {
+    alert("Ongeldige keuze.");
+    return;
+  }
+
+  const chosenId = uniqueIds[idx];
+  const ev = getEventById(chosenId);
+
+  const flags = mergeRoundFlags(game);
+  const preds = Array.isArray(flags.predictions)
+    ? [...flags.predictions]
+    : [];
+  preds.push({
+    playerId,
+    eventId: chosenId,
+  });
+  flags.predictions = preds;
+
+  await updateDoc(gameRef, {
+    flagsRound: flags,
+  });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt Nose for Trouble – voorspelt: ${
+      ev ? ev.title : chosenId
+    }.`,
+  });
+
+  setActionFeedback(
+    `Nose for Trouble: je hebt "${ev ? ev.title : chosenId}" voorspeld als volgende Event.`
+  );
 }
 
 // === INIT ===
