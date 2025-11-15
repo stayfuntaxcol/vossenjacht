@@ -320,6 +320,11 @@ function createPlayerCard(p, zoneType) {
   const card = document.createElement("div");
   card.className = "board-card card-player";
 
+  // Nieuw: host krijgt eigen card-art class
+  if (p.isHost) {
+    card.classList.add("card-player-host");
+  }
+
   if (zoneType === "yard") {
     card.classList.add("card-player-yard");
   } else if (zoneType === "dash") {
