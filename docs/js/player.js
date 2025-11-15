@@ -41,25 +41,23 @@ let playerRef = null;
 let currentGame = null;
 let currentPlayer = null;
 
-// === OPS feedback & per-fase lock ===
+// === OPS-feedback & 1-kaart-per-fase lock ===
 let actionLock = false;
 let actionFeedbackEl = null;
 
 function ensureActionFeedbackEl() {
   if (actionFeedbackEl) return;
-  if (!handPanel) return;
+  const parent = handPanel ? handPanel.parentElement : null;
+  if (!parent) return;
 
   const p = document.createElement("p");
   p.id = "actionFeedback";
+  p.className = "small-note";
   p.style.marginTop = "0.5rem";
   p.style.fontSize = "0.85rem";
   p.style.opacity = "0.8";
 
-  if (handPanel.parentElement) {
-    handPanel.parentElement.appendChild(p);
-  } else {
-    handPanel.appendChild(p);
-  }
+  parent.appendChild(p);
   actionFeedbackEl = p;
 }
 
@@ -120,20 +118,23 @@ function canPlayActionNow(game, player) {
   return true;
 }
 
+// === RENDERING ===
+
 function renderGame() {
   if (!currentGame || !gameStatusDiv || !eventInfoDiv) return;
 
   const g = currentGame;
 
-  // Niet in ACTIONS-fase? Lock reset + feedback leeg.
+  gameStatusDiv.textContent =
+    `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
+
+  // Lock resetten zodra we niet meer in ACTIONS zitten
   if (g.phase !== "ACTIONS") {
     actionLock = false;
     setActionFeedback("");
   }
 
-  gameStatusDiv.textContent =
-    `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
-
+  // Event info alleen tonen bij REVEAL
   eventInfoDiv.innerHTML = "";
   const ev =
     g.currentEventId && g.phase === "REVEAL"
@@ -191,6 +192,7 @@ function renderPlayer() {
   }
   playerInfoDiv.appendChild(stateLine);
 
+  // Loot tonen
   lootPanel.innerHTML = "";
   const loot = p.loot || [];
   if (!loot.length) {
@@ -333,7 +335,7 @@ function renderHand() {
     return;
   }
 
-  const canPlay = canPlayActionNow(currentGame, currentPlayer) && !actionLock;
+  const canPlay = canPlayActionNow(currentGame, currentPlayer);
 
   const list = document.createElement("div");
   list.style.display = "flex";
@@ -352,7 +354,7 @@ function renderHand() {
 
     const btn = document.createElement("button");
     btn.textContent = "Speel";
-    btn.disabled = !canPlay;
+    btn.disabled = !canPlay || actionLock;
     btn.addEventListener("click", () => playActionCard(index));
 
     row.appendChild(label);
@@ -366,26 +368,45 @@ function renderHand() {
 
   if (!canPlay) {
     phaseInfo.textContent =
-      "Je kunt alleen kaarten spelen in de ACTIONS-fase terwijl je in de Yard staat (max 1 kaart per ronde).";
+      "Je kunt alleen kaarten spelen in de ACTIONS-fase terwijl je in de Yard staat.";
+  } else if (actionLock) {
+    phaseInfo.textContent =
+      "Je hebt al een Action Card gespeeld in deze fase.";
   } else {
     phaseInfo.textContent =
-      "Speel één Actiekaart in deze fase. Host bepaalt wanneer de fase eindigt.";
+      "Speel maximaal één Action Card in deze ACTIONS-fase. Host bepaalt wanneer de fase eindigt.";
   }
 
   handPanel.appendChild(list);
   handPanel.appendChild(phaseInfo);
+
+  // Zorg dat feedback-element bestaat
+  ensureActionFeedbackEl();
 }
 
-async function logMoveAction(game, player, choice, phase = "MOVE") {
+// === Log helper ===
+
+async function logMoveAction(
+  game,
+  player,
+  choice,
+  phase = "MOVE",
+  extra = null
+) {
   const actionsCol = collection(db, "games", gameId, "actions");
-  await addDoc(actionsCol, {
+  const payload = {
     round: game.round || 0,
     phase,
     playerId,
     playerName: player.name || "",
     choice,
     createdAt: serverTimestamp(),
-  });
+  };
+  if (extra) {
+    payload.extra = extra;
+  }
+
+  await addDoc(actionsCol, payload);
 
   await addLog(gameId, {
     round: game.round || 0,
@@ -396,18 +417,17 @@ async function logMoveAction(game, player, choice, phase = "MOVE") {
   });
 }
 
-// ====== MOVE acties ======
+// === MOVE acties ===
 
-// SNATCH: pakt nu uit de buitstapel (lootDeck), NIET uit de Sack
+// SNATCH: trek uit buitstapel (lootDeck), NIET uit de Sack
 async function performSnatch() {
   if (!gameRef || !playerRef) return;
 
   const gameSnap = await getDoc(gameRef);
-  if (!gameSnap.exists()) return;
-  const game = gameSnap.data();
-
   const playerSnap = await getDoc(playerRef);
-  if (!playerSnap.exists()) return;
+  if (!gameSnap.exists() || !playerSnap.exists()) return;
+
+  const game = gameSnap.data();
   const player = playerSnap.data();
 
   if (!canMoveNow(game, player)) {
@@ -416,12 +436,13 @@ async function performSnatch() {
   }
 
   const lootDeck = Array.isArray(game.lootDeck) ? [...game.lootDeck] : [];
+
   if (!lootDeck.length) {
     alert("De buitstapel is leeg. Je kunt nu geen SNATCH doen.");
     return;
   }
 
-  const card = lootDeck.pop();
+  const card = lootDeck.pop(); // bovenste kaart
   const loot = Array.isArray(player.loot) ? [...player.loot] : [];
   loot.push(card);
 
@@ -432,18 +453,23 @@ async function performSnatch() {
     movedPlayerIds: arrayUnion(playerId),
   });
 
-  await logMoveAction(game, player, "MOVE_SNATCH_FROM_DECK");
+  await logMoveAction(game, player, "MOVE_SNATCH_FROM_DECK", "MOVE", {
+    lootCard: card,
+  });
+
+  const label = card.t || "Loot";
+  const val = card.v ?? "?";
+  setActionFeedback(`SNATCH: je hebt een ${label} (waarde ${val}) uit de buitstapel getrokken.`);
 }
 
 async function performForage() {
   if (!gameRef || !playerRef) return;
 
   const gameSnap = await getDoc(gameRef);
-  if (!gameSnap.exists()) return;
-  const game = gameSnap.data();
-
   const playerSnap = await getDoc(playerRef);
-  if (!playerSnap.exists()) return;
+  if (!gameSnap.exists() || !playerSnap.exists()) return;
+
+  const game = gameSnap.data();
   const player = playerSnap.data();
 
   if (!canMoveNow(game, player)) {
@@ -451,8 +477,8 @@ async function performForage() {
     return;
   }
 
-  const actionDeck = game.actionDeck ? [...game.actionDeck] : [];
-  const hand = player.hand ? [...player.hand] : [];
+  const actionDeck = Array.isArray(game.actionDeck) ? [...game.actionDeck] : [];
+  const hand = Array.isArray(player.hand) ? [...player.hand] : [];
 
   if (!actionDeck.length) {
     alert("De Action-deck is leeg. Er zijn geen extra kaarten meer.");
@@ -466,27 +492,24 @@ async function performForage() {
     drawn++;
   }
 
-  await updateDoc(playerRef, {
-    hand,
-  });
+  await updateDoc(playerRef, { hand });
 
   await updateDoc(gameRef, {
     actionDeck,
     movedPlayerIds: arrayUnion(playerId),
   });
 
-  await logMoveAction(game, player, `MOVE_FORAGE_${drawn}cards`);
+  await logMoveAction(game, player, `MOVE_FORAGE_${drawn}cards`, "MOVE");
 }
 
 async function performScout() {
   if (!gameRef || !playerRef) return;
 
   const gameSnap = await getDoc(gameRef);
-  if (!gameSnap.exists()) return;
-  const game = gameSnap.data();
-
   const playerSnap = await getDoc(playerRef);
-  if (!playerSnap.exists()) return;
+  if (!gameSnap.exists() || !playerSnap.exists()) return;
+
+  const game = gameSnap.data();
   const player = playerSnap.data();
 
   if (!canMoveNow(game, player)) {
@@ -534,18 +557,17 @@ async function performScout() {
     movedPlayerIds: arrayUnion(playerId),
   });
 
-  await logMoveAction(game, player, `MOVE_SCOUT_${pos}`);
+  await logMoveAction(game, player, `MOVE_SCOUT_${pos}`, "MOVE");
 }
 
 async function performShift() {
   if (!gameRef || !playerRef) return;
 
   const gameSnap = await getDoc(gameRef);
-  if (!gameSnap.exists()) return;
-  const game = gameSnap.data();
-
   const playerSnap = await getDoc(playerRef);
-  if (!playerSnap.exists()) return;
+  if (!gameSnap.exists() || !playerSnap.exists()) return;
+
+  const game = gameSnap.data();
   const player = playerSnap.data();
 
   if (!canMoveNow(game, player)) {
@@ -555,7 +577,7 @@ async function performShift() {
 
   const flags = game.flagsRound || {};
   if (flags.lockEvents) {
-    alert("Events zijn gelocked (Beacon actief). Je kunt niet meer shiften.");
+    alert("Events zijn gelocked (Burrow Beacon). Je kunt niet meer shiften.");
     return;
   }
 
@@ -599,20 +621,19 @@ async function performShift() {
     movedPlayerIds: arrayUnion(playerId),
   });
 
-  await logMoveAction(game, player, `MOVE_SHIFT_${pos1}<->${pos2}`);
+  await logMoveAction(game, player, `MOVE_SHIFT_${pos1}<->${pos2}`, "MOVE");
 }
 
-// ====== DECISION acties ======
+// === DECISION acties ===
 
 async function selectDecision(kind) {
   if (!gameRef || !playerRef) return;
 
   const gameSnap = await getDoc(gameRef);
-  if (!gameSnap.exists()) return;
-  const game = gameSnap.data();
-
   const playerSnap = await getDoc(playerRef);
-  if (!playerSnap.exists()) return;
+  if (!gameSnap.exists() || !playerSnap.exists()) return;
+
+  const game = gameSnap.data();
   const player = playerSnap.data();
 
   if (!canDecideNow(game, player)) {
@@ -637,23 +658,22 @@ async function selectDecision(kind) {
   await logMoveAction(game, player, `DECISION_${kind}`, "DECISION");
 }
 
-// ====== OPS / Action kaarten ======
+// === OPS / Action kaarten ===
 
 async function playActionCard(index) {
   if (!gameRef || !playerRef) return;
 
-  // Max 1 kaart per ACTIONS-fase
+  // Maximaal 1 kaart per ACTIONS-fase
   if (actionLock) {
-    alert("Je mag in deze fase maar één Action Card spelen.");
+    alert("Je mag maar één Action Card spelen in deze fase.");
     return;
   }
 
   const gameSnap = await getDoc(gameRef);
-  if (!gameSnap.exists()) return;
-  const game = gameSnap.data();
-
   const playerSnap = await getDoc(playerRef);
-  if (!playerSnap.exists()) return;
+  if (!gameSnap.exists() || !playerSnap.exists()) return;
+
+  const game = gameSnap.data();
   const player = playerSnap.data();
 
   if (!canPlayActionNow(game, player)) {
@@ -661,7 +681,7 @@ async function playActionCard(index) {
     return;
   }
 
-  const hand = player.hand ? [...player.hand] : [];
+  const hand = Array.isArray(player.hand) ? [...player.hand] : [];
   if (index < 0 || index >= hand.length) return;
 
   const card = hand[index];
@@ -673,42 +693,41 @@ async function playActionCard(index) {
 
   await logMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
 
-  // effect toepassen
+  // effect toepassen voor subset kaarten
   switch (cardName) {
     case "Scatter!":
-      await playScatter(gameRef, game, player);
+      await playScatter(game, player);
       break;
     case "Den Signal":
-      await playDenSignal(gameRef, game, player);
+      await playDenSignal(game, player);
       break;
     case "No-Go Zone":
-      await playNoGoZone(gameRef, game, player);
+      await playNoGoZone(game, player);
       break;
     case "Kick Up Dust":
-      await playKickUpDust(gameRef, game, player);
+      await playKickUpDust(game, player);
       break;
     case "Burrow Beacon":
-      await playBurrowBeacon(gameRef, game, player);
+      await playBurrowBeacon(game, player);
       break;
     default:
       alert(
-        "Deze kaart is nog niet volledig geïmplementeerd in de online versie. Gebruik evt. de fysieke regels als huisregel."
-      );
-      setActionFeedback(
-        `Je speelde "${cardName}". In de online versie heeft deze nu geen extra effect (gebruik tafelregels).`
+        "Deze kaart is nog niet volledig geïmplementeerd in de online versie. Gebruik eventueel de fysieke regels als huisregel."
       );
       break;
   }
 
-  // Na een gespeelde kaart: lock aan
   actionLock = true;
+  setActionFeedback(
+    `Je speelde "${cardName}". Het effect is uitgevoerd (zie ook de Community log).`
+  );
 }
 
-// Scatter!: blokkeert Scout deze ronde
-async function playScatter(gameRef, game, player) {
+// Scatter! – niemand mag Scouten deze ronde
+async function playScatter(game, player) {
   const flags = {
     lockEvents: false,
-    scatter: true,
+    scatter: false,
     denImmune: {},
     noPeek: [],
     predictions: [],
@@ -728,12 +747,10 @@ async function playScatter(gameRef, game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt Scatter! – niemand mag Scouten deze ronde.`,
   });
-
-  setActionFeedback("Scatter! – deze ronde kan niemand Scouten.");
 }
 
-// Den Signal: 1 Den kleur immuun voor vang-events
-async function playDenSignal(gameRef, game, player) {
+// Den Signal – 1 Den kleur immuun
+async function playDenSignal(game, player) {
   const colorInput = prompt(
     "Den Signal – welke Den kleur wil je beschermen? (RED / BLUE / GREEN / YELLOW)"
   );
@@ -767,12 +784,10 @@ async function playDenSignal(gameRef, game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt Den Signal – Den ${color} is immuun voor vang-events deze ronde.`,
   });
-
-  setActionFeedback(`Den Signal – Den ${color} is deze ronde immuun voor vang-events.`);
 }
 
-// No-Go Zone: blokkeert 1 eventpositie voor Scout
-async function playNoGoZone(gameRef, game, player) {
+// No-Go Zone – blokkeer 1 eventpositie voor Scout
+async function playNoGoZone(game, player) {
   const track = game.eventTrack || [];
   if (!track.length) {
     alert("Geen Event Track beschikbaar.");
@@ -810,14 +825,12 @@ async function playNoGoZone(gameRef, game, player) {
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
-    message: `${player.name || "Speler"} speelt No-Go Zone – scout op positie ${pos} is verboden.`,
+    message: `${player.name || "Speler"} speelt No-Go Zone – Scouten op positie ${pos} is verboden.`,
   });
-
-  setActionFeedback(`No-Go Zone – positie ${pos} is geblokkeerd voor Scout.`);
 }
 
-// Kick Up Dust: twee events wisselen willekeurig
-async function playKickUpDust(gameRef, game, player) {
+// Kick Up Dust – twee events random wisselen
+async function playKickUpDust(game, player) {
   const track = game.eventTrack ? [...game.eventTrack] : [];
   if (track.length < 2) {
     alert("Te weinig events om te shuffelen.");
@@ -845,12 +858,10 @@ async function playKickUpDust(gameRef, game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt Kick Up Dust – twee events wisselen willekeurig van plek.`,
   });
-
-  setActionFeedback("Kick Up Dust – twee Event-kaarten hebben van plek gewisseld.");
 }
 
-// Burrow Beacon: event track locken
-async function playBurrowBeacon(gameRef, game, player) {
+// Burrow Beacon – Event Track kan niet meer veranderen
+async function playBurrowBeacon(game, player) {
   const flags = {
     lockEvents: false,
     scatter: false,
@@ -873,13 +884,11 @@ async function playBurrowBeacon(gameRef, game, player) {
     playerId,
     message: `${player.name || "Speler"} speelt Burrow Beacon – Event Track kan deze ronde niet meer veranderen.`,
   });
-
-  setActionFeedback("Burrow Beacon – Event Track is deze ronde gelocked.");
 }
 
-// ====== INIT ======
+// === INIT ===
 
-initAuth(async (user) => {
+initAuth(async () => {
   if (!gameId || !playerId) return;
 
   gameRef = doc(db, "games", gameId);
