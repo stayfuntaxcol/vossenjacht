@@ -39,15 +39,22 @@ let latestPlayers          = [];
 
 const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
 
-const ACTION_CARDS_POOL = [
-  "Scatter!",
-  "Kick Up Dust",
-  "Pack Tinker",
-  "Den Signal",
-  "Countermove",
-  "No-Go Zone",
-  "Nose for Trouble",
-  "Burrow Beacon",
+// Action cards: 40 totaal volgens jouw lijst
+const ACTION_CARD_DEFS = [
+  { name: "Molting Mask", count: 4 },
+  { name: "Scent Check", count: 3 },
+  { name: "Follow the Tail", count: 3 },
+  { name: "Scatter!", count: 3 },
+  { name: "Den Signal", count: 3 },
+  { name: "Alpha Call", count: 3 },
+  { name: "No-Go Zone", count: 2 },
+  { name: "Countermove", count: 4 },
+  { name: "Hold Still", count: 2 },
+  { name: "Kick Up Dust", count: 3 },
+  { name: "Pack Tinker", count: 3 },
+  { name: "Mask Swap", count: 2 },
+  { name: "Nose for Trouble", count: 3 },
+  { name: "Burrow Beacon", count: 2 },
 ];
 
 function shuffleArray(array) {
@@ -79,10 +86,11 @@ function buildEventTrack() {
 
 function buildActionDeck() {
   const deck = [];
-  const pool = ACTION_CARDS_POOL;
-  for (let i = 0; i < 50; i++) {
-    deck.push({ name: pool[i % pool.length] });
-  }
+  ACTION_CARD_DEFS.forEach((def) => {
+    for (let i = 0; i < def.count; i++) {
+      deck.push({ name: def.name });
+    }
+  });
   return shuffleArray(deck);
 }
 
@@ -99,8 +107,6 @@ function buildLootDeck() {
   }
   return shuffleArray(deck);
 }
-
-// ====== EVENT TRACK RENDERING ======
 
 function renderEventTrack(game) {
   if (!eventTrackDiv) return;
@@ -176,8 +182,6 @@ function renderEventTrack(game) {
 
   eventTrackDiv.appendChild(grid);
 }
-
-// ====== RAID INIT ======
 
 async function initRaidIfNeeded(gameRef) {
   const snap = await getDoc(gameRef);
@@ -289,8 +293,6 @@ async function initRaidIfNeeded(gameRef) {
   return newSnap.exists() ? newSnap.data() : null;
 }
 
-// ====== MAIN ======
-
 if (!gameId && gameInfo) {
   gameInfo.textContent = "Geen gameId in de URL";
 }
@@ -301,7 +303,6 @@ initAuth(async (authUser) => {
   const gameRef = doc(db, "games", gameId);
   const playersColRef = collection(db, "games", gameId, "players");
 
-  // Game live
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
       gameInfo.textContent = "Spel niet gevonden";
@@ -384,7 +385,6 @@ initAuth(async (authUser) => {
     });
   });
 
-  // Spelers / scoreboard
   onSnapshot(playersColRef, (snapshot) => {
     const players = [];
     snapshot.forEach((pDoc) => {
@@ -435,7 +435,6 @@ initAuth(async (authUser) => {
     });
   });
 
-  // Logboek
   const logCol = collection(db, "games", gameId, "log");
   const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
 
@@ -456,14 +455,13 @@ initAuth(async (authUser) => {
     });
   });
 
-  // Start ronde
   startBtn.addEventListener("click", async () => {
     const game = await initRaidIfNeeded(gameRef);
     if (!game) return;
 
     if (game.raidEndedByRooster) {
       alert(
-        "De raid is geëindigd door de derde Rooster Crow. Er kunnen geen nieuwe rondes meer gestart worden."
+        "De raid is geëindigd door de Rooster-limiet. Er kunnen geen nieuwe rondes meer gestart worden."
       );
       return;
     }
@@ -486,7 +484,6 @@ initAuth(async (authUser) => {
     });
   });
 
-  // Volgende fase + REVEAL
   nextPhaseBtn.addEventListener("click", async () => {
     const snap = await getDoc(gameRef);
     if (!snap.exists()) return;
@@ -495,7 +492,6 @@ initAuth(async (authUser) => {
     const current = game.phase || "MOVE";
     const roundNumber = game.round || 0;
 
-    // MOVE: check of alle vossen in de Yard hebben bewogen
     if (current === "MOVE") {
       const moved = game.movedPlayerIds || [];
       const mustMoveCount = latestPlayers.filter(
@@ -510,7 +506,6 @@ initAuth(async (authUser) => {
       }
     }
 
-    // DECISION: check of alle vossen in de Yard een keuze hebben gemaakt
     if (current === "DECISION") {
       const active = latestPlayers.filter(
         (p) => p.inYard !== false && !p.dashed
@@ -524,7 +519,6 @@ initAuth(async (authUser) => {
         return;
       }
 
-      // DECISION → REVEAL: Event onthullen + EggRun-resolve
       const track = game.eventTrack || [];
       let eventIndex =
         typeof game.eventIndex === "number" ? game.eventIndex : 0;
@@ -589,12 +583,10 @@ initAuth(async (authUser) => {
         }
       }
 
-      // EggRun-eventlogica uitvoeren
       await resolveAfterReveal(gameId);
       return;
     }
 
-    // andere fasewissels: MOVE→ACTIONS, ACTIONS→DECISION, REVEAL→MOVE
     let next = "MOVE";
     if (current === "MOVE") next = "ACTIONS";
     else if (current === "ACTIONS") next = "DECISION";
@@ -610,7 +602,6 @@ initAuth(async (authUser) => {
     });
   });
 
-  // Einde ronde – oude simpele score (laten we staan, maar straks vervangen door echte eindscore)
   endBtn.addEventListener("click", async () => {
     const gameSnap = await getDoc(gameRef);
     if (!gameSnap.exists()) return;
@@ -668,7 +659,6 @@ initAuth(async (authUser) => {
     alert("Ronde afgesloten en scores bijgewerkt (oude simpele teller).");
   });
 
-  // Speel mee als host
   playAsHostBtn.addEventListener("click", async () => {
     const q = query(
       playersColRef,
