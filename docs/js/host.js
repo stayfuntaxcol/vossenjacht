@@ -32,7 +32,6 @@ const playAsHostBtn = document.getElementById("playAsHostBtn");
 
 // Board / zones
 const eventTrackDiv   = document.getElementById("eventTrack");
-const playersDiv      = document.getElementById("playersList");
 const yardZone        = document.getElementById("yardZone");
 const caughtZone      = document.getElementById("caughtZone");
 const dashZone        = document.getElementById("dashZone");
@@ -139,10 +138,9 @@ function buildLootDeck() {
 function renderEventTrack(game) {
   if (!eventTrackDiv) return;
 
-  const track       = game.eventTrack || [];
-  const revealed    = game.eventRevealed || [];
-  const currentId   = game.currentEventId || null;
-  const roosterSeen = game.roosterSeen || 0;
+  const track     = game.eventTrack || [];
+  const revealed  = game.eventRevealed || [];
+  const currentId = game.currentEventId || null;
 
   eventTrackDiv.innerHTML = "";
 
@@ -155,14 +153,6 @@ function renderEventTrack(game) {
     eventTrackDiv.appendChild(p);
     return;
   }
-
-  const totalRoosters =
-    track.filter((id) => id === "ROOSTER_CROW").length || 3;
-
-  const statusLine = document.createElement("p");
-  statusLine.className = "event-track-status";
-  statusLine.textContent = `Rooster Crow: ${roosterSeen}/${totalRoosters}`;
-  eventTrackDiv.appendChild(statusLine);
 
   const grid = document.createElement("div");
   grid.className = "event-track-grid";
@@ -193,7 +183,7 @@ function renderEventTrack(game) {
     title.className = "event-slot-title";
 
     if (!isRevealed) {
-      title.textContent = "??";
+      title.textContent = "EVENT";
     } else if (ev) {
       title.textContent = ev.title;
     } else {
@@ -318,20 +308,7 @@ function renderStatusCards(game) {
 
 function createPlayerCard(p, zoneType) {
   const card = document.createElement("div");
-  card.className = "board-card card-player";
-
-  // Nieuw: host krijgt eigen card-art class
-  if (p.isHost) {
-    card.classList.add("card-player-host");
-  }
-
-  if (zoneType === "yard") {
-    card.classList.add("card-player-yard");
-  } else if (zoneType === "dash") {
-    card.classList.add("card-player-dash");
-  } else if (zoneType === "caught") {
-    card.classList.add("card-player-caught");
-  }
+  card.className = "card-player";
 
   if (currentLeadFoxId && p.id === currentLeadFoxId) {
     card.classList.add("card-player-lead");
@@ -365,7 +342,7 @@ function createPlayerCard(p, zoneType) {
       </div>
     </div>
     <div class="card-footer">
-      <span class="chip chip-status ${statusClass}">${statusLabel}</span>
+      <span class="chip ${statusClass}">${statusLabel}</span>
     </div>
   `;
 
@@ -600,15 +577,21 @@ initAuth(async (authUser) => {
 
     if (!yardZone || !caughtZone || !dashZone) return;
 
-    yardZone.innerHTML   = '<div class="player-zone-label">In the Yard</div>';
-    caughtZone.innerHTML = '<div class="player-zone-label">Caught!</div>';
-    dashZone.innerHTML   = '<div class="player-zone-label">Dashed</div>';
+    yardZone.innerHTML   = "";
+    caughtZone.innerHTML = "";
+    dashZone.innerHTML   = "";
+
+    const labelCaught = document.createElement("div");
+    labelCaught.className = "player-zone-label";
+    labelCaught.textContent = "CAUGHT";
+    caughtZone.appendChild(labelCaught);
+
+    const labelDash = document.createElement("div");
+    labelDash.className = "player-zone-label";
+    labelDash.textContent = "DASH";
+    dashZone.appendChild(labelDash);
 
     if (!players.length) {
-      const empty = document.createElement("p");
-      empty.textContent = "Nog geen spelers verbonden.";
-      empty.className = "score-empty";
-      yardZone.appendChild(empty);
       return;
     }
 
@@ -656,13 +639,19 @@ initAuth(async (authUser) => {
       renderStatusCards(latestGame);
     }
 
-    // Zet spelers in zones
+    // Zet spelers in zones (met rooster-einde logica)
     ordered.forEach((p) => {
       let zoneType = "yard";
-      if (p.dashed) {
-        zoneType = "dash";
-      } else if (p.inYard === false) {
-        zoneType = "caught";
+
+      if (latestGame && latestGame.raidEndedByRooster) {
+        // Raid is geëindigd door Rooster Crow:
+        // alle niet-dashers worden als CAUGHT getoond.
+        if (p.dashed) zoneType = "dash";
+        else zoneType = "caught";
+      } else {
+        if (p.dashed) zoneType = "dash";
+        else if (p.inYard === false) zoneType = "caught";
+        else zoneType = "yard";
       }
 
       const card = createPlayerCard(p, zoneType);
@@ -686,7 +675,7 @@ initAuth(async (authUser) => {
     snap.forEach((docSnap) => entries.push(docSnap.data()));
     entries.reverse();
 
-    logPanel.innerHTML = '<div class="zone-label">Community Log</div>';
+    logPanel.innerHTML = "";
     const inner = document.createElement("div");
     inner.className = "log-lines";
 
