@@ -144,8 +144,8 @@
   color: #020617;
 }
 
+/* Wolk/lucht overlay */
 .board-card::before {
-  /* wolkje / lucht-effect */
   content: "";
   position: absolute;
   inset: 0;
@@ -172,7 +172,7 @@
   font-weight: 600;
 }
 
-/* extra accent voor deck/stack */
+/* decks (achterkant) */
 .card-stack {
   border: 2px solid rgba(15, 23, 42, 0.9);
 }
@@ -240,18 +240,23 @@
   flex-direction: column;
 }
 
-/* wordt gevuld door host.js */
+.event-track-status {
+  font-size: 0.75rem;
+  color: #9ca3af;
+}
+
+/* Landscape: breedte = card-h, hoogte = card-w */
 .event-track-grid {
   display: grid;
-  grid-template-columns: repeat(6, var(--card-w));
-  grid-auto-rows: var(--card-h);
+  grid-template-columns: repeat(6, var(--card-h));
+  grid-auto-rows: var(--card-w);
   gap: var(--gap-sm);
 }
 
-/* event cards zijn ook 2:3-kaarten */
+/* event cards in landscape */
 .event-slot {
-  width: var(--card-w);
-  height: var(--card-h);
+  width: var(--card-h);
+  height: var(--card-w);
   border-radius: 10px;
   border: 1px solid rgba(15, 23, 42, 0.7);
   padding: 0.35rem 0.4rem;
@@ -262,6 +267,8 @@
   justify-content: space-between;
   font-size: 0.75rem;
   color: #0f172a;
+  position: relative;
+  overflow: hidden;
 }
 
 .event-slot-index {
@@ -276,7 +283,7 @@
 
 /* visuele staten */
 .event-state-future {
-  opacity: 0.6;
+  opacity: 0.95;
 }
 
 .event-state-current {
@@ -549,6 +556,22 @@
   letter-spacing: 0.08em;
   color: #9ca3af;
 }
+
+/* ==========================================
+   CARD BACK: card_vossenjacht.png
+   ========================================== */
+
+/* Decks + niet onthulde events krijgen de backside */
+.card-stack,
+.event-state-future {
+  background-image: url("./assets/card_vossenjacht.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* we willen de overlay van .board-card niet op event-slot,
+   dus daar geen ::before */
 
 /* ==========================================
    FULLSCREEN MODE
