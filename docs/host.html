@@ -1,36 +1,128 @@
 <!DOCTYPE html>
 <html lang="nl">
-<head>
-  <meta charset="UTF-8" />
-  <title>Vossenjacht – Community Board</title>
-  <link rel="stylesheet" href="./css/style.css" />
-</head>
-<body class="host-screen">
-  <header>
-    <h1>Vossenjacht – Community Board</h1>
-    <div id="gameInfo" class="game-info"></div>
-  </header>
-
-  <main class="board-layout">
-    <section class="column">
-      <div id="playersList" class="panel"></div>
-
-      <div class="panel controls">
-        <h2>Besturing</h2>
-        <button id="startRoundBtn">Start ronde</button>
-        <button id="endRoundBtn">Ronde afsluiten (scores)</button>
-        <button id="nextPhaseBtn">Volgende fase</button>
-        <button id="playAsHostBtn">Speel mee als host</button>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vossenjacht – Community Board (Host)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body class="host-body">
+    <header class="host-header">
+      <div id="gameInfo" class="host-game-info">
+        Vossenjacht – Host view wordt geladen...
       </div>
-    </section>
+      <div class="host-controls">
+        <button id="startRoundBtn" class="btn btn-primary">
+          Start Round
+        </button>
+        <button id="nextPhaseBtn" class="btn btn-secondary">
+          Next Phase
+        </button>
+        <button id="endRoundBtn" class="btn btn-ghost">
+          Test: End Round
+        </button>
+        <button id="playAsHostBtn" class="btn btn-accent">
+          Open Host Player View
+        </button>
+      </div>
+    </header>
 
-    <section class="column">
-      <div id="eventTrack" class="panel event-track"></div>
-      <div id="roundInfo" class="panel large"></div>
-      <div id="logPanel" class="panel log"></div>
-    </section>
-  </main>
+    <main class="host-main">
+      <div id="board">
+        <!-- RIJ 1 – STATUS + DECKS / SACK -->
+        <div class="board-row board-row-top">
+          <div class="board-zone board-zone-status">
+            <div id="phaseCard" class="board-card card-status">
+              <div class="card-title">Phase</div>
+              <div class="card-value">–</div>
+              <div class="card-sub">MOVE / ACTIONS / DECISION / REVEAL</div>
+            </div>
+            <div id="leadFoxCard" class="board-card card-status">
+              <div class="card-title">Lead Fox</div>
+              <div class="card-value">–</div>
+              <div class="card-sub">Volgt mee met ronde-rotatie</div>
+            </div>
+            <div id="roosterCard" class="board-card card-status">
+              <div class="card-title">Rooster</div>
+              <div class="card-value">0 / 3</div>
+              <div class="card-sub">Rooster Crow events gezien</div>
+            </div>
+            <div id="beaconCard" class="board-card card-status">
+              <div class="card-title">Beacon</div>
+              <div class="card-value">OFF</div>
+              <div class="card-sub">Lock Events this round</div>
+            </div>
+            <div id="scatterCard" class="board-card card-status">
+              <div class="card-title">Scatter!</div>
+              <div class="card-value">OFF</div>
+              <div class="card-sub">Niemand mag Scouten</div>
+            </div>
+          </div>
 
-  <script type="module" src="./js/host.js"></script>
-</body>
+          <div class="board-zone board-zone-decks">
+            <div id="lootDeckCard" class="board-card card-deck">
+              <div class="card-title">Loot Deck</div>
+              <div class="card-value">0</div>
+              <div class="card-sub">Face-down buitkaarten</div>
+            </div>
+            <div id="sackCard" class="board-card card-sack">
+              <div class="card-title">Farm Sack</div>
+              <div class="card-value">0</div>
+              <div class="card-sub">Loot in de zak</div>
+            </div>
+            <div id="actionDeckCard" class="board-card card-deck">
+              <div class="card-title">Action Deck</div>
+              <div class="card-value">0</div>
+              <div class="card-sub">Actiekaarten stapel</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIJ 2 – EVENT TRACK + RONDE INFO -->
+        <div class="board-row board-row-middle">
+          <div class="board-zone board-zone-events">
+            <div class="zone-label">Event Track</div>
+            <div id="eventTrack"></div>
+          </div>
+
+          <div class="board-zone board-zone-round">
+            <div class="zone-label">Ronde / Event Info</div>
+            <div id="roundInfo" class="round-info-panel">
+              Nog geen ronde actief.
+            </div>
+          </div>
+        </div>
+
+        <!-- RIJ 3 – PLAYERS (YARD / CAUGHT / DASH) + LOG -->
+        <div class="board-row board-row-bottom">
+          <div id="playersList" class="board-zone board-zone-players">
+            <div class="zone-label">Foxes</div>
+
+            <div id="yardZone" class="player-zone player-zone-yard">
+              <div class="player-zone-label">In the Yard</div>
+              <!-- player-cards komen hier -->
+            </div>
+
+            <div class="player-zone-row">
+              <div id="caughtZone" class="player-zone player-zone-caught">
+                <div class="player-zone-label">Caught!</div>
+                <!-- caught player-cards -->
+              </div>
+              <div id="dashZone" class="player-zone player-zone-dash">
+                <div class="player-zone-label">Dashed</div>
+                <!-- dashed player-cards -->
+              </div>
+            </div>
+          </div>
+
+          <div id="logPanel" class="board-zone board-zone-log">
+            <div class="zone-label">Community Log</div>
+            <!-- logregels vanuit host.js -->
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script type="module" src="./js/host.js"></script>
+  </body>
 </html>
