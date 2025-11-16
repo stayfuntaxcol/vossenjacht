@@ -32,6 +32,20 @@ let currentLogFilter = "all";
 
 // ====== Helpers ======
 
+function renderPlayerProfileCard(player) {
+  const colorKey = (player.color || "RED").toUpperCase();
+  const img = PLAYER_CARD_IMAGES[colorKey] || PLAYER_CARD_IMAGES.RED;
+  return createBaseCard({
+    imageUrl: img,
+    title: player.name || "Onbekende vos",
+    subtitle: `Den: ${player.color || "n.n.b."}`,
+    footer: `Loot: ${player.loot?.length || 0} kaarten`,
+    variant: "player",
+    size: "large",
+  });
+}
+
+
 function sortPlayersByJoinOrder(players) {
   return [...players].sort((a, b) => {
     const aj = a.joinOrder ?? 0;
