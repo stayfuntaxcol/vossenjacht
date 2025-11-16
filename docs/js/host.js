@@ -2,6 +2,7 @@ import { initAuth } from "./firebase.js";
 import { getEventById } from "./cards.js";
 import { addLog } from "./log.js";
 import { resolveAfterReveal } from "./engine.js";
+import { getEventById, getLootImageForType, CARD_BACK, } from "./cards.js";
 import {
   getFirestore,
   doc,
@@ -303,6 +304,25 @@ function renderStatusCards(game) {
     `;
   }
 }
+
+// ==== BOARD CARDS / IMAGE ====
+
+
+function createBoardCardImage(src, altText = "") {
+  const img = document.createElement("img");
+  img.className = "board-card"; // zorg dat deze class in host.css een vaste grootte krijgt
+
+  img.src = src || CARD_BACK;
+  img.alt = altText || "";
+
+  img.onerror = () => {
+    img.onerror = null;       // infinite loop voorkomen
+    img.src = CARD_BACK;      // fallback naar achterkant
+  };
+
+  return img;
+}
+
 
 // ==== PLAYER CARDS / ZONES ====
 
