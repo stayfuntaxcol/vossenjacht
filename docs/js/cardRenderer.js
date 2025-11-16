@@ -21,6 +21,14 @@ function createBaseCard({ imageUrl, title, subtitle, footer, variant = "", size 
     top.appendChild(s);
   }
 
+const PLAYER_CARD_IMAGES = {
+  RED: "./assets/card_player1.png",
+  BLUE: "./assets/card_player2.png",
+  GREEN: "./assets/card_player3.png",
+  YELLOW: "./assets/card_player4.png",
+  LEAD: "./assets/card_player5.png", // bijv. speciale frame voor Lead Fox
+};
+  
   const bottom = document.createElement("div");
   if (footer) {
     const f = document.createElement("div");
