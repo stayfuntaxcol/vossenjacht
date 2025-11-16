@@ -852,15 +852,6 @@ async function selectDecision(decision) {
 
 // ACTION CARDS
 
-// Kleine helper: bepaal wie de volgende speler is in de OPS-volgorde
-function computeNextOpsIndex(game) {
-  const order = Array.isArray(game.opsTurnOrder) ? game.opsTurnOrder : [];
-  if (!order.length) return 0;
-  const idx =
-    typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
-  return (idx + 1) % order.length;
-}
-
 async function playActionCard(index) {
   if (!currentGame || !currentPlayer) return;
 
