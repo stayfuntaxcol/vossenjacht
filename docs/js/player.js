@@ -470,8 +470,10 @@ function renderHand() {
   const canPlayOverall = canPlayActionNow(g, p);
   const myTurnOverall = isMyOpsTurn(g);
 
+  // Geen kaarten op hand
   if (!hand.length) {
     handPanel.textContent = "Je hebt geen Action Cards op hand.";
+
     if (opsTurnInfo) {
       if (g.phase !== "ACTIONS") {
         opsTurnInfo.textContent = "OPS-fase is nu niet actief.";
@@ -486,12 +488,88 @@ function renderHand() {
           "Jij bent nu aan de beurt in OPS – je hebt geen kaarten, je kunt alleen PASS kiezen.";
       }
     }
+
     if (btnPass) {
       btnPass.disabled = !(canPlayOverall && myTurnOverall);
     }
+
     ensureActionFeedbackEl();
     return;
   }
+
+  // Lijst met kaarten
+  const list = document.createElement("div");
+  list.style.display = "flex";
+  list.style.flexWrap = "wrap";
+  list.style.gap = "0.5rem";
+
+  hand.forEach((card, index) => {
+    // container per kaart
+    const cardContainer = document.createElement("div");
+    cardContainer.style.display = "flex";
+    cardContainer.style.flexDirection = "column";
+    cardContainer.style.alignItems = "center";
+    cardContainer.style.gap = "0.25rem";
+
+    // Kaart zelf: als renderActionCard bestaat, gebruik die, anders fallback
+    let cardEl;
+    try {
+      if (typeof renderActionCard === "function") {
+        cardEl = renderActionCard(card, { size: "medium" });
+      } else {
+        cardEl = document.createElement("div");
+        cardEl.textContent =
+          card.name || card.id || `Kaart ${index + 1}`;
+        cardEl.className = "fallback-card";
+        cardEl.style.padding = "0.4rem 0.6rem";
+        cardEl.style.borderRadius = "0.4rem";
+        cardEl.style.border = "1px solid #4b5563";
+        cardEl.style.fontSize = "0.8rem";
+      }
+    } catch (e) {
+      cardEl = document.createElement("div");
+      cardEl.textContent =
+        card.name || card.id || `Kaart ${index + 1}`;
+      cardEl.className = "fallback-card";
+    }
+    cardContainer.appendChild(cardEl);
+
+    // Play-knop voor deze kaart
+    const playBtn = document.createElement("button");
+    playBtn.textContent = "Play Next";
+    playBtn.disabled = !(canPlayOverall && myTurnOverall);
+    playBtn.addEventListener("click", () => openActionModal(index));
+
+    cardContainer.appendChild(playBtn);
+    list.appendChild(cardContainer);
+  });
+
+  handPanel.appendChild(list);
+
+  // Info onder de hand
+  if (opsTurnInfo) {
+    if (g.phase !== "ACTIONS") {
+      opsTurnInfo.textContent = "OPS-fase is nu niet actief.";
+    } else if (!canPlayOverall) {
+      opsTurnInfo.textContent =
+        "Je kunt nu geen Action Cards spelen (niet in de Yard of al gedashed).";
+    } else if (!myTurnOverall) {
+      opsTurnInfo.textContent =
+        "Niet jouw beurt in OPS – wacht tot je weer aan de beurt bent.";
+    } else {
+      opsTurnInfo.textContent =
+        "Jij bent nu aan de beurt in OPS – kies een kaart met Play Next of PASS.";
+    }
+  }
+
+  // PASS-knop aan/uit
+  if (btnPass) {
+    btnPass.disabled = !(canPlayOverall && myTurnOverall);
+  }
+
+  ensureActionFeedbackEl();
+}
+
 
   const list = document.createElement("div");
   list.style.display = "flex";
