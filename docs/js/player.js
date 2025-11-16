@@ -159,6 +159,14 @@ function isInYardLocal(p) {
   return p.inYard !== false && !p.dashed;
 }
 
+function computeNextOpsIndex(game) {
+  const order = game.opsTurnOrder || [];
+  if (!order.length) return 0;
+  const idx =
+    typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
+  return (idx + 1) % order.length;
+}
+
 function mergeRoundFlags(game) {
   if (!game) return {};
   const base = {
@@ -844,6 +852,15 @@ async function selectDecision(decision) {
 
 // ACTION CARDS
 
+// Kleine helper: bepaal wie de volgende speler is in de OPS-volgorde
+function computeNextOpsIndex(game) {
+  const order = Array.isArray(game.opsTurnOrder) ? game.opsTurnOrder : [];
+  if (!order.length) return 0;
+  const idx =
+    typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
+  return (idx + 1) % order.length;
+}
+
 async function playActionCard(index) {
   if (!currentGame || !currentPlayer) return;
 
@@ -869,6 +886,7 @@ async function playActionCard(index) {
   const card = hand[index];
   const flags = mergeRoundFlags(g);
 
+  // Hold Still: alleen Countermove-kaarten mogen nog
   if (flags.opsLocked && card.type !== "COUNTERMOVE") {
     alert(
       "Alleen Countermove-kaarten mogen nog gespeeld worden na Hold Still."
@@ -880,6 +898,9 @@ async function playActionCard(index) {
   let playerUpdates = {};
   let logKind = "PLAY_ACTION";
   let logChoice = card.name || card.id || "ACTION";
+
+  // wordt true zodra er echt een kaart succesvol is gespeeld
+  let cardPlayed = false;
 
   async function commitUpdates(extraLogMessage) {
     const newHand = [...hand];
@@ -906,6 +927,7 @@ async function playActionCard(index) {
       gameUpdates.flagsRound = flagsRound;
       await commitUpdates("Scatter! SCOUT is geblokkeerd deze ronde.");
       setActionFeedback("Scatter!: SCOUT is geblokkeerd deze ronde.");
+      cardPlayed = true;
       break;
     }
 
@@ -932,6 +954,7 @@ async function playActionCard(index) {
       gameUpdates.flagsRound = flagsRound;
       await commitUpdates(`Den Signal op ${c}.`);
       setActionFeedback(`Den Signal: Den-kleur ${c} is beschermd.`);
+      cardPlayed = true;
       break;
     }
 
@@ -960,6 +983,7 @@ async function playActionCard(index) {
       gameUpdates.flagsRound = flagsRound;
       await commitUpdates(`No-Go Zone op positie ${pos}.`);
       setActionFeedback(`No-Go Zone: positie ${pos} mag niet gescout worden.`);
+      cardPlayed = true;
       break;
     }
 
@@ -987,6 +1011,7 @@ async function playActionCard(index) {
       setActionFeedback(
         "Kick Up Dust: de Event Track is door elkaar gegooid."
       );
+      cardPlayed = true;
       break;
     }
 
@@ -999,6 +1024,7 @@ async function playActionCard(index) {
       setActionFeedback(
         "Burrow Beacon: SHIFT / Kick Up Dust / Pack Tinker zijn geblokkeerd."
       );
+      cardPlayed = true;
       break;
     }
 
@@ -1019,6 +1045,7 @@ async function playActionCard(index) {
       playerUpdates.color = c;
       await commitUpdates(`Molting Mask: kleur gewijzigd naar ${c}.`);
       setActionFeedback(`Molting Mask: jouw Den-kleur is nu ${c}.`);
+      cardPlayed = true;
       break;
     }
 
@@ -1030,6 +1057,7 @@ async function playActionCard(index) {
       setActionFeedback(
         "Hold Still: vanaf nu mogen alleen Countermove-kaarten worden gespeeld."
       );
+      cardPlayed = true;
       break;
     }
 
@@ -1061,6 +1089,7 @@ async function playActionCard(index) {
       setActionFeedback(
         `Nose for Trouble: je hebt positie ${pos} voorspeld als het volgende event.`
       );
+      cardPlayed = true;
       break;
     }
 
@@ -1088,6 +1117,7 @@ async function playActionCard(index) {
         `Scent Check: je krijgt straks een blik op de DECISION van ${target.name ||
           target.id} voordat jij bevestigt.`
       );
+      cardPlayed = true;
       break;
     }
 
@@ -1110,6 +1140,7 @@ async function playActionCard(index) {
         `Follow the Tail: jouw DECISION zal die van ${target.name ||
           target.id} volgen.`
       );
+      cardPlayed = true;
       break;
     }
 
@@ -1156,6 +1187,7 @@ async function playActionCard(index) {
         `Alpha Call: ${nextLead.name ||
           nextLead.id} is nu de Lead Fox voor deze raid.`
       );
+      cardPlayed = true;
       break;
     }
 
@@ -1206,6 +1238,7 @@ async function playActionCard(index) {
       setActionFeedback(
         `Pack Tinker: je hebt de events op positie ${first} en ${second} gewisseld.`
       );
+      cardPlayed = true;
       break;
     }
 
@@ -1240,6 +1273,7 @@ async function playActionCard(index) {
       setActionFeedback(
         "Mask Swap: alle Den-kleuren van vossen in de Yard zijn door elkaar geschud."
       );
+      cardPlayed = true;
       break;
     }
 
@@ -1248,6 +1282,7 @@ async function playActionCard(index) {
       setActionFeedback(
         "Countermove: placeholder – telt als gespeelde kaart, maar nog geen specifiek effect."
       );
+      cardPlayed = true;
       break;
     }
 
@@ -1258,8 +1293,19 @@ async function playActionCard(index) {
           card.id ||
           "Unknown"}.`
       );
+      cardPlayed = true;
       break;
     }
+  }
+
+  // Als er daadwerkelijk een kaart gespeeld is: beurt naar de volgende speler,
+  // en de PASS-streak resetten.
+  if (cardPlayed) {
+    const nextIndex = computeNextOpsIndex(g);
+    await updateDoc(gameRef, {
+      opsTurnIndex: nextIndex,
+      opsConsecutivePasses: 0,
+    });
   }
 }
 
@@ -1279,7 +1325,17 @@ async function passAction() {
     return;
   }
 
-  await addActionDoc("PASS", "PASS");
+  const nextIndex = computeNextOpsIndex(g);
+  const newPasses = (g.opsConsecutivePasses || 0) + 1;
+
+  await Promise.all([
+    updateDoc(gameRef, {
+      opsTurnIndex: nextIndex,
+      opsConsecutivePasses: newPasses,
+    }),
+    addActionDoc("PASS", "PASS"),
+  ]);
+
   setActionFeedback("Je hebt gekozen voor PASS in de ACTIONS-fase.");
 }
 
