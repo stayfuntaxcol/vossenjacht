@@ -1,0 +1,58 @@
+.vj-card {
+  position: relative;
+  aspect-ratio: 2 / 3;
+  border-radius: 0.9rem;
+  overflow: hidden;
+  background-size: cover;
+  background-position: center;
+  border: 2px solid #111827;
+  box-shadow: 0 8px 18px rgba(0,0,0,0.6);
+}
+
+.vj-card__overlay {
+  position: absolute;
+  inset: 0;
+  padding: 0.45rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  background: linear-gradient(
+    to bottom,
+    rgba(15,23,42,0.35),
+    rgba(15,23,42,0.95)
+  );
+  color: #e5e7eb;
+  font-size: 0.75rem;
+}
+
+.vj-card__title {
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.vj-card__subtitle {
+  font-size: 0.7rem;
+  opacity: 0.85;
+}
+
+.vj-card__footer {
+  font-size: 0.7rem;
+  opacity: 0.8;
+}
+
+/* Varianten */
+.vj-card--event  { border-color: #f97316; }
+.vj-card--action { border-color: #6366f1; }
+.vj-card--loot   { border-color: #22c55e; }
+
+.vj-card--small {
+  width: 80px;
+}
+
+.vj-card--medium {
+  width: 120px;
+}
+
+.vj-card--large {
+  width: 160px;
+}
