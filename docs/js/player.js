@@ -436,6 +436,20 @@ function renderLoot() {
   line.style.fontSize = "0.9rem";
   line.textContent = `Eggs: ${eggs} · Hens: ${hens} · Prize Hens: ${prize} · Totaal punten: ${total}`;
   lootPanel.appendChild(line);
+const cardsRow = document.createElement("div");
+cardsRow.style.display = "flex";
+cardsRow.style.flexWrap = "wrap";
+cardsRow.style.gap = "0.3rem";
+cardsRow.style.marginTop = "0.4rem";
+
+loot.forEach((card) => {
+  const cardEl = renderLootCard(card, { size: "small" });
+  cardsRow.appendChild(cardEl);
+});
+
+lootPanel.appendChild(cardsRow);
+
+  
 }
 
 function renderHand() {
