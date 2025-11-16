@@ -1,1553 +1,1361 @@
-// VOSSENJACHT player.js – versie met Scent Check confirm + veilige Action-kaarten
-import { initAuth } from "./firebase.js";
-import { addLog } from "./log.js";
-import { getEventById } from "./cards.js";
+// player.js – Vossenjacht Player App met tabs + pop-ups
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.0/firebase-app.js";
 import {
   getFirestore,
   doc,
-  getDoc,
-  onSnapshot,
-  updateDoc,
   collection,
+  onSnapshot,
   addDoc,
+  setDoc,
   serverTimestamp,
-  arrayUnion,
-  getDocs,
-} from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
+  query,
+  orderBy,
+} from "https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore.js";
 
-const db = getFirestore();
+/* ============================
+   FIREBASE CONFIG – ingevuld
+   ============================ */
 
-const params = new URLSearchParams(window.location.search);
-const gameId = params.get("game");
-const playerId = params.get("player");
+const firebaseConfig = {
+  apiKey: "AIzaSyB_u6nKuM0JUv6lLksiAmExiEB3_wrCthA",
+  authDomain: "vossenjacht-7b5b8.firebaseapp.com",
+  projectId: "vossenjacht-7b5b8",
+  storageBucket: "vossenjacht-7b5b8.firebasestorage.app",
+  messagingSenderId: "562443901152",
+  appId: "1:562443901152:web:b951cc10fb540bbae05885",
+  measurementId: "G-Y2SWPY1QZE",
+};
 
-const gameStatusDiv = document.getElementById("gameStatus");
-const playerInfoDiv = document.getElementById("playerInfo");
-const eventInfoDiv  = document.getElementById("eventInfo");
-const lootPanel     = document.getElementById("lootPanel");
-const handPanel     = document.getElementById("handPanel");
-const moveState     = document.getElementById("moveState");
-const decisionState = document.getElementById("decisionState");
-const opsTurnInfo   = document.getElementById("opsTurnInfo");
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
 
-const btnSnatch  = document.getElementById("btnSnatch");
-const btnForage  = document.getElementById("btnForage");
-const btnScout   = document.getElementById("btnScout");
-const btnShift   = document.getElementById("btnShift");
-const btnLurk    = document.getElementById("btnLurk");
-const btnBurrow  = document.getElementById("btnBurrow");
-const btnDash    = document.getElementById("btnDash");
-const btnPass    = document.getElementById("btnPass");
+/* ============================
+   DOM HELPERS
+   ============================ */
 
-let gameRef = null;
+const $ = (sel) => document.querySelector(sel);
+
+const dom = {
+  headerSubtitle: $("#headerSubtitle"),
+  pillCode: $("#pillCode"),
+  pillRound: $("#pillRound"),
+  pillPhase: $("#pillPhase"),
+  pillTurn: $("#pillTurn"),
+
+  // tabs
+  tabPanels: {
+    rules: $("#tab-rules"),
+    profile: $("#tab-profile"),
+    play: $("#tab-play"),
+    log: $("#tab-log"),
+  },
+
+  // tab buttons
+  tabButtons: document.querySelectorAll(".tab-button"),
+
+  // rules tab
+  rulesFilter: $("#rulesFilter"),
+  rulesCardsGrid: $("#rulesCardsGrid"),
+
+  // profile tab
+  myPlayerCardVisual: $("#myPlayerCardVisual"),
+  myPlayerName: $("#myPlayerName"),
+  myPlayerDen: $("#myPlayerDen"),
+  myPlayerStatusBadge: $("#myPlayerStatusBadge"),
+  myEggs: $("#myEggs"),
+  myHens: $("#myHens"),
+  myPrize: $("#myPrize"),
+  myPoints: $("#myPoints"),
+  myBurrow: $("#myBurrow"),
+  myPlayerLabel: $("#myPlayerLabel"),
+  myFlavourText: $("#myFlavourText"),
+  scoreSummary: $("#scoreSummary"),
+  otherPlayersList: $("#otherPlayersList"),
+  otherPlayerDetail: $("#otherPlayerDetail"),
+  noOtherPlayersMsg: $("#noOtherPlayersMsg"),
+
+  // play tab
+  turnIndicator: $("#turnIndicator"),
+  turnHint: $("#turnHint"),
+  myCardsList: $("#myCardsList"),
+  selectedCardLabel: $("#selectedCardLabel"),
+  btnPlayNext: $("#btnPlayNext"),
+  botAdvice: $("#botAdvice"),
+
+  // log tab
+  logList: $("#logList"),
+
+  // popup
+  popupOverlay: $("#popupOverlay"),
+  popupTitle: $("#popupTitle"),
+  popupBody: $("#popupBody"),
+  popupCloseBtn: $("#popupCloseBtn"),
+
+  // feedback toast
+  feedbackToast: $("#feedbackToast"),
+  feedbackText: $("#feedbackText"),
+};
+
+/* ============================
+   CARD DEFINITIES (encyclopedie)
+   ============================ */
+
+const LOOT_CARDS = [
+  {
+    id: "loot_egg",
+    type: "loot",
+    name: "Egg",
+    short: "1 buitpunt.",
+    detail: "Basisloot. Veilig, maar weinig punten.",
+  },
+  {
+    id: "loot_hen",
+    type: "loot",
+    name: "Hen",
+    short: "2 buitpunten.",
+    detail: "Meer waard dan een Egg, maar ook aantrekkelijk voor snatch-events.",
+  },
+  {
+    id: "loot_prize",
+    type: "loot",
+    name: "Prize Hen",
+    short: "3 buitpunten.",
+    detail: "Zeldzaam en waardevol. Jaag hierop als je durft.",
+  },
+];
+
+const EVENT_CARDS = [
+  {
+    id: "event_den_red",
+    type: "event",
+    name: "Den – Red",
+    short: "Vangt alle Red Den vossen in de Yard.",
+    detail: "Behalve als ze BURROW of DASH kozen, of beschermd zijn door Den Signal.",
+  },
+  {
+    id: "event_den_blue",
+    type: "event",
+    name: "Den – Blue",
+    short: "Vangt alle Blue Den vossen in de Yard.",
+    detail:
+      "Let op: BURROW beschermt meestal, tenzij het event dit negeert.",
+  },
+  {
+    id: "event_den_green",
+    type: "event",
+    name: "Den – Green",
+    short: "Vangt alle Green Den vossen in de Yard.",
+    detail: "Den Signal kan deze kleur beschermen in deze ronde.",
+  },
+  {
+    id: "event_den_yellow",
+    type: "event",
+    name: "Den – Yellow",
+    short: "Vangt alle Yellow Den vossen in de Yard.",
+    detail: "DASHers zijn onderweg en worden niet gepakt.",
+  },
+  {
+    id: "event_sheepdog_charge",
+    type: "event",
+    name: "Sheepdog Charge",
+    short: "Schapendog stormt de Yard in.",
+    detail: "Vangt meestal alle vossen in de Yard tenzij je goed beschermd bent.",
+  },
+  {
+    id: "event_sheepdog_patrol",
+    type: "event",
+    name: "Sheepdog Patrol",
+    short: "Patrouille door de Yard.",
+    detail: "In sommige varianten pakt hij vooral Dashers of kwetsbare vossen.",
+  },
+  {
+    id: "event_rooster_crow",
+    type: "event",
+    name: "Rooster Crow",
+    short: "De haan kraait.",
+    detail: "Bij de 3e kraai eindigt de raid.",
+  },
+  {
+    id: "event_magpie_snitch",
+    type: "event",
+    name: "Magpie Snitch",
+    short: "De ekster verraadt je.",
+    detail:
+      "Richt zich vaak op de Lead Fox, tenzij die slim geburrowed heeft.",
+  },
+  {
+    id: "event_paint_bomb",
+    type: "event",
+    name: "Paint-Bomb Nest",
+    short: "Nest ontploft met verf.",
+    detail: "Alle buit uit de Sack gaat terug naar de Loot Deck en wordt geschud.",
+  },
+  {
+    id: "event_hidden_nest",
+    type: "event",
+    name: "Hidden Nest",
+    short: "Geheim nest met extra buit.",
+    detail:
+      "Als precies 1 vos DASH kiest, krijgt die 4 extra loot; bij 2+ Dashers niemand.",
+  },
+  {
+    id: "event_gate_toll",
+    type: "event",
+    name: "Gate Toll",
+    short: "Tol bij de poort.",
+    detail: "Vossen in de Yard moeten loot betalen of worden gepakt.",
+  },
+];
+
+const ACTION_CARDS = [
+  {
+    id: "act_scatter",
+    type: "action",
+    name: "Scatter!",
+    short: "Niemand mag SCOUT gebruiken deze ronde.",
+    detail: "Goed om informatie te blokkeren.",
+  },
+  {
+    id: "act_den_signal",
+    type: "action",
+    name: "Den Signal",
+    short: "Beschermt één Den-kleur tegen vang-events.",
+    detail: "Red een kleur naar keuze in deze ronde.",
+  },
+  {
+    id: "act_nogo",
+    type: "action",
+    name: "No-Go Zone",
+    short: "Eén Event-positie kan niet gescout worden.",
+    detail: "Zet een gebied op slot voor SCOUT.",
+  },
+  {
+    id: "act_kick_up_dust",
+    type: "action",
+    name: "Kick Up Dust",
+    short: "Wissel willekeurige Events.",
+    detail:
+      "Verstoort het Event spoor, tenzij een Burrow Beacon alles vastzet.",
+  },
+  {
+    id: "act_burrow_beacon",
+    type: "action",
+    name: "Burrow Beacon",
+    short: "Lockt de Event Track.",
+    detail: "SHIFT en Pack Tinker werken deze ronde niet.",
+  },
+  {
+    id: "act_molting_mask",
+    type: "action",
+    name: "Molting Mask",
+    short: "Verander jouw Den-kleur willekeurig.",
+    detail: "Handig als jouw Den binnenkort gevaar loopt.",
+  },
+  {
+    id: "act_hold_still",
+    type: "action",
+    name: "Hold Still",
+    short: "Sluit de ACTIONS-fase voor nieuwe kaarten.",
+    detail:
+      "Er mogen alleen nog Countermoves gespeeld worden, plus PASS.",
+  },
+  {
+    id: "act_nose_trouble",
+    type: "action",
+    name: "Nose for Trouble",
+    short: "Voorspel het volgende Event.",
+    detail: "Bij een goede voorspelling kun je later beloning krijgen.",
+  },
+  {
+    id: "act_scent_check",
+    type: "action",
+    name: "Scent Check",
+    short: "Kijk naar de DECISION van één vos.",
+    detail:
+      "Je ziet (voor bevestiging) waar iemand voor kiest in de DECISION-fase.",
+  },
+  {
+    id: "act_follow_tail",
+    type: "action",
+    name: "Follow the Tail",
+    short: "Koppel jouw beslissing aan een andere vos.",
+    detail: "Je DECISION volgt hun keuze. Sterk voor bondjes.",
+  },
+  {
+    id: "act_alpha_call",
+    type: "action",
+    name: "Alpha Call",
+    short: "Wijzig de Lead Fox.",
+    detail: "Host-achtige actie: zet iemand anders in de spotlight.",
+  },
+  {
+    id: "act_pack_tinker",
+    type: "action",
+    name: "Pack Tinker",
+    short: "Wissel twee Events naar keuze.",
+    detail: "Doelbewuste manipulatie van de Event Track.",
+  },
+  {
+    id: "act_mask_swap",
+    type: "action",
+    name: "Mask Swap",
+    short: "Shuffle alle Den-kleuren in de Yard.",
+    detail: "Zorgt voor chaos in wie wanneer gepakt wordt.",
+  },
+  {
+    id: "act_countermove",
+    type: "action",
+    name: "Countermove",
+    short: "Reactieve kaart (placeholder).",
+    detail:
+      "Wordt later gebruikt voor coöperatieve tegenacties.",
+  },
+];
+
+const ALL_CARDS = [...LOOT_CARDS, ...EVENT_CARDS, ...ACTION_CARDS];
+
+/* ============================
+   STATE
+   ============================ */
+
+const urlParams = new URLSearchParams(window.location.search);
+const roomCode = (urlParams.get("code") || "DEMO").toUpperCase();
+
+let roomRef = null;
 let playerRef = null;
+let playersCol = null;
+let logsCol = null;
 
-let currentGame = null;
+let currentRoom = null;
 let currentPlayer = null;
+let players = []; // alle spelers (incl. ikzelf)
+let logs = [];
 
-// Feedback onder OPS-panel
-let actionFeedbackEl = null;
+let playerId = null;
+let activeTab = "rules"; // 'rules' | 'profile' | 'play' | 'log'
+let cardsFilter = "all";
 
-function ensureActionFeedbackEl() {
-  if (actionFeedbackEl) return;
-  const parent = handPanel ? handPanel.parentElement : null;
-  if (!parent) return;
+let selectedActionCardIndex = null;
+let popupType = null; // 'MOVE' | 'DECISION' | 'PLAY_CARD'
+let pendingDecisionChoice = null;
+let lastMyTurn = false;
+let isSending = false;
 
-  const p = document.createElement("p");
-  p.id = "actionFeedback";
-  p.className = "small-note";
-  p.style.marginTop = "0.5rem";
-  p.style.fontSize = "0.85rem";
-  p.style.opacity = "0.8";
+let unsubRoom = null;
+let unsubPlayers = null;
+let unsubPlayer = null;
+let unsubLogs = null;
 
-  parent.appendChild(p);
-  actionFeedbackEl = p;
+let feedbackTimeout = null;
+
+/* ============================
+   INIT
+   ============================ */
+
+document.addEventListener("DOMContentLoaded", initApp);
+
+async function initApp() {
+  dom.pillCode.textContent = `Code: ${roomCode}`;
+  dom.headerSubtitle.textContent =
+    "Voer je naam in om mee te spelen in deze raid.";
+
+  // Player ID + naam
+  const saved = loadLocalPlayer(roomCode);
+  let name = saved?.name || null;
+  let id = saved?.id || null;
+
+  if (!name) {
+    name = prompt("Je naam / fox alias:", "") || "Fox";
+  }
+  if (!id) {
+    id = `p_${Math.random().toString(36).slice(2, 8)}`;
+  }
+  playerId = id;
+
+  dom.headerSubtitle.textContent = `Je speelt als: ${name}`;
+
+  // Room + player refs
+  roomRef = doc(db, "vj_rooms", roomCode);
+  playersCol = collection(roomRef, "players");
+  logsCol = collection(roomRef, "logs");
+  playerRef = doc(playersCol, playerId);
+
+  // Room doc aanmaken/mergen
+  await setDoc(
+    roomRef,
+    {
+      code: roomCode,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  // Player doc aanmaken/mergen
+  await setDoc(
+    playerRef,
+    {
+      name,
+      joinedAt: serverTimestamp(),
+      status: "yard", // 'yard' | 'dashed' | 'caught'
+    },
+    { merge: true }
+  );
+
+  saveLocalPlayer(roomCode, { id, name });
+
+  // Realtime listeners
+  unsubRoom = onSnapshot(roomRef, (snap) => {
+    currentRoom = snap.data() || null;
+    renderRoom();
+    checkTurnChange();
+  });
+
+  unsubPlayer = onSnapshot(playerRef, (snap) => {
+    currentPlayer = snap.data() || null;
+    renderPlayer();
+    renderProfileTab();
+    renderPlayTab();
+    checkTurnChange();
+  });
+
+  unsubPlayers = onSnapshot(playersCol, (snap) => {
+    players = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    renderProfileTab();
+  });
+
+  try {
+    const q = query(logsCol, orderBy("createdAt", "asc"));
+    unsubLogs = onSnapshot(q, (snap) => {
+      logs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      renderLogTab();
+    });
+  } catch (e) {
+    console.warn("Log query niet beschikbaar", e);
+  }
+
+  // UI binds
+  bindTabs();
+  bindRulesFilter();
+  bindPlayControls();
+  bindPopupControls();
+
+  // init encyclopedie
+  renderRulesCards();
+
+  setFeedback("Verbonden. Wacht op start van het spel.");
 }
 
-function setActionFeedback(msg) {
-  ensureActionFeedbackEl();
-  if (!actionFeedbackEl) return;
+/* ============================
+   LOCAL STORAGE
+   ============================ */
 
-  if (!msg) {
-    actionFeedbackEl.textContent = "";
+function loadLocalPlayer(code) {
+  try {
+    const raw = localStorage.getItem(`vj_player_${code}`);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLocalPlayer(code, obj) {
+  try {
+    localStorage.setItem(`vj_player_${code}`, JSON.stringify(obj));
+  } catch {
+    // ignore
+  }
+}
+
+/* ============================
+   RENDER ROOM + TURN INFO
+   ============================ */
+
+function renderRoom() {
+  const r = currentRoom;
+  if (!r) {
+    dom.pillRound.textContent = "Ronde: —";
+    dom.pillPhase.textContent = "Fase: —";
     return;
   }
 
-  const time = new Date().toLocaleTimeString("nl-NL", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  const round = r.roundNumber ?? r.round ?? "—";
+  const phaseKey = r.phase || "lobby";
+  const phaseLabel = phaseKeyToLabel(phaseKey);
 
-  actionFeedbackEl.textContent = `[${time}] ${msg}`;
+  dom.pillRound.textContent = `Ronde: ${round}`;
+  dom.pillPhase.textContent = `Fase: ${phaseLabel}`;
+
+  const leadName = r.leadName || r.leadDisplay || r.leadPlayerName || "—";
+  // we zetten leadName in profile-tab, niet in header
 }
 
-/**
- * flagsRound altijd met alle standaard velden vullen.
- */
-function mergeRoundFlags(game) {
-  const base = {
-    lockEvents: false,
-    scatter: false,
-    denImmune: {},
-    noPeek: [],
-    predictions: [],
-    opsLocked: false,
-    followTail: {},
-    scentChecks: [],
-  };
-  return { ...base, ...(game.flagsRound || {}) };
-}
-
-function isInYardLocal(p) {
-  return p.inYard !== false && !p.dashed;
-}
-
-async function fetchPlayersForGame() {
-  const col = collection(db, "games", gameId, "players");
-  const snap = await getDocs(col);
-  const players = [];
-  snap.forEach((docSnap) => {
-    players.push({ id: docSnap.id, ...docSnap.data() });
-  });
-  return players;
-}
-
-async function chooseOtherPlayerPrompt(title) {
-  const players = await fetchPlayersForGame();
-  const others = players.filter(
-    (p) => p.id !== playerId && isInYardLocal(p)
-  );
-
-  if (!others.length) {
-    alert("Er zijn geen andere vossen in de Yard om te kiezen.");
-    return null;
-  }
-
-  const lines = others.map((p, idx) => `${idx + 1}. ${p.name || "Vos"}`);
-  const choiceStr = prompt(
-    `${title}\n` + lines.join("\n")
-  );
-  if (!choiceStr) return null;
-  const idx = parseInt(choiceStr, 10) - 1;
-  if (Number.isNaN(idx) || idx < 0 || idx >= others.length) {
-    alert("Ongeldige keuze.");
-    return null;
-  }
-  return others[idx];
-}
-
-async function maybeShowScentCheckInfo(game) {
-  const flags = mergeRoundFlags(game);
-  const checks = Array.isArray(flags.scentChecks) ? flags.scentChecks : [];
-  const myChecks = checks.filter((c) => c.viewerId === playerId);
-  if (!myChecks.length) return;
-
-  for (const ch of myChecks) {
-    try {
-      const pref = doc(db, "games", gameId, "players", ch.targetId);
-      const snap = await getDoc(pref);
-      if (!snap.exists()) continue;
-      const p = snap.data();
-      const name = p.name || "Vos";
-      const dec = p.decision || "(nog geen keuze)";
-      alert(`[Scent Check] ${name} heeft op dit moment DECISION: ${dec}.`);
-    } catch (err) {
-      console.error("ScentCheck peek error", err);
-    }
+function phaseKeyToLabel(phase) {
+  switch (phase) {
+    case "move_all":
+      return "MOVE";
+    case "ops":
+      return "ACTIONS";
+    case "decide":
+      return "DECISION";
+    case "reveal":
+      return "REVEAL";
+    case "end":
+      return "EIND";
+    default:
+      return "Lobby";
   }
 }
 
-function sortPlayersByJoinOrder(players) {
-  return [...players].sort((a, b) => {
-    const ao =
-      typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
-    const bo =
-      typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
-    return ao - bo;
-  });
-}
-
-if (!gameId || !playerId) {
-  if (gameStatusDiv) {
-    gameStatusDiv.textContent = "Ontbrekende game- of speler-id in de URL.";
-  }
-}
-
-function canMoveNow(game, player) {
-  if (!game || !player) return false;
-  if (game.status !== "round") return false;
-  if (game.phase !== "MOVE") return false;
-  if (game.raidEndedByRooster) return false;
-  if (player.inYard === false) return false;
-  if (player.dashed) return false;
-
-  const moved = game.movedPlayerIds || [];
-  return !moved.includes(playerId);
-}
-
-function canDecideNow(game, player) {
-  if (!game || !player) return false;
-  if (game.status !== "round") return false;
-  if (game.phase !== "DECISION") return false;
-  if (game.raidEndedByRooster) return false;
-  if (player.inYard === false) return false;
-  if (player.dashed) return false;
-  if (player.decision) return false;
-  return true;
-}
-
-function canPlayActionNow(game, player) {
-  if (!game || !player) return false;
-  if (game.status !== "round") return false;
-  if (game.phase !== "ACTIONS") return false;
-  if (game.raidEndedByRooster) return false;
-  if (player.inYard === false) return false;
-  if (player.dashed) return false;
-  return true;
-}
-
-// ⚠️ Belangrijk: gebruik playerId uit de URL, niet player.id
-function isMyOpsTurn(game) {
-  if (!game) return false;
-  if (game.phase !== "ACTIONS") return false;
-  const order = game.opsTurnOrder || [];
-  if (!order.length) return false;
-  const idx =
-    typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
-  if (idx < 0 || idx >= order.length) return false;
-  return order[idx] === playerId;
-}
-
-// === RENDERING ===
-
-function renderGame() {
-  if (!currentGame || !gameStatusDiv || !eventInfoDiv) return;
-
-  const g = currentGame;
-
-  gameStatusDiv.textContent =
-    `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
-
-  // OPS-feedback wissen zodra we uit ACTIONS gaan
-  if (g.phase !== "ACTIONS") {
-    setActionFeedback("");
-  }
-
-  // Event info alleen tonen bij REVEAL
-  eventInfoDiv.innerHTML = "";
-  const ev =
-    g.currentEventId && g.phase === "REVEAL"
-      ? getEventById(g.currentEventId)
-      : null;
-
-  if (!ev) {
-    const p = document.createElement("p");
-    p.textContent = "Nog geen Event Card onthuld (pas zichtbaar bij REVEAL).";
-    eventInfoDiv.appendChild(p);
-  } else {
-    const title = document.createElement("div");
-    title.style.fontWeight = "600";
-    title.textContent = ev.title;
-    const text = document.createElement("div");
-    text.style.fontSize = "0.9rem";
-    text.style.opacity = "0.85";
-    text.textContent = ev.text || "";
-    eventInfoDiv.appendChild(title);
-    eventInfoDiv.appendChild(text);
-  }
-
-  updateMoveButtonsState();
-  updateDecisionButtonsState();
-  renderHand();
-}
+/* ============================
+   RENDER PLAYER + PROFILE TAB
+   ============================ */
 
 function renderPlayer() {
-  if (!currentPlayer || !playerInfoDiv) return;
-
   const p = currentPlayer;
-  playerInfoDiv.innerHTML = "";
+  if (!p) return;
 
-  const nameLine = document.createElement("div");
-  nameLine.textContent = p.name || "(naam onbekend)";
-  nameLine.style.fontWeight = "600";
-  playerInfoDiv.appendChild(nameLine);
+  dom.myPlayerName.textContent = p.name || "—";
+  dom.myPlayerLabel.textContent = p.name || "—";
 
-  const colorLine = document.createElement("div");
-  colorLine.style.fontSize = "0.9rem";
-  colorLine.style.opacity = "0.85";
-  colorLine.textContent = `Den kleur: ${p.color || "nog niet toegewezen"}`;
-  playerInfoDiv.appendChild(colorLine);
+  const den = p.denColor || p.den || "None";
+  dom.myPlayerDen.textContent = `Den: ${den}`;
+  updateDenDot(dom.myPlayerCardVisual, den);
 
-  const stateLine = document.createElement("div");
-  stateLine.style.fontSize = "0.9rem";
-  stateLine.style.marginTop = "0.25rem";
+  // status badge
+  const status = p.status || "yard";
+  dom.myPlayerStatusBadge.textContent = `Status: ${status}`;
+  dom.myPlayerStatusBadge.classList.remove(
+    "badge-status-yard",
+    "badge-status-dashed",
+    "badge-status-caught"
+  );
+  if (status === "yard") dom.myPlayerStatusBadge.classList.add("badge-status-yard");
+  else if (status === "dashed")
+    dom.myPlayerStatusBadge.classList.add("badge-status-dashed");
+  else if (status === "caught")
+    dom.myPlayerStatusBadge.classList.add("badge-status-caught");
 
-  if (p.dashed) {
-    stateLine.textContent =
-      "Status: DASHED (je hebt de Yard verlaten met buit).";
-  } else if (p.inYard === false) {
-    stateLine.textContent = "Status: gevangen (niet meer in de Yard).";
-  } else {
-    stateLine.textContent = "Status: in de Yard.";
+  // loot
+  let eggs = p.lootEggs ?? p.eggs ?? 0;
+  let hens = p.lootHens ?? p.hens ?? 0;
+  let prize = p.lootPrize ?? p.prize ?? 0;
+  let points = p.lootPoints ?? p.points ?? null;
+
+  if (!points && Array.isArray(p.loot)) {
+    eggs = p.loot.filter((l) => l.t === "Egg").length;
+    hens = p.loot.filter((l) => l.t === "Hen").length;
+    prize = p.loot.filter(
+      (l) => l.t === "Prize Hen" || l.t === "Prize"
+    ).length;
+    points = p.loot.reduce((sum, l) => sum + (l.v || 0), 0);
   }
-  playerInfoDiv.appendChild(stateLine);
 
-  // Loot tonen
-  lootPanel.innerHTML = "";
-  const loot = p.loot || [];
-  if (!loot.length) {
-    lootPanel.textContent = "Nog geen buit verzameld.";
+  dom.myEggs.textContent = eggs ?? 0;
+  dom.myHens.textContent = hens ?? 0;
+  dom.myPrize.textContent = prize ?? 0;
+  dom.myPoints.textContent = points ?? 0;
+
+  const burrowUsed = !!p.burrowUsed;
+  dom.myBurrow.textContent = burrowUsed ? "gebruikt" : "ready";
+
+  dom.myFlavourText.textContent = makeFlavourText(den, status);
+
+  // score summary
+  dom.scoreSummary.innerHTML = `
+    <span>🥚 ${eggs || 0} Eggs</span>
+    <span>· 🐔 ${hens || 0} Hens</span>
+    <span>· 👑 ${prize || 0} Prize</span>
+    <span>· Totaal: ${points || 0} punten</span>
+  `;
+}
+
+function updateDenDot(cardEl, denName) {
+  if (!cardEl) return;
+  // maak of vind een dot
+  let dot = cardEl.querySelector(".den-dot");
+  if (!dot) {
+    dot = document.createElement("div");
+    dot.className = "den-dot den-none";
+    cardEl.insertBefore(dot, cardEl.firstChild);
+  }
+  dot.className = "den-dot den-none";
+  if (denName === "Red") dot.classList.add("den-red");
+  else if (denName === "Blue") dot.classList.add("den-blue");
+  else if (denName === "Green") dot.classList.add("den-green");
+  else if (denName === "Yellow") dot.classList.add("den-yellow");
+}
+
+function makeFlavourText(den, status) {
+  let base =
+    "Je bent een vos in de Yard, op jacht naar eieren en kippen. Kies je momenten goed.";
+  if (den === "Red") {
+    base =
+      "Je bent een Red Den vos: fel, impulsief en niet bang voor risico. Perfect voor brutale SNATCHES.";
+  } else if (den === "Blue") {
+    base =
+      "Je bent een Blue Den vos: rustig, observerend en strategisch. SCOUT en SHIFT passen goed bij je.";
+  } else if (den === "Green") {
+    base =
+      "Je bent een Green Den vos: flexibel en opportunistisch. Je voelt goed aan wanneer je moet DASHen.";
+  } else if (den === "Yellow") {
+    base =
+      "Je bent een Yellow Den vos: speels en onvoorspelbaar. Je leeft op chaos en gekke combo’s.";
+  }
+  if (status === "dashed") {
+    base += " Je bent al uit de Yard gerend – nu hopen dat je buit genoeg is.";
+  } else if (status === "caught") {
+    base += " Je bent gepakt in deze raid. De volgende raid is jouw comeback.";
+  }
+  return base;
+}
+
+function renderProfileTab() {
+  if (!playersCol) return;
+
+  const me = currentPlayer;
+  const others = players.filter((p) => p.id !== playerId);
+
+  dom.otherPlayersList.innerHTML = "";
+  if (!others.length) {
+    dom.noOtherPlayersMsg.style.display = "block";
   } else {
-    const list = document.createElement("div");
-    list.style.fontSize = "0.9rem";
-    loot.forEach((card, idx) => {
-      const label = card.t || "Loot";
-      const val = card.v || 0;
-      const line = document.createElement("div");
-      line.textContent = `${idx + 1}. ${label} (waarde ${val})`;
-      list.appendChild(line);
+    dom.noOtherPlayersMsg.style.display = "none";
+  }
+
+  others.forEach((p) => {
+    const btn = document.createElement("button");
+    btn.className = "player-mini-card";
+    btn.dataset.playerId = p.id;
+
+    const den = p.denColor || p.den || "None";
+    const status = p.status || "yard";
+    const denClass =
+      den === "Red"
+        ? "den-red"
+        : den === "Blue"
+        ? "den-blue"
+        : den === "Green"
+        ? "den-green"
+        : den === "Yellow"
+        ? "den-yellow"
+        : "den-none";
+
+    btn.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.4rem;">
+        <span>${p.name || "Onbekend"}</span>
+        <span class="den-dot ${denClass}"></span>
+      </div>
+      <div style="font-size:0.72rem;color:${status === "caught"
+        ? "#fca5a5"
+        : "#9ca3af"
+      };">Status: ${status}</div>
+    `;
+
+    btn.addEventListener("click", () => {
+      document
+        .querySelectorAll(".player-mini-card")
+        .forEach((c) => c.classList.remove("active"));
+      btn.classList.add("active");
+      renderOtherPlayerDetail(p);
     });
-    lootPanel.appendChild(list);
-  }
 
-  updateMoveButtonsState();
-  updateDecisionButtonsState();
-  renderHand();
-}
+    dom.otherPlayersList.appendChild(btn);
+  });
 
-function updateMoveButtonsState() {
-  if (!btnSnatch || !btnForage || !btnScout || !btnShift || !moveState) return;
-
-  if (!currentGame || !currentPlayer) {
-    btnSnatch.disabled = true;
-    btnForage.disabled = true;
-    btnScout.disabled  = true;
-    btnShift.disabled  = true;
-    moveState.textContent = "Geen game of speler geladen.";
-    return;
-  }
-
-  const g = currentGame;
-  const p = currentPlayer;
-  const canMove = canMoveNow(g, p);
-  const moved = g.movedPlayerIds || [];
-
-  btnSnatch.disabled = !canMove;
-  btnForage.disabled = !canMove;
-  btnScout.disabled  = !canMove;
-  btnShift.disabled  = !canMove;
-
-  if (!canMove) {
-    if (g.phase !== "MOVE") {
-      moveState.textContent = `Je kunt nu geen MOVE doen (fase: ${g.phase}).`;
-    } else if (p.inYard === false) {
-      moveState.textContent = "Je bent niet meer in de Yard.";
-    } else if (p.dashed) {
-      moveState.textContent =
-        "Je hebt al DASH gekozen in een eerdere ronde.";
-    } else if (moved.includes(playerId)) {
-      moveState.textContent = "Je hebt jouw MOVE voor deze ronde al gedaan.";
-    } else if (g.status !== "round") {
-      moveState.textContent = "Er is nog geen actieve ronde.";
-    } else {
-      moveState.textContent = "Je kunt nu geen MOVE doen.";
-    }
-  } else {
-    moveState.textContent =
-      "Je kunt één MOVE doen: Snatch, Forage, Scout of Shift.";
+  if (!dom.otherPlayerDetail.innerHTML.trim()) {
+    dom.otherPlayerDetail.textContent =
+      "Klik op een andere speler om zijn/haar profiel te bekijken.";
   }
 }
 
-function updateDecisionButtonsState() {
-  if (!btnLurk || !btnBurrow || !btnDash || !decisionState) return;
+function renderOtherPlayerDetail(p) {
+  const den = p.denColor || p.den || "None";
+  const status = p.status || "yard";
 
-  if (!currentGame || !currentPlayer) {
-    btnLurk.disabled = true;
-    btnBurrow.disabled = true;
-    btnDash.disabled = true;
-    decisionState.textContent = "Geen game of speler geladen.";
-    return;
+  let eggs = p.lootEggs ?? p.eggs ?? 0;
+  let hens = p.lootHens ?? p.hens ?? 0;
+  let prize = p.lootPrize ?? p.prize ?? 0;
+  let points = p.lootPoints ?? p.points ?? null;
+
+  if (!points && Array.isArray(p.loot)) {
+    eggs = p.loot.filter((l) => l.t === "Egg").length;
+    hens = p.loot.filter((l) => l.t === "Hen").length;
+    prize = p.loot.filter(
+      (l) => l.t === "Prize Hen" || l.t === "Prize"
+    ).length;
+    points = p.loot.reduce((sum, l) => sum + (l.v || 0), 0);
   }
 
-  const g = currentGame;
-  const p = currentPlayer;
+  const statusClass =
+    status === "yard"
+      ? "badge-status-yard"
+      : status === "dashed"
+      ? "badge-status-dashed"
+      : "badge-status-caught";
 
-  if (g.phase !== "DECISION") {
-    btnLurk.disabled = true;
-    btnBurrow.disabled = true;
-    btnDash.disabled = true;
-    decisionState.textContent = "DECISION is nog niet aan de beurt.";
-    return;
-  }
-
-  if (p.inYard === false) {
-    btnLurk.disabled = true;
-    btnBurrow.disabled = true;
-    btnDash.disabled = true;
-    decisionState.textContent =
-      "Je zit niet meer in de Yard en doet niet mee aan deze DECISION.";
-    return;
-  }
-
-  if (p.dashed) {
-    btnLurk.disabled = true;
-    btnBurrow.disabled = true;
-    btnDash.disabled = true;
-    decisionState.textContent =
-      "Je hebt al eerder DASH gekozen en doet niet meer mee in de Yard.";
-    return;
-  }
-
-  if (p.decision) {
-    btnLurk.disabled = true;
-    btnBurrow.disabled = true;
-    btnDash.disabled = true;
-    decisionState.textContent = `Je DECISION voor deze ronde is: ${p.decision}.`;
-    return;
-  }
-
-  const can = canDecideNow(g, p);
-  btnLurk.disabled = !can;
-  btnBurrow.disabled = !can;
-  btnDash.disabled = !can;
-
-  if (can) {
-    decisionState.textContent =
-      "Kies jouw DECISION: LURK, BURROW of DASH.";
-  } else {
-    decisionState.textContent =
-      "Je kunt nu geen DECISION kiezen.";
-  }
+  dom.otherPlayerDetail.innerHTML = `
+    <div style="display:grid;grid-template-columns:140px minmax(0,1fr);gap:0.75rem;align-items:start;">
+      <div class="card-23">
+        <div class="card-23-header">
+          <div class="card-23-title">${p.name || "—"}</div>
+          <div class="card-23-type">Den: ${den}</div>
+        </div>
+        <div class="card-23-body">
+          <span class="badge ${statusClass}">Status: ${status}</span>
+          <div style="margin-top:0.3rem;font-size:0.72rem;">
+            <div>🥚 Eggs: ${eggs || 0}</div>
+            <div>🐔 Hens: ${hens || 0}</div>
+            <div>👑 Prize: ${prize || 0}</div>
+          </div>
+        </div>
+        <div class="card-23-footer">
+          Totaal: ${points || 0} punten
+        </div>
+      </div>
+      <div style="font-size:0.8rem;">
+        <div><strong>Rol in deze raid</strong></div>
+        <div class="muted" style="margin-top:0.25rem;">
+          Deze vos speelt mee als ${den}-kleur vos met status <strong>${status}</strong>.
+          Bekijk in de Community Log welke acties deze speler heeft gedaan.
+        </div>
+      </div>
+    </div>
+  `;
 }
 
-function renderHand() {
-  if (!handPanel) return;
+/* ============================
+   PLAY TAB + TURN INFO
+   ============================ */
 
-  handPanel.innerHTML = "";
+function renderPlayTab() {
+  const r = currentRoom || {};
+  const p = currentPlayer || {};
+  const phaseKey = r.phase || "lobby";
+  const phaseLabel = phaseKeyToLabel(phaseKey);
 
-  if (!currentPlayer || !currentGame) {
-    handPanel.textContent = "Geen hand geladen.";
-    if (opsTurnInfo) opsTurnInfo.textContent = "";
-    return;
-  }
+  const { myTurn, turnLabel, hint } = computeTurnInfo();
+  dom.turnIndicator.textContent = `Fase: ${phaseLabel} · ${turnLabel}`;
+  dom.turnHint.textContent = hint;
 
-  const g = currentGame;
-  const p = currentPlayer;
-  const hand = p.hand || [];
-
-  const canPlayOverall = canPlayActionNow(g, p);
-  const myTurnOverall  = isMyOpsTurn(g);
+  // hand
+  const hand = p.handNames || p.hand || [];
+  dom.myCardsList.innerHTML = "";
 
   if (!hand.length) {
-    handPanel.textContent = "Je hebt geen Actiekaarten in je hand.";
-    if (opsTurnInfo) {
-      if (g.phase !== "ACTIONS") {
-        opsTurnInfo.textContent = "OPS-fase is nu niet actief.";
-      } else if (!canPlayOverall) {
-        opsTurnInfo.textContent =
-          "Je kunt nu geen Action Cards spelen (niet in de Yard of al gedashed).";
-      } else if (!myTurnOverall) {
-        opsTurnInfo.textContent =
-          "Niet jouw beurt in OPS – wacht tot je weer aan de beurt bent. Je kunt wel PASS kiezen als je aan de beurt bent.";
-      } else {
-        opsTurnInfo.textContent =
-          "Jij bent nu aan de beurt in OPS – je hebt geen kaarten, je kunt alleen PASS kiezen.";
+    dom.myCardsList.innerHTML =
+      '<div class="muted">Je hebt momenteel geen Action Cards in je hand.</div>';
+  } else {
+    hand.forEach((c, idx) => {
+      const name = typeof c === "string" ? c : c.name || "?";
+      const el = document.createElement("div");
+      el.className = "card-23";
+      if (idx === selectedActionCardIndex) {
+        el.classList.add("selected");
       }
-    }
-    if (btnPass) {
-      btnPass.disabled = !(canPlayOverall && myTurnOverall);
-    }
-    ensureActionFeedbackEl();
-    return;
+      el.dataset.index = String(idx);
+      el.innerHTML = `
+        <div class="card-23-header">
+          <div class="card-23-title">${name}</div>
+          <div class="card-23-type">Action</div>
+        </div>
+        <div class="card-23-body">
+          <div style="font-size:0.72rem;">
+            ${shortDescriptionForAction(name)}
+          </div>
+        </div>
+        <div class="card-23-footer">
+          <button class="btn btn-sm btn-secondary btn-full play-select-btn" data-index="${idx}">
+            Selecteer als Play Next
+          </button>
+        </div>
+      `;
+      dom.myCardsList.appendChild(el);
+    });
   }
 
-  const list = document.createElement("div");
-  list.style.display = "flex";
-  list.style.flexDirection = "column";
-  list.style.gap = "0.25rem";
+  if (selectedActionCardIndex == null || !hand[selectedActionCardIndex]) {
+    dom.selectedCardLabel.textContent = "Geselecteerde kaart: geen.";
+  } else {
+    const c = hand[selectedActionCardIndex];
+    const name = typeof c === "string" ? c : c.name || "?";
+    dom.selectedCardLabel.textContent = `Geselecteerde kaart: ${name}.`;
+  }
+}
 
-  hand.forEach((card, index) => {
-    const row = document.createElement("div");
-    row.style.display = "flex";
-    row.style.justifyContent = "space-between";
-    row.style.alignItems = "center";
+function shortDescriptionForAction(name) {
+  const card = ACTION_CARDS.find((a) => a.name === name);
+  if (card) return card.short;
+  return "Action Card – zie Speluitleg tab voor details.";
+}
 
-    const label = document.createElement("div");
-    label.textContent = `${index + 1}. ${card.name}`;
-    label.style.fontSize = "0.9rem";
+function computeTurnInfo() {
+  const r = currentRoom || {};
+  const p = currentPlayer || {};
+  const phaseKey = r.phase || "lobby";
+  const status = p.status || "yard";
+  const inYard = status === "yard";
 
-    const btn = document.createElement("button");
-    btn.textContent = "Speel";
-    btn.disabled = !(canPlayOverall && myTurnOverall);
-    btn.addEventListener("click", () => playActionCard(index));
+  let myTurn = false;
+  let turnLabel = "Beurt: —";
+  let hint = "Wacht op de host om de raid te starten.";
 
-    row.appendChild(label);
-    row.appendChild(btn);
-    list.appendChild(row);
-  });
+  if (!r.phase) {
+    return { myTurn, turnLabel, hint };
+  }
 
-  handPanel.appendChild(list);
-
-  if (opsTurnInfo) {
-    if (g.phase !== "ACTIONS") {
-      opsTurnInfo.textContent = "OPS-fase is nu niet actief.";
-    } else if (!canPlayOverall) {
-      opsTurnInfo.textContent =
-        "Je kunt nu geen Action Cards spelen (niet in de Yard of al gedashed).";
-    } else if (!myTurnOverall) {
-      opsTurnInfo.textContent =
-        "Niet jouw beurt in OPS – wacht tot je weer aan de beurt bent.";
+  if (phaseKey === "move_all") {
+    const moveDone = !!p.moveDone;
+    myTurn = inYard && !moveDone;
+    if (myTurn) {
+      turnLabel = "Jij bent aan de beurt (MOVE)";
+      hint = "Kies nu één MOVE: SNATCH / FORAGE / SCOUT / SHIFT.";
     } else {
-      opsTurnInfo.textContent =
-        "Jij bent nu aan de beurt in OPS – speel één kaart of kies PASS.";
+      turnLabel = "Beurt: andere vossen (MOVE)";
+      hint = "Je hebt je MOVE al gedaan of bent niet meer in de Yard.";
+    }
+  } else if (phaseKey === "ops") {
+    const opsTurnId = r.opsTurnPlayerId || r.opsPlayerId;
+    myTurn = inYard && opsTurnId === playerId;
+    if (myTurn) {
+      turnLabel = "Jij bent aan de beurt (ACTIONS)";
+      hint =
+        "Speel één Action Card of kies PASS. Je pop-up toont je geselecteerde kaart.";
+    } else {
+      turnLabel = "Beurt: andere vos (ACTIONS)";
+      hint =
+        "Wacht tot je aan de beurt bent. Je kunt alvast een kaart kiezen als Play Next.";
+    }
+  } else if (phaseKey === "decide") {
+    const decisionLocked = !!p.decisionLocked;
+    myTurn = inYard && !decisionLocked;
+    if (myTurn) {
+      turnLabel = "Jij bent aan de beurt (DECISION)";
+      hint = "Kies LURK / BURROW / DASH. Je keuze telt bij de REVEAL.";
+    } else {
+      turnLabel = "Beurt: andere vossen (DECISION)";
+      hint = "Je DECISION staat al vast of je bent niet meer in de Yard.";
+    }
+  } else if (phaseKey === "reveal") {
+    myTurn = false;
+    turnLabel = "REVEAL – alleen kijken";
+    hint = "Host onthult het Event en past de effecten toe.";
+  } else if (phaseKey === "end") {
+    myTurn = false;
+    turnLabel = "EIND – score";
+    hint = "Raid is voorbij. Bekijk je buit en de eindscore.";
+  }
+
+  updateTurnPill(myTurn, turnLabel);
+  return { myTurn, turnLabel, hint };
+}
+
+function updateTurnPill(myTurn, label) {
+  dom.pillTurn.textContent = label;
+  dom.pillTurn.classList.remove("pill-turn-active", "pill-turn-wait");
+  dom.pillTurn.classList.add(myTurn ? "pill-turn-active" : "pill-turn-wait");
+}
+
+function checkTurnChange() {
+  const { myTurn } = computeTurnInfo();
+  if (myTurn && !lastMyTurn) {
+    onMyTurnStart();
+  }
+  lastMyTurn = myTurn;
+}
+
+function onMyTurnStart() {
+  const r = currentRoom || {};
+  const phaseKey = r.phase || "lobby";
+
+  if (phaseKey === "move_all") {
+    openMovePopup();
+  } else if (phaseKey === "decide") {
+    openDecisionPopup();
+  } else if (phaseKey === "ops") {
+    if (selectedActionCardIndex != null) {
+      openPlayCardPopup();
+    } else {
+      setFeedback("Jij bent aan de beurt (ACTIONS). Kies een kaart of PASS.");
+    }
+  }
+}
+
+/* ============================
+   TABS + FILTERS
+   ============================ */
+
+function bindTabs() {
+  const buttons = document.querySelectorAll(".tab-button");
+  if (buttons.length === 0) {
+    // eerste keer: maak ze dynamisch gebaseerd op volgorde
+    const bar = document.querySelector(".tabbar-inner");
+    if (bar && !bar.children.length) {
+      bar.innerHTML = `
+        <button class="tab-button active" data-tab="rules">
+          <div class="tab-button-icon">📘</div>
+          <span>Speluitleg</span>
+        </button>
+        <button class="tab-button" data-tab="profile">
+          <div class="tab-button-icon">🦊</div>
+          <span>Profiel</span>
+        </button>
+        <button class="tab-button" data-tab="play">
+          <div class="tab-button-icon">🎮</div>
+          <span>Spelverloop</span>
+        </button>
+        <button class="tab-button" data-tab="log">
+          <div class="tab-button-icon">📜</div>
+          <span>Log</span>
+        </button>
+      `;
     }
   }
 
-  if (btnPass) {
-    btnPass.disabled = !(canPlayOverall && myTurnOverall);
-  }
-
-  ensureActionFeedbackEl();
-}
-
-// === Log helper ===
-
-async function logMoveAction(
-  game,
-  player,
-  choice,
-  phase = "MOVE",
-  extra = null
-) {
-  const actionsCol = collection(db, "games", gameId, "actions");
-  const payload = {
-    round: game.round || 0,
-    phase,
-    playerId,
-    playerName: player.name || "",
-    choice,
-    createdAt: serverTimestamp(),
-  };
-  if (extra) {
-    payload.extra = extra;
-  }
-
-  await addDoc(actionsCol, payload);
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase,
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"}: ${choice}`,
+  const btns = document.querySelectorAll(".tab-button");
+  btns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const tab = btn.dataset.tab;
+      setActiveTab(tab);
+    });
   });
 }
 
-// Kleine helper voor OPS-doorrotatie
-function computeNextOpsIndex(game) {
-  const order = game.opsTurnOrder || [];
-  if (!order.length) return 0;
-  const idx =
-    typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
-  return (idx + 1) % order.length;
+function setActiveTab(tab) {
+  activeTab = tab;
+
+  Object.entries(dom.tabPanels).forEach(([key, el]) => {
+    if (!el) return;
+    el.classList.toggle("active", key === tab);
+  });
+
+  document.querySelectorAll(".tab-button").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tab === tab);
+  });
 }
 
-// === MOVE acties ===
+function bindRulesFilter() {
+  if (!dom.rulesFilter) return;
+  dom.rulesFilter.addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-filter]");
+    if (!btn) return;
+    cardsFilter = btn.dataset.filter;
+    dom.rulesFilter
+      .querySelectorAll("button")
+      .forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    renderRulesCards();
+  });
+}
 
-// SNATCH: trek uit buitstapel (lootDeck), NIET uit de Sack
-async function performSnatch() {
-  if (!gameRef || !playerRef) return;
+/* ============================
+   RULES TAB – CARD GRID
+   ============================ */
 
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
+function renderRulesCards() {
+  if (!dom.rulesCardsGrid) return;
+  dom.rulesCardsGrid.innerHTML = "";
 
-  const game = gameSnap.data();
-  const player = playerSnap.data();
+  const cards =
+    cardsFilter === "loot"
+      ? LOOT_CARDS
+      : cardsFilter === "event"
+      ? EVENT_CARDS
+      : cardsFilter === "action"
+      ? ACTION_CARDS
+      : ALL_CARDS;
 
-  if (!canMoveNow(game, player)) {
-    alert("Je kunt nu geen MOVE doen.");
+  cards.forEach((c) => {
+    const el = document.createElement("div");
+    el.className = "card-23";
+    el.innerHTML = `
+      <div class="card-23-header">
+        <div class="card-23-title">${c.name}</div>
+        <div class="card-23-type">${c.type.toUpperCase()}</div>
+      </div>
+      <div class="card-23-body">
+        ${c.short}
+      </div>
+      <div class="card-23-footer">
+        ${c.detail}
+      </div>
+    `;
+    dom.rulesCardsGrid.appendChild(el);
+  });
+}
+
+/* ============================
+   LOG TAB
+   ============================ */
+
+function renderLogTab() {
+  if (!dom.logList) return;
+
+  if (!logs.length) {
+    dom.logList.innerHTML =
+      '<div class="muted">Nog geen gebeurtenissen in deze raid.</div>';
     return;
   }
 
-  const lootDeck = Array.isArray(game.lootDeck) ? [...game.lootDeck] : [];
+  dom.logList.innerHTML = "";
 
-  if (!lootDeck.length) {
-    alert("De buitstapel is leeg. Je kunt nu geen SNATCH doen.");
-    return;
+  logs.forEach((l) => {
+    const icon =
+      l.icon ||
+      (l.phase === "move_all"
+        ? "🚶"
+        : l.phase === "ops"
+        ? "🎴"
+        : l.phase === "decide"
+        ? "🤔"
+        : l.phase === "reveal"
+        ? "🐓"
+        : "•");
+
+    const round = l.round ?? l.roundNumber ?? "";
+    const phaseLabel = l.phase ? phaseKeyToLabel(l.phase) : "";
+    const who = l.playerName || l.player || "";
+
+    const item = document.createElement("div");
+    item.className = "log-item";
+    item.innerHTML = `
+      <div class="log-icon">${icon}</div>
+      <div>
+        <div class="log-text-main">${l.message || "(geen tekst)"}</div>
+        <div class="log-text-meta">
+          ${round ? `Ronde ${round} · ` : ""}${phaseLabel}${
+      who ? ` · ${who}` : ""
+    }
+        </div>
+      </div>
+    `;
+    dom.logList.appendChild(item);
+  });
+}
+
+/* ============================
+   POPUPS
+   ============================ */
+
+function bindPopupControls() {
+  if (dom.popupCloseBtn) {
+    dom.popupCloseBtn.addEventListener("click", () => closePopup());
+  }
+  if (dom.popupOverlay) {
+    dom.popupOverlay.addEventListener("click", (e) => {
+      if (e.target === dom.popupOverlay) {
+        closePopup();
+      }
+    });
+  }
+}
+
+function openPopup(type, title, bodyHtml) {
+  popupType = type;
+  if (!dom.popupOverlay) return;
+  dom.popupTitle.textContent = title;
+  dom.popupBody.innerHTML = bodyHtml;
+  dom.popupOverlay.classList.remove("hidden");
+}
+
+function closePopup() {
+  popupType = null;
+  pendingDecisionChoice = null;
+  if (!dom.popupOverlay) return;
+  dom.popupOverlay.classList.add("hidden");
+}
+
+/* MOVE POPUP */
+
+function openMovePopup() {
+  const content = `
+    <div>Je mag deze ronde precies één MOVE doen:</div>
+    <div class="popup-card-inner">
+      <div class="card-23">
+        <div class="card-23-header">
+          <div class="card-23-title">MOVE</div>
+          <div class="card-23-type">Fase</div>
+        </div>
+        <div class="card-23-body">
+          Kies één van de vier opties:<br/><br/>
+          • SNATCH – 1 loot van de Deck<br/>
+          • FORAGE – 2 Action Cards<br/>
+          • SCOUT – kijk vooruit<br/>
+          • SHIFT – wissel Events
+        </div>
+        <div class="card-23-footer">
+          Je keuze geldt voor deze ronde.
+        </div>
+      </div>
+    </div>
+    <div class="popup-actions">
+      <button class="btn btn-secondary" id="moveSnatchBtn">SNATCH</button>
+      <button class="btn btn-secondary" id="moveForageBtn">FORAGE</button>
+      <button class="btn btn-secondary" id="moveScoutBtn">SCOUT</button>
+      <button class="btn btn-secondary" id="moveShiftBtn">SHIFT</button>
+    </div>
+    <div class="popup-hint">
+      Klik op één van de knoppen. Je MOVE wordt als intent naar de host gestuurd.
+    </div>
+  `;
+  openPopup("MOVE", "Kies jouw MOVE", content);
+
+  $("#moveSnatchBtn")?.addEventListener("click", () => {
+    sendMove("SNATCH");
+    closePopup();
+  });
+  $("#moveForageBtn")?.addEventListener("click", () => {
+    sendMove("FORAGE");
+    closePopup();
+  });
+  $("#moveScoutBtn")?.addEventListener("click", () => {
+    sendMove("SCOUT");
+    closePopup();
+  });
+  $("#moveShiftBtn")?.addEventListener("click", () => {
+    sendMove("SHIFT");
+    closePopup();
+  });
+}
+
+/* DECISION POPUP */
+
+function openDecisionPopup() {
+  pendingDecisionChoice = null;
+
+  const content = `
+    <div>Kies hoe je dit Event in gaat:</div>
+    <div class="popup-card-inner">
+      <div class="card-23">
+        <div class="card-23-header">
+          <div class="card-23-title">DECISION</div>
+          <div class="card-23-type">Fase</div>
+        </div>
+        <div class="card-23-body">
+          • LURK – blijven in de Yard<br/>
+          • BURROW – éénmalig schuilen<br/>
+          • DASH – weg rennen met je buit
+        </div>
+        <div class="card-23-footer">
+          Je keuze telt bij de REVEAL.
+        </div>
+      </div>
+    </div>
+    <div class="popup-actions">
+      <button class="btn btn-secondary" id="decideLurkBtn">LURK</button>
+      <button class="btn btn-secondary" id="decideBurrowBtn">BURROW</button>
+      <button class="btn btn-primary" id="decideDashBtn">DASH</button>
+    </div>
+    <div class="popup-hint">
+      BURROW kun je maar één keer per raid gebruiken.
+    </div>
+  `;
+  openPopup("DECISION", "Kies jouw beslissing", content);
+
+  const burrowUsed = !!currentPlayer?.burrowUsed;
+  if (burrowUsed) {
+    $("#decideBurrowBtn")?.setAttribute("disabled", "true");
   }
 
-  const card = lootDeck.pop(); // bovenste kaart
-  const loot = Array.isArray(player.loot) ? [...player.loot] : [];
-  loot.push(card);
-
-  await updateDoc(playerRef, { loot });
-
-  await updateDoc(gameRef, {
-    lootDeck,
-    movedPlayerIds: arrayUnion(playerId),
-  });
-
-  await logMoveAction(game, player, "MOVE_SNATCH_FROM_DECK", "MOVE", {
-    lootCard: card,
-  });
-
-  const label = card.t || "Loot";
-  const val = card.v ?? "?";
-  setActionFeedback(
-    `SNATCH: je hebt een ${label} (waarde ${val}) uit de buitstapel getrokken.`
+  $("#decideLurkBtn")?.addEventListener("click", () =>
+    confirmDecision("LURK")
+  );
+  $("#decideBurrowBtn")?.addEventListener("click", () =>
+    confirmDecision("BURROW")
+  );
+  $("#decideDashBtn")?.addEventListener("click", () =>
+    confirmDecision("DASH")
   );
 }
 
-async function performForage() {
-  if (!gameRef || !playerRef) return;
-
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
-
-  if (!canMoveNow(game, player)) {
-    alert("Je kunt nu geen MOVE doen.");
-    return;
-  }
-
-  const actionDeck = Array.isArray(game.actionDeck)
-    ? [...game.actionDeck]
-    : [];
-  const hand = Array.isArray(player.hand) ? [...player.hand] : [];
-
-  if (!actionDeck.length) {
-    alert("De Action-deck is leeg. Er zijn geen extra kaarten meer.");
-    return;
-  }
-
-  let drawn = 0;
-  for (let i = 0; i < 2; i++) {
-    if (!actionDeck.length) break;
-    hand.push(actionDeck.pop());
-    drawn++;
-  }
-
-  await updateDoc(playerRef, { hand });
-
-  await updateDoc(gameRef, {
-    actionDeck,
-    movedPlayerIds: arrayUnion(playerId),
-  });
-
-  await logMoveAction(game, player, `MOVE_FORAGE_${drawn}cards`, "MOVE");
-}
-
-async function performScout() {
-  if (!gameRef || !playerRef) return;
-
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
-
-  if (!canMoveNow(game, player)) {
-    alert("Je kunt nu geen MOVE doen.");
-    return;
-  }
-
-  const flags = mergeRoundFlags(game);
-  if (flags.scatter) {
-    alert("Scatter! is gespeeld: niemand mag Scouten deze ronde.");
-    return;
-  }
-
-  const track = game.eventTrack || [];
-  if (!track.length) {
-    alert("Geen Event Track beschikbaar.");
-    return;
-  }
-
-  const posStr = prompt(
-    `Welke event-positie wil je scouten? (1-${track.length})`
-  );
-  if (!posStr) return;
-  const pos = parseInt(posStr, 10);
-  if (Number.isNaN(pos) || pos < 1 || pos > track.length) {
-    alert("Ongeldige positie.");
-    return;
-  }
-
-  const noPeek = flags.noPeek || [];
-  if (noPeek.includes(pos)) {
-    alert("Deze positie is geblokkeerd door een No-Go Zone.");
-    return;
-  }
-
-  const idx = pos - 1;
-  const eventId = track[idx];
-  const ev = getEventById(eventId);
-
-  alert(
-    `Je scout Event #${pos}: ` + (ev ? ev.title : eventId || "Onbekend event")
-  );
-
-  await updateDoc(gameRef, {
-    movedPlayerIds: arrayUnion(playerId),
-  });
-
-  await logMoveAction(game, player, `MOVE_SCOUT_${pos}`, "MOVE");
-}
-
-async function performShift() {
-  if (!gameRef || !playerRef) return;
-
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
-
-  if (!canMoveNow(game, player)) {
-    alert("Je kunt nu geen MOVE doen.");
-    return;
-  }
-
-  const flags = mergeRoundFlags(game);
-  if (flags.lockEvents) {
-    alert("Events zijn gelocked (Burrow Beacon). Je kunt niet meer shiften.");
-    return;
-  }
-
-  const track = game.eventTrack ? [...game.eventTrack] : [];
-  if (!track.length) {
-    alert("Geen Event Track beschikbaar.");
-    return;
-  }
-
-  const maxPos = track.length;
-  const pos1Str = prompt(`SHIFT – eerste positie (1-${maxPos})`);
-  if (!pos1Str) return;
-  const pos2Str = prompt(`SHIFT – tweede positie (1-${maxPos})`);
-  if (!pos2Str) return;
-
-  const pos1 = parseInt(pos1Str, 10);
-  const pos2 = parseInt(pos2Str, 10);
-
-  if (
-    Number.isNaN(pos1) ||
-    Number.isNaN(pos2) ||
-    pos1 < 1 ||
-    pos1 > maxPos ||
-    pos2 < 1 ||
-    pos2 > maxPos ||
-    pos1 === pos2
-  ) {
-    alert("Ongeldige posities voor SHIFT.");
-    return;
-  }
-
-  const i1 = pos1 - 1;
-  const i2 = pos2 - 1;
-
-  const tmp = track[i1];
-  track[i1] = track[i2];
-  track[i2] = tmp;
-
-  await updateDoc(gameRef, {
-    eventTrack: track,
-    movedPlayerIds: arrayUnion(playerId),
-  });
-
-  await logMoveAction(game, player, `MOVE_SHIFT_${pos1}<->${pos2}`, "MOVE");
-}
-
-// === DECISION acties ===
-
-async function selectDecision(kind) {
-  if (!gameRef || !playerRef) return;
-
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
-
-  // Eerst Scent Check info tonen, als die er is
-  await maybeShowScentCheckInfo(game);
-
-  const flags = mergeRoundFlags(game);
-  const ft = flags.followTail || {};
-  if (ft[playerId]) {
-    setActionFeedback(
-      "Follow the Tail is actief: jouw uiteindelijke DECISION zal gelijk worden aan de keuze van de gekozen vos."
-    );
-  }
-
-  if (!canDecideNow(game, player)) {
-    alert("Je kunt nu geen DECISION kiezen.");
-    return;
-  }
-
-  if (kind === "BURROW" && player.burrowUsed) {
-    alert("Je hebt BURROW al eerder gebruikt deze raid.");
-    return;
-  }
-
+function confirmDecision(choice) {
+  pendingDecisionChoice = choice;
   const label =
-    kind === "LURK"
-      ? "LURK (blijven)"
-      : kind === "BURROW"
-      ? "BURROW (schuilen)"
-      : kind === "DASH"
-      ? "DASH (wegrennen)"
-      : kind;
+    choice === "LURK"
+      ? "LURK – blijven in de Yard"
+      : choice === "BURROW"
+      ? "BURROW – éénmalig schuilen"
+      : "DASH – ren weg met je buit";
 
-  const ok = confirm(
-    `Je staat op het punt ${label} te kiezen als jouw definitieve beslissing voor deze ronde. Bevestigen?`
-  );
-  if (!ok) {
-    setActionFeedback(
-      "Je DECISION is nog niet vastgelegd – je kunt nog even nadenken."
-    );
+  const content = `
+    <div>Je hebt gekozen voor:</div>
+    <div class="popup-card-inner">
+      <div class="card-23">
+        <div class="card-23-header">
+          <div class="card-23-title">${choice}</div>
+          <div class="card-23-type">Bevestigen</div>
+        </div>
+        <div class="card-23-body">
+          ${label}
+        </div>
+        <div class="card-23-footer">
+          Deze keuze geldt voor dit Event.
+        </div>
+      </div>
+    </div>
+    <div class="popup-actions">
+      <button class="btn btn-primary" id="confirmDecisionBtn">Spelen</button>
+      <button class="btn btn-secondary" id="changeDecisionBtn">Toch wijzigen</button>
+    </div>
+  `;
+  openPopup("DECISION_CONFIRM", "Bevestig je beslissing", content);
+
+  $("#confirmDecisionBtn")?.addEventListener("click", () => {
+    if (pendingDecisionChoice) {
+      sendDecision(pendingDecisionChoice);
+    }
+    closePopup();
+  });
+
+  $("#changeDecisionBtn")?.addEventListener("click", () => {
+    openDecisionPopup();
+  });
+}
+
+/* PLAY CARD POPUP */
+
+function openPlayCardPopup() {
+  const p = currentPlayer || {};
+  const hand = p.handNames || p.hand || [];
+  if (selectedActionCardIndex == null || !hand[selectedActionCardIndex]) {
+    setFeedback("Geen kaart geselecteerd als Play Next.");
     return;
   }
 
-  const update = {
-    decision: kind,
-  };
-  if (kind === "BURROW" && !player.burrowUsed) {
-    update.burrowUsed = true;
-  }
+  const card = hand[selectedActionCardIndex];
+  const name = typeof card === "string" ? card : card.name || "?";
+  const short = shortDescriptionForAction(name);
 
-  await updateDoc(playerRef, update);
+  const content = `
+    <div>Je hebt deze kaart klaargezet als Play Next:</div>
+    <div class="popup-card-inner">
+      <div class="card-23">
+        <div class="card-23-header">
+          <div class="card-23-title">${name}</div>
+          <div class="card-23-type">Action Card</div>
+        </div>
+        <div class="card-23-body">
+          ${short}
+        </div>
+        <div class="card-23-footer">
+          Je mag in je beurt precies één Action Card spelen.
+        </div>
+      </div>
+    </div>
+    <div class="popup-actions">
+      <button class="btn btn-primary" id="playCardNowBtn">Spelen</button>
+      <button class="btn btn-secondary" id="changeCardBtn">Wijzigen</button>
+      <button class="btn btn-ghost" id="skipCardBtn">Overslaan (PASS)</button>
+    </div>
+  `;
+  openPopup("PLAY_CARD", "Action spelen", content);
 
-  await logMoveAction(game, player, `DECISION_${kind}`, "DECISION");
+  $("#playCardNowBtn")?.addEventListener("click", () => {
+    sendOps(name);
+    closePopup();
+  });
+  $("#changeCardBtn")?.addEventListener("click", () => {
+    closePopup();
+  });
+  $("#skipCardBtn")?.addEventListener("click", () => {
+    sendOps("PASS");
+    closePopup();
+  });
 }
 
-// === OPS / Action kaarten ===
+/* ============================
+   PLAY TAB – CONTROLS
+   ============================ */
 
-async function playActionCard(index) {
-  if (!gameRef || !playerRef) return;
-
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
-
-  if (!canPlayActionNow(game, player)) {
-    alert("Je kunt nu geen Actiekaarten spelen.");
-    return;
+function bindPlayControls() {
+  if (dom.myCardsList) {
+    dom.myCardsList.addEventListener("click", (e) => {
+      const btn = e.target.closest(".play-select-btn");
+      if (!btn) return;
+      const idx = parseInt(btn.dataset.index, 10);
+      if (Number.isNaN(idx)) return;
+      selectedActionCardIndex = idx;
+      renderPlayTab();
+    });
   }
 
-  if (!isMyOpsTurn(game)) {
-    alert("Je bent niet aan de beurt in de OPS-fase.");
-    return;
+  if (dom.btnPlayNext) {
+    dom.btnPlayNext.addEventListener("click", () => {
+      const p = currentPlayer || {};
+      const hand = p.handNames || p.hand || [];
+      if (
+        selectedActionCardIndex == null ||
+        !hand[selectedActionCardIndex]
+      ) {
+        setFeedback("Selecteer eerst een kaart in je hand.");
+        return;
+      }
+
+      const { myTurn } = computeTurnInfo();
+      if (myTurn && (currentRoom?.phase === "ops")) {
+        openPlayCardPopup();
+      } else {
+        setFeedback(
+          "Kaart ingesteld als Play Next. Als je aan de beurt bent, verschijnt de pop-up."
+        );
+      }
+    });
   }
-
-  const hand = Array.isArray(player.hand) ? [...player.hand] : [];
-  if (index < 0 || index >= hand.length) return;
-
-  const card = hand[index];
-  const cardName = card.name;
-
-  // Check Hold Still: alleen Countermove mag nog gespeeld worden
-  const flagsBefore = mergeRoundFlags(game);
-  if (flagsBefore.opsLocked && cardName !== "Countermove") {
-    alert(
-      "Hold Still is actief: er mogen geen nieuwe Action Cards meer worden gespeeld, behalve Countermove."
-    );
-    setActionFeedback(
-      "Hold Still is actief – je kunt alleen Countermove spelen of PASS."
-    );
-    return;
-  }
-
-  // Probeer het effect eerst uit te voeren; alleen bij succes verdwijnt de kaart uit je hand
-  let executed = false;
-
-  switch (cardName) {
-    case "Scatter!":
-      executed = await playScatter(game, player);
-      break;
-    case "Den Signal":
-      executed = await playDenSignal(game, player);
-      break;
-    case "No-Go Zone":
-      executed = await playNoGoZone(game, player);
-      break;
-    case "Kick Up Dust":
-      executed = await playKickUpDust(game, player);
-      break;
-    case "Burrow Beacon":
-      executed = await playBurrowBeacon(game, player);
-      break;
-    case "Molting Mask":
-      executed = await playMoltingMask(game, player);
-      break;
-    case "Hold Still":
-      executed = await playHoldStill(game, player);
-      break;
-    case "Nose for Trouble":
-      executed = await playNoseForTrouble(game, player);
-      break;
-    case "Scent Check":
-      executed = await playScentCheck(game, player);
-      break;
-    case "Follow the Tail":
-      executed = await playFollowTail(game, player);
-      break;
-    case "Alpha Call":
-      executed = await playAlphaCall(game, player);
-      break;
-    case "Pack Tinker":
-      executed = await playPackTinker(game, player);
-      break;
-    case "Mask Swap":
-      executed = await playMaskSwap(game, player);
-      break;
-    case "Countermove":
-      executed = await playCountermove(game, player);
-      break;
-    default:
-      alert(
-        "Deze kaart is nog niet volledig geïmplementeerd in de online versie. Gebruik eventueel de fysieke regels als huisregel."
-      );
-      executed = false;
-      break;
-  }
-
-  if (!executed) {
-    setActionFeedback(
-      `De kaart "${cardName}" kon nu niet worden gespeeld. Hij blijft in je hand.`
-    );
-    return;
-  }
-
-  // kaart uit de hand halen, loggen en beurt doorgeven
-  hand.splice(index, 1);
-  await updateDoc(playerRef, { hand });
-
-  await logMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
-
-  const nextIndex = computeNextOpsIndex(game);
-  await updateDoc(gameRef, {
-    opsTurnIndex: nextIndex,
-    opsConsecutivePasses: 0,
-  });
-
-  setActionFeedback(
-    `Je speelde "${cardName}". Het effect is uitgevoerd (zie ook de Community log).`
-  );
 }
 
-async function passAction() {
-  if (!gameRef || !playerRef) return;
+/* ============================
+   FIRESTORE – INTENTS
+   ============================ */
 
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
+async function sendIntent(kind, payload = {}) {
+  if (!roomRef || !playerRef || !currentPlayer) return;
+  if (isSending) return;
 
-  const game = gameSnap.data();
-  const player = playerSnap.data();
-
-  if (!canPlayActionNow(game, player)) {
-    alert("Je kunt nu geen PASS doen in deze fase.");
-    return;
-  }
-
-  if (!isMyOpsTurn(game)) {
-    alert("Je bent niet aan de beurt in de OPS-fase.");
-    return;
-  }
-
-  const nextIndex = computeNextOpsIndex(game);
-  const newPasses = (game.opsConsecutivePasses || 0) + 1;
-
-  await updateDoc(gameRef, {
-    opsTurnIndex: nextIndex,
-    opsConsecutivePasses: newPasses,
-  });
-
-  await logMoveAction(game, player, "ACTION_PASS", "ACTIONS");
-
-  setActionFeedback(
-    "Je hebt PASS gekozen. Als de ronde omgaat en iemand weer een kaart speelt, kun je later opnieuw meedoen."
-  );
-}
-
-// Scatter! – niemand mag Scouten deze ronde
-async function playScatter(game, player) {
-  const flags = mergeRoundFlags(game);
-  flags.scatter = true;
-
-  await updateDoc(gameRef, {
-    flagsRound: flags,
-  });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Scatter! – niemand mag Scouten deze ronde.`,
-  });
-
-  setActionFeedback(
-    "Scatter! is actief – niemand mag Scouten deze ronde."
-  );
-
-  return true;
-}
-
-// Den Signal – 1 Den kleur immuun
-async function playDenSignal(game, player) {
-  const colorInput = prompt(
-    "Den Signal – welke Den kleur wil je beschermen? (RED / BLUE / GREEN / YELLOW)"
-  );
-  if (!colorInput) return false;
-  const color = colorInput.trim().toUpperCase();
-  if (!["RED", "BLUE", "GREEN", "YELLOW"].includes(color)) {
-    alert("Ongeldige kleur.");
-    return false;
-  }
-
-  const flags = mergeRoundFlags(game);
-
-  flags.denImmune = flags.denImmune || {};
-  flags.denImmune[color] = true;
-
-  await updateDoc(gameRef, {
-    flagsRound: flags,
-  });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Den Signal – Den ${color} is immuun voor vang-events deze ronde.`,
-  });
-
-  setActionFeedback(
-    `Den Signal: Den ${color} is immuun voor vang-events deze ronde.`
-  );
-
-  return true;
-}
-
-// No-Go Zone – blokkeer 1 eventpositie voor Scout
-async function playNoGoZone(game, player) {
-  const track = game.eventTrack || [];
-  if (!track.length) {
-    alert("Geen Event Track beschikbaar.");
-    return false;
-  }
-
-  const maxPos = track.length;
-  const posStr = prompt(`No-Go Zone – blokkeer een eventpositie (1-${maxPos})`);
-  if (!posStr) return false;
-  const pos = parseInt(posStr, 10);
-  if (Number.isNaN(pos) || pos < 1 || pos > maxPos) {
-    alert("Ongeldige positie.");
-    return false;
-  }
-
-  const flags = mergeRoundFlags(game);
-
-  const noPeek = flags.noPeek || [];
-  if (!noPeek.includes(pos)) noPeek.push(pos);
-  flags.noPeek = noPeek;
-
-  await updateDoc(gameRef, {
-    flagsRound: flags,
-  });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt No-Go Zone – Scouten op positie ${pos} is verboden.`,
-  });
-
-  setActionFeedback(
-    `No-Go Zone: positie ${pos} kan deze ronde niet gescout worden.`
-  );
-
-  return true;
-}
-
-// Kick Up Dust – twee events random wisselen
-async function playKickUpDust(game, player) {
-  const flags = mergeRoundFlags(game);
-  if (flags.lockEvents) {
-    alert(
-      "Burrow Beacon is actief – de Event Track is gelocked en kan niet meer veranderen."
-    );
-    return false;
-  }
-
-  const track = game.eventTrack ? [...game.eventTrack] : [];
-  if (track.length < 2) {
-    alert("Te weinig events om te shuffelen.");
-    return false;
-  }
-
-  const i1 = Math.floor(Math.random() * track.length);
-  let i2 = Math.floor(Math.random() * track.length);
-  if (i2 === i1) {
-    i2 = (i2 + 1) % track.length;
-  }
-
-  const tmp = track[i1];
-  track[i1] = track[i2];
-  track[i2] = tmp;
-
-  await updateDoc(gameRef, {
-    eventTrack: track,
-  });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Kick Up Dust – twee events wisselen willekeurig van plek.`,
-  });
-
-  setActionFeedback(
-    "Kick Up Dust: twee Event Cards hebben van positie gewisseld."
-  );
-
-  return true;
-}
-
-// Burrow Beacon – Event Track kan niet meer veranderen
-async function playBurrowBeacon(game, player) {
-  const flags = mergeRoundFlags(game);
-  flags.lockEvents = true;
-
-  await updateDoc(gameRef, {
-    flagsRound: flags,
-  });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Burrow Beacon – Event Track kan deze ronde niet meer veranderen.`,
-  });
-
-  setActionFeedback(
-    "Burrow Beacon: de Event Track is gelocked – geen SHIFT of schudden meer deze ronde."
-  );
-
-  return true;
-}
-
-// Molting Mask – nieuwe Den kleur (simpele digitale variant)
-async function playMoltingMask(game, player) {
-  const colors = ["RED", "BLUE", "GREEN", "YELLOW"];
-  const current = (player.color || "").toUpperCase();
-  const pool = colors.filter((c) => c !== current);
-  const newColor =
-    pool.length > 0
-      ? pool[Math.floor(Math.random() * pool.length)]
-      : colors[Math.floor(Math.random() * colors.length)];
-
-  await updateDoc(playerRef, { color: newColor });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Molting Mask – nieuwe Den kleur: ${newColor}.`,
-  });
-
-  setActionFeedback(
-    `Molting Mask: je Den kleur is nu ${newColor}.`
-  );
-
-  return true;
-}
-
-// Hold Still – lockt OPS: alleen Countermove mag nog
-async function playHoldStill(game, player) {
-  const flags = mergeRoundFlags(game);
-  flags.opsLocked = true;
-
-  await updateDoc(gameRef, {
-    flagsRound: flags,
-  });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message:
-      `${player.name || "Speler"} speelt Hold Still – geen nieuwe Action Cards meer deze ronde, behalve Countermove.`,
-  });
-
-  setActionFeedback(
-    "Hold Still is actief – alleen Countermove mag nog gespeeld worden, of PASS."
-  );
-
-  return true;
-}
-
-// Nose for Trouble – voorspel het volgende Event
-async function playNoseForTrouble(game, player) {
-  const track = game.eventTrack || [];
-  if (!track.length) {
-    alert("Geen Event Track beschikbaar.");
-    return false;
-  }
-
-  // unieklijst van eventIds op de track
-  const uniqueIds = [...new Set(track)];
-  const menuLines = uniqueIds.map((id, idx) => {
-    const ev = getEventById(id);
-    const title = ev ? ev.title : id;
-    return `${idx + 1}. ${title}`;
-  });
-
-  const choiceStr = prompt(
-    "Nose for Trouble – kies het volgende Event dat je verwacht:\n" +
-      menuLines.join("\n")
-  );
-  if (!choiceStr) return false;
-  const idx = parseInt(choiceStr, 10) - 1;
-  if (Number.isNaN(idx) || idx < 0 || idx >= uniqueIds.length) {
-    alert("Ongeldige keuze.");
-    return false;
-  }
-
-  const chosenId = uniqueIds[idx];
-  const ev = getEventById(chosenId);
-
-  const flags = mergeRoundFlags(game);
-  const preds = Array.isArray(flags.predictions)
-    ? [...flags.predictions]
-    : [];
-  preds.push({
-    playerId,
-    eventId: chosenId,
-  });
-  flags.predictions = preds;
-
-  await updateDoc(gameRef, {
-    flagsRound: flags,
-  });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Nose for Trouble – voorspelt: ${
-      ev ? ev.title : chosenId
-    }.`,
-  });
-
-  setActionFeedback(
-    `Nose for Trouble: je hebt "${ev ? ev.title : chosenId}" voorspeld als volgende Event.`
-  );
-
-  return true;
-}
-
-// Scent Check – kijk naar DECISION van 1 speler en koppel voor deze ronde
-async function playScentCheck(game, player) {
-  const target = await chooseOtherPlayerPrompt(
-    "Scent Check – kies een vos om te besnuffelen"
-  );
-  if (!target) return false;
-
-  // Directe peek, als er al een DECISION is
   try {
-    const pref = doc(db, "games", gameId, "players", target.id);
-    const snap = await getDoc(pref);
-    if (snap.exists()) {
-      const t = snap.data();
-      const dec = t.decision || "(nog geen keuze)";
-      alert(
-        `[Scent Check] ${t.name || "Vos"} heeft op dit moment DECISION: ${dec}.`
-      );
-    }
-  } catch (err) {
-    console.error("ScentCheck immediate peek error", err);
+    isSending = true;
+    const movesCol = collection(roomRef, "moves");
+    await addDoc(movesCol, {
+      kind, // 'MOVE' | 'OPS' | 'DECISION'
+      payload,
+      playerId,
+      playerName: currentPlayer.name || null,
+      phase: currentRoom?.phase || null,
+      createdAt: serverTimestamp(),
+      resolved: false,
+    });
+  } catch (e) {
+    console.error(e);
+    setFeedback("Fout bij verzenden van actie. Probeer opnieuw.");
+  } finally {
+    isSending = false;
   }
-
-  const flags = mergeRoundFlags(game);
-  const list = Array.isArray(flags.scentChecks)
-    ? [...flags.scentChecks]
-    : [];
-  list.push({
-    viewerId: playerId,
-    targetId: target.id,
-  });
-  flags.scentChecks = list;
-
-  await updateDoc(gameRef, {
-    flagsRound: flags,
-  });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Scent Check op ${
-      target.name || "een vos"
-    }.`,
-  });
-
-  setActionFeedback(
-    `Scent Check: je volgt deze ronde de beslissingen van ${target.name || "de gekozen vos"} van dichtbij.`
-  );
-
-  return true;
 }
 
-// Follow the Tail – jouw DECISION volgt die van een andere speler
-async function playFollowTail(game, player) {
-  const target = await chooseOtherPlayerPrompt(
-    "Follow the Tail – kies een vos om te volgen"
-  );
-  if (!target) return false;
-
-  const flags = mergeRoundFlags(game);
-  const ft = flags.followTail || {};
-  ft[playerId] = target.id;
-  flags.followTail = ft;
-
-  await updateDoc(gameRef, {
-    flagsRound: flags,
-  });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Follow the Tail en volgt de keuze van ${
-      target.name || "een vos"
-    }.`,
-  });
-
-  setActionFeedback(
-    `Follow the Tail: jouw uiteindelijke DECISION zal gelijk zijn aan die van ${target.name || "de gekozen vos"}.`
-  );
-
-  return true;
+async function sendMove(moveType) {
+  await sendIntent("MOVE", { moveType });
+  setFeedback(`MOVE ${moveType} verstuurd.`);
 }
 
-// Alpha Call – kies een nieuwe Lead Fox
-async function playAlphaCall(game, player) {
-  const players = await fetchPlayersForGame();
-  const ordered = sortPlayersByJoinOrder(players);
-
-  if (!ordered.length) {
-    alert("Geen spelers gevonden om Lead Fox van te maken.");
-    return false;
-  }
-
-  const lines = ordered.map((p, idx) => `${idx + 1}. ${p.name || "Vos"}`);
-  const choiceStr = prompt(
-    "Alpha Call – kies wie de nieuwe Lead Fox wordt:\n" + lines.join("\n")
-  );
-  if (!choiceStr) return false;
-  const idx = parseInt(choiceStr, 10) - 1;
-  if (Number.isNaN(idx) || idx < 0 || idx >= ordered.length) {
-    alert("Ongeldige keuze.");
-    return false;
-  }
-
-  const newLead = ordered[idx];
-
-  await updateDoc(gameRef, {
-    leadIndex: idx,
-  });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Alpha Call – Lead Fox wordt nu ${
-      newLead.name || "een vos"
-    }.`,
-  });
-
-  setActionFeedback(
-    `Alpha Call: Lead Fox is nu ${newLead.name || "de gekozen vos"}.`
-  );
-
-  return true;
+async function sendOps(actionType) {
+  await sendIntent("OPS", { actionType });
+  setFeedback(`Action ${actionType} verstuurd.`);
 }
 
-// Pack Tinker – wissel 2 Event-posities naar keuze
-async function playPackTinker(game, player) {
-  const flags = mergeRoundFlags(game);
-  if (flags.lockEvents) {
-    alert(
-      "Burrow Beacon is actief – de Event Track is gelocked en kan niet meer veranderen."
-    );
-    return false;
-  }
-
-  const track = game.eventTrack ? [...game.eventTrack] : [];
-  if (!track.length) {
-    alert("Geen Event Track beschikbaar.");
-    return false;
-  }
-
-  const maxPos = track.length;
-  const p1Str = prompt(`Pack Tinker – eerste eventpositie (1-${maxPos})`);
-  if (!p1Str) return false;
-  const p2Str = prompt(`Pack Tinker – tweede eventpositie (1-${maxPos})`);
-  if (!p2Str) return false;
-
-  const pos1 = parseInt(p1Str, 10);
-  const pos2 = parseInt(p2Str, 10);
-  if (
-    Number.isNaN(pos1) ||
-    Number.isNaN(pos2) ||
-    pos1 < 1 ||
-    pos1 > maxPos ||
-    pos2 < 1 ||
-    pos2 > maxPos ||
-    pos1 === pos2
-  ) {
-    alert("Ongeldige posities voor Pack Tinker.");
-    return false;
-  }
-
-  const i1 = pos1 - 1;
-  const i2 = pos2 - 1;
-
-  const tmp = track[i1];
-  track[i1] = track[i2];
-  track[i2] = tmp;
-
-  await updateDoc(gameRef, {
-    eventTrack: track,
-  });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Pack Tinker – events op posities ${pos1} en ${pos2} wisselen van plek.`,
-  });
-
-  setActionFeedback(
-    `Pack Tinker: je hebt events op posities ${pos1} en ${pos2} gewisseld.`
-  );
-
-  return true;
+async function sendDecision(decisionType) {
+  await sendIntent("DECISION", { decisionType });
+  setFeedback(`Decision ${decisionType} verstuurd.`);
 }
 
-// Mask Swap – shuffle alle Den-kleuren van vossen in de Yard
-async function playMaskSwap(game, player) {
-  const players = await fetchPlayersForGame();
-  const inYard = players.filter(isInYardLocal);
+/* ============================
+   FEEDBACK TOAST
+   ============================ */
 
-  if (inYard.length < 2) {
-    alert("Te weinig vossen in de Yard om Mask Swap uit te voeren.");
-    return false;
-  }
-
-  const colors = inYard.map((p) => (p.color || "").toUpperCase());
-  // eenvoudige shuffle
-  for (let i = colors.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [colors[i], colors[j]] = [colors[j], colors[i]];
-  }
-
-  const updates = [];
-  inYard.forEach((p, idx) => {
-    const pref = doc(db, "games", gameId, "players", p.id);
-    updates.push(updateDoc(pref, { color: colors[idx] || null }));
-  });
-  await Promise.all(updates);
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Mask Swap – alle Den-kleuren in de Yard worden gehusseld.`,
-  });
-
-  setActionFeedback(
-    "Mask Swap: Den-kleuren van alle vossen in de Yard zijn gehusseld."
-  );
-
-  return true;
+function setFeedback(msg) {
+  if (!dom.feedbackToast || !dom.feedbackText) return;
+  dom.feedbackText.textContent = msg;
+  dom.feedbackToast.classList.add("visible");
+  if (feedbackTimeout) clearTimeout(feedbackTimeout);
+  feedbackTimeout = setTimeout(() => {
+    dom.feedbackToast.classList.remove("visible");
+  }, 5000);
 }
-
-// Countermove – voorlopig simpele versie, telt wel als gespeelde kaart
-async function playCountermove(game, player) {
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Countermove (digitale effect nog niet actief).`,
-  });
-
-  setActionFeedback(
-    "Countermove gespeeld – in deze versie nog zonder automatisch tegen-effect (gebruik eventueel een huisregel)."
-  );
-
-  return true;
-}
-
-// === INIT ===
-
-initAuth(async () => {
-  if (!gameId || !playerId) return;
-
-  gameRef = doc(db, "games", gameId);
-  playerRef = doc(db, "games", gameId, "players", playerId);
-
-  onSnapshot(gameRef, (snap) => {
-    if (!snap.exists()) {
-      if (gameStatusDiv) gameStatusDiv.textContent = "Spel niet gevonden.";
-      return;
-    }
-    currentGame = { id: snap.id, ...snap.data() };
-    renderGame();
-  });
-
-  onSnapshot(playerRef, (snap) => {
-    if (!snap.exists()) {
-      if (playerInfoDiv) playerInfoDiv.textContent = "Speler niet gevonden.";
-      return;
-    }
-    currentPlayer = { id: snap.id, ...snap.data() };
-    renderPlayer();
-  });
-
-  btnSnatch.addEventListener("click", performSnatch);
-  btnForage.addEventListener("click", performForage);
-  btnScout.addEventListener("click", performScout);
-  btnShift.addEventListener("click", performShift);
-
-  btnLurk.addEventListener("click", () => selectDecision("LURK"));
-  btnBurrow.addEventListener("click", () => selectDecision("BURROW"));
-  btnDash.addEventListener("click", () => selectDecision("DASH"));
-
-  btnPass.addEventListener("click", passAction);
-});
