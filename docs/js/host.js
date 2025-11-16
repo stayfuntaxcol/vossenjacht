@@ -2,7 +2,6 @@ import { initAuth } from "./firebase.js";
 import { getEventById } from "./cards.js";
 import { addLog } from "./log.js";
 import { resolveAfterReveal } from "./engine.js";
-import { getEventById, getLootImageForType, CARD_BACK, } from "./cards.js";
 import {
   getFirestore,
   doc,
