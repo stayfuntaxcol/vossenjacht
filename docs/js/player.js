@@ -2,6 +2,7 @@
 import { initAuth } from "./firebase.js";
 import { addLog } from "./log.js";
 import { getEventById } from "./cards.js";
+import { renderEventCard, renderActionCard, renderLootCard } from "./cardRenderer.js";
 import {
   getFirestore,
   doc,
@@ -284,7 +285,35 @@ function renderGame() {
     gameStatusDiv.textContent = `Game ${gameId} · Ronde ${round} · Fase: ${phase}`;
   }
 
-  renderEventInfo();
+function renderEventInfo() {
+  if (!eventInfoDiv || !currentGame) return;
+  const g = currentGame;
+
+  eventInfoDiv.innerHTML = "";
+
+  if (!Array.isArray(g.eventTrack) || g.eventTrack.length === 0) {
+    eventInfoDiv.textContent = "Geen event track geladen.";
+    return;
+  }
+
+  const idx =
+    typeof g.currentEventIndex === "number" ? g.currentEventIndex : 0;
+  const currentEventId = g.eventTrack[idx];
+  if (!currentEventId) {
+    eventInfoDiv.textContent = "Geen huidig event geselecteerd.";
+    return;
+  }
+
+  const cardEl = renderEventCard(currentEventId, { size: "large" });
+  if (!cardEl) {
+    eventInfoDiv.textContent = currentEventId;
+    return;
+  }
+
+  eventInfoDiv.appendChild(cardEl);
+}
+
+  
   updateMoveButtonsState();
   updateDecisionButtonsState();
   updateOpsState();
