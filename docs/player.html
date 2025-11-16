@@ -2,992 +2,280 @@
 <html lang="nl">
 <head>
   <meta charset="UTF-8" />
-  <title>Vossenjacht – Player App</title>
+  <title>Vossenjacht – Spelerscherm</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="./css/style.css" />
 
+  <!-- Extra styles alleen voor tabs + layout van deze player app -->
   <style>
-    :root {
-      --bg: #020617;
-      --bg-soft: #0b1120;
-      --panel: #020617;
-      --panel-soft: #0f172a;
-      --accent: #4f46e5;
-      --accent-soft: #1e293b;
-      --danger: #ef4444;
-      --success: #22c55e;
-      --muted: #9ca3af;
-
-      --radius-xl: 18px;
-      --radius-lg: 14px;
-      --radius-md: 10px;
-
-      --gap-lg: 24px;
-      --gap-md: 16px;
-      --gap-sm: 8px;
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
-      margin: 0;
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-        sans-serif;
-      background: radial-gradient(circle at top, #0b1120, #020617);
-      color: #e5e7eb;
-    }
-
-    .app-shell {
-      max-width: 1100px;
-      margin: 0 auto;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      padding: 0.75rem 1rem 4rem;
-    }
-
-    /* HEADER */
-
-    .app-header {
-      display: flex;
-      justify-content: space-between;
-      gap: 1rem;
-      align-items: flex-start;
-      margin-bottom: 0.75rem;
-    }
-
-    .header-left {
-      display: flex;
-      flex-direction: column;
-      gap: 0.2rem;
-    }
-
-    .game-title {
-      font-size: 1.1rem;
-      font-weight: 600;
-    }
-
-    .game-subtitle {
-      font-size: 0.85rem;
-      color: var(--muted);
-    }
-
-    .header-right {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.4rem;
-      justify-content: flex-end;
-    }
-
-    .pill {
-      border-radius: 999px;
-      padding: 0.18rem 0.7rem;
-      font-size: 0.78rem;
-      border: 1px solid rgba(148, 163, 184, 0.65);
-      background: rgba(15, 23, 42, 0.9);
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-      white-space: nowrap;
-    }
-
-    .pill-phase {
-      border-color: rgba(129, 140, 248, 0.9);
-      background: radial-gradient(circle at top, #4f46e5, #1e293b);
-    }
-
-    .pill-turn-active {
-      border-color: rgba(34, 197, 94, 0.9);
-      background: radial-gradient(circle at top, #22c55e, #14532d);
-    }
-
-    .pill-turn-wait {
-      border-color: rgba(148, 163, 184, 0.7);
-      background: rgba(15, 23, 42, 0.9);
-    }
-
-    /* MAIN */
-
-    .app-main {
-      flex: 1;
-      margin-top: 0.5rem;
-    }
-
-    .tab-panel {
+    /* Tabs basis */
+    .vj-tab-panel {
       display: none;
-      animation: fadeIn 0.15s ease-out;
     }
-
-    .tab-panel.active {
+    .vj-tab-panel.active {
       display: block;
     }
 
-    @keyframes fadeIn {
-      from {
-        opacity: 0;
-        transform: translateY(4px);
-      }
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
+    /* Body extra ruimte voor tabbar onderaan */
+    body.player-screen {
+      padding-bottom: 64px;
     }
 
-    /* CARDS GENERIC */
-
-    .vj-card {
-      border-radius: var(--radius-xl);
-      padding: 0.8rem 0.9rem;
-      background: radial-gradient(circle at top, #0f172a, #020617);
-      border: 1px solid rgba(15, 23, 42, 0.9);
-      box-shadow: 0 12px 26px rgba(0, 0, 0, 0.7);
-      margin-bottom: 0.75rem;
-    }
-
-    .vj-card-soft {
-      background: radial-gradient(circle at top, #020617, #020617);
-    }
-
-    .vj-card-title {
-      font-size: 0.85rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin-bottom: 0.4rem;
-      color: #e5e7eb;
-    }
-
-    .vj-card-body {
-      font-size: 0.82rem;
-      color: #e5e7eb;
-    }
-
-    .muted {
-      color: var(--muted);
-      font-size: 0.8rem;
-    }
-
-    .section-grid {
-      display: grid;
-      grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.1fr);
-      gap: var(--gap-lg);
-    }
-
-    @media (max-width: 900px) {
-      .section-grid {
-        grid-template-columns: minmax(0, 1fr);
-      }
-
-      .app-shell {
-        padding-inline: 0.75rem;
-      }
-
-      .app-header {
-        flex-direction: column;
-        align-items: flex-start;
-      }
-
-      .header-right {
-        justify-content: flex-start;
-      }
-    }
-
-    /* 2:3 GAME CARD PLACEHOLDERS */
-
-    .card-23 {
-      position: relative;
-      aspect-ratio: 2 / 3;
-      width: 140px;
-      max-width: 40vw;
-      border-radius: 16px;
-      padding: 0.4rem 0.45rem;
-      background: radial-gradient(circle at top, #1e293b, #020617);
-      border: 1px solid rgba(148, 163, 184, 0.7);
-      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.7);
-      display: flex;
-      flex-direction: column;
-      gap: 0.25rem;
-      font-size: 0.76rem;
-    }
-
-    .card-23-header {
-      display: flex;
-      justify-content: space-between;
-      gap: 0.25rem;
-      align-items: baseline;
-    }
-
-    .card-23-title {
-      font-weight: 600;
-      font-size: 0.78rem;
-    }
-
-    .card-23-type {
-      border-radius: 999px;
-      padding: 0.06rem 0.3rem;
-      font-size: 0.7rem;
-      border: 1px solid rgba(148, 163, 184, 0.7);
-      background: rgba(15, 23, 42, 0.9);
-      white-space: nowrap;
-    }
-
-    .card-23-body {
-      flex: 1;
-      font-size: 0.72rem;
-      color: #e5e7eb;
-    }
-
-    .card-23-footer {
-      font-size: 0.7rem;
-      color: var(--muted);
-      margin-top: auto;
-    }
-
-    .card-23.selected {
-      border-color: #facc15;
-      box-shadow: 0 0 0 2px rgba(250, 204, 21, 0.6);
-    }
-
-    .card-grid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.6rem;
-    }
-
-    /* BUTTONS */
-
-    .btn {
-      border-radius: 999px;
-      padding: 0.35rem 0.9rem;
-      border: none;
-      font-size: 0.8rem;
-      font-weight: 500;
-      cursor: pointer;
-      white-space: nowrap;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      transition: transform 0.08s ease, box-shadow 0.08s ease,
-        background 0.08s ease, opacity 0.06s ease;
-    }
-
-    .btn-primary {
-      background: #4f46e5;
-      color: #e5e7eb;
-      box-shadow: 0 6px 14px rgba(79, 70, 229, 0.55);
-    }
-
-    .btn-primary:hover:not(:disabled) {
-      background: #4338ca;
-      transform: translateY(-1px);
-    }
-
-    .btn-secondary {
-      background: #0f172a;
-      color: #e5e7eb;
-      border: 1px solid rgba(148, 163, 184, 0.6);
-    }
-
-    .btn-secondary:hover:not(:disabled) {
-      background: #1e293b;
-      transform: translateY(-1px);
-    }
-
-    .btn-ghost {
-      background: transparent;
-      color: var(--muted);
-      border: 1px dashed rgba(148, 163, 184, 0.5);
-    }
-
-    .btn-ghost:hover:not(:disabled) {
-      border-style: solid;
-      color: #e5e7eb;
-    }
-
-    .btn-danger {
-      background: #b91c1c;
-      color: #fee2e2;
-    }
-
-    .btn-danger:hover:not(:disabled) {
-      background: #991b1b;
-    }
-
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: default;
-      transform: none;
-      box-shadow: none;
-    }
-
-    .btn-full {
-      width: 100%;
-      justify-content: center;
-    }
-
-    .btn-sm {
-      padding: 0.25rem 0.7rem;
-      font-size: 0.75rem;
-    }
-
-    /* TABS (NAV ONDERAAN) */
-
-    .tabbar {
+    /* Onderste tabbar */
+    .vj-tabbar {
       position: fixed;
       left: 0;
       right: 0;
       bottom: 0;
-      padding: 0.35rem 0.75rem calc(env(safe-area-inset-bottom, 0) + 0.35rem);
-      background: linear-gradient(to top, #020617, rgba(15, 23, 42, 0.98));
-      border-top: 1px solid rgba(15, 23, 42, 0.95);
+      z-index: 50;
+      padding: 0.35rem 0.6rem;
+      background: linear-gradient(to top, #020617, #020617dd);
+      border-top: 1px solid #111827;
       display: flex;
       justify-content: center;
-      z-index: 30;
     }
 
-    .tabbar-inner {
+    .vj-tabbar-inner {
       width: 100%;
-      max-width: 650px;
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      max-width: 520px;
+      display: flex;
       gap: 0.4rem;
     }
 
-    .tab-button {
-      border-radius: 999px;
+    .vj-tab-button {
+      flex: 1;
       border: none;
-      padding: 0.3rem 0.3rem;
-      background: rgba(15, 23, 42, 0.9);
+      border-radius: 999px;
+      background: #020617;
       color: #9ca3af;
       font-size: 0.75rem;
+      padding: 0.3rem 0.4rem;
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 0.15rem;
+      gap: 0.1rem;
       cursor: pointer;
-      transition: background 0.08s ease, transform 0.08s ease, color 0.08s ease;
+      transition: background 0.1s ease, color 0.1s ease, transform 0.08s ease;
     }
 
-    .tab-button span {
-      font-size: 0.7rem;
-    }
-
-    .tab-button-icon {
+    .vj-tab-button-icon {
       font-size: 1rem;
+      line-height: 1;
     }
 
-    .tab-button.active {
-      background: radial-gradient(circle at top, #4f46e5, #1e293b);
+    .vj-tab-button span {
+      font-size: 0.7rem;
+      line-height: 1.1;
+    }
+
+    .vj-tab-button.active {
+      background: #4f46e5;
       color: #e5e7eb;
       transform: translateY(-1px);
     }
 
-    /* FILTERS */
-
-    .segmented {
-      display: inline-flex;
-      border-radius: 999px;
-      border: 1px solid rgba(148, 163, 184, 0.7);
-      overflow: hidden;
-      margin-bottom: 0.5rem;
-    }
-
-    .segmented button {
-      border: none;
-      background: transparent;
-      color: #9ca3af;
-      font-size: 0.72rem;
-      padding: 0.25rem 0.65rem;
-      cursor: pointer;
-    }
-
-    .segmented button.active {
-      background: rgba(30, 64, 175, 0.9);
-      color: #e5e7eb;
-    }
-
-    /* PROFILE TAB */
-
-    .profile-layout {
-      display: grid;
-      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-      gap: var(--gap-md);
-    }
-
-    @media (max-width: 900px) {
-      .profile-layout {
-        grid-template-columns: minmax(0, 1fr);
-      }
-    }
-
-    .player-info-grid {
-      display: grid;
-      grid-template-columns: 140px minmax(0, 1fr);
-      gap: 0.75rem;
-      align-items: start;
-    }
-
-    @media (max-width: 600px) {
-      .player-info-grid {
-        grid-template-columns: minmax(0, 1fr);
-      }
-    }
-
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.25rem;
-      border-radius: 999px;
-      padding: 0.08rem 0.45rem;
-      font-size: 0.7rem;
-      border: 1px solid rgba(148, 163, 184, 0.6);
-      background: rgba(15, 23, 42, 0.8);
-    }
-
-    .badge-status-yard {
-      border-color: rgba(34, 197, 94, 0.9);
-      background: rgba(22, 163, 74, 0.15);
-    }
-
-    .badge-status-dashed {
-      border-color: rgba(56, 189, 248, 0.9);
-      background: rgba(56, 189, 248, 0.15);
-    }
-
-    .badge-status-caught {
-      border-color: rgba(248, 113, 113, 0.9);
-      background: rgba(248, 113, 113, 0.15);
-    }
-
-    .den-dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 999px;
-      border: 1px solid #020617;
-    }
-
-    .den-red {
-      background: #ef4444;
-    }
-    .den-blue {
-      background: #3b82f6;
-    }
-    .den-green {
-      background: #22c55e;
-    }
-    .den-yellow {
-      background: #eab308;
-    }
-    .den-none {
-      background: #4b5563;
-    }
-
-    .stat-row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.25rem;
-      font-size: 0.8rem;
-    }
-
-    .players-list {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.5rem;
-    }
-
-    .player-mini-card {
-      border-radius: 14px;
-      padding: 0.4rem 0.55rem;
-      background: rgba(15, 23, 42, 0.9);
-      border: 1px solid rgba(31, 41, 55, 0.9);
-      font-size: 0.78rem;
-      min-width: 120px;
-      cursor: pointer;
-      display: flex;
-      flex-direction: column;
-      gap: 0.2rem;
-      transition: background 0.08s ease, transform 0.08s ease;
-    }
-
-    .player-mini-card:hover {
-      background: #111827;
-      transform: translateY(-1px);
-    }
-
-    .player-mini-card.active {
-      border-color: rgba(250, 204, 21, 0.9);
-      box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.7);
-    }
-
-    /* PLAY TAB */
-
-    .play-layout {
-      display: grid;
-      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-      gap: var(--gap-md);
-    }
-
-    @media (max-width: 900px) {
-      .play-layout {
-        grid-template-columns: minmax(0, 1fr);
-      }
-    }
-
-    .turn-indicator {
-      font-size: 0.8rem;
-      margin-bottom: 0.25rem;
-    }
-
-    .turn-indicator strong {
-      font-weight: 600;
-    }
-
-    .mini-text {
-      font-size: 0.76rem;
-      color: var(--muted);
-    }
-
-    /* LOG TAB */
-
-    .log-list {
-      display: flex;
-      flex-direction: column;
-      gap: 0.35rem;
-      font-size: 0.8rem;
-    }
-
-    .log-item {
-      display: grid;
-      grid-template-columns: 18px minmax(0, 1fr);
-      gap: 0.4rem;
-      align-items: flex-start;
-    }
-
-    .log-icon {
-      font-size: 0.9rem;
-      opacity: 0.8;
-      margin-top: 0.1rem;
-    }
-
-    .log-text-main {
-      color: #e5e7eb;
-    }
-
-    .log-text-meta {
-      font-size: 0.7rem;
-      color: var(--muted);
-    }
-
-    .log-group-title {
-      font-size: 0.8rem;
-      font-weight: 600;
-      margin-top: 0.4rem;
-      margin-bottom: 0.2rem;
-    }
-
-    /* POPUP OVERLAY */
-
-    .popup-overlay {
-      position: fixed;
-      inset: 0;
-      background: rgba(15, 23, 42, 0.8);
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      z-index: 40;
-      padding: 1rem;
-    }
-
-    .popup-overlay.hidden {
-      display: none;
-    }
-
-    .popup-card {
-      max-width: 360px;
-      width: 100%;
-      border-radius: 22px;
-      padding: 0.8rem 0.9rem 0.9rem;
-      background: radial-gradient(circle at top, #1f2937, #020617);
-      border: 1px solid rgba(55, 65, 81, 0.95);
-      box-shadow: 0 22px 45px rgba(0, 0, 0, 0.85);
-      display: flex;
-      flex-direction: column;
-      gap: 0.5rem;
-    }
-
-    .popup-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .popup-title {
-      font-size: 0.95rem;
-      font-weight: 600;
-    }
-
-    .popup-close {
-      border-radius: 999px;
-      border: none;
-      background: rgba(15, 23, 42, 0.9);
-      color: #9ca3af;
-      width: 26px;
-      height: 26px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 0.9rem;
-      cursor: pointer;
-    }
-
-    .popup-body {
-      font-size: 0.82rem;
-      color: #e5e7eb;
-    }
-
-    .popup-actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.4rem;
-      margin-top: 0.4rem;
-    }
-
-    .popup-card-inner {
-      margin-top: 0.45rem;
-      display: flex;
-      justify-content: center;
-    }
-
-    .popup-card-inner .card-23 {
-      width: 190px;
-      max-width: 100%;
-    }
-
-    .popup-hint {
-      font-size: 0.75rem;
-      color: var(--muted);
-      margin-top: 0.3rem;
-    }
-
-    /* FEEDBACK TOAST */
-
-    .feedback-toast {
-      position: fixed;
-      right: 0.75rem;
-      bottom: 4.4rem;
-      max-width: 260px;
-      background: rgba(15, 23, 42, 0.96);
-      border-radius: 999px;
-      border: 1px solid rgba(55, 65, 81, 0.95);
-      padding: 0.35rem 0.7rem;
-      font-size: 0.78rem;
-      color: #e5e7eb;
-      display: none;
-      z-index: 35;
-    }
-
-    .feedback-toast.visible {
-      display: flex;
-      align-items: center;
-      gap: 0.35rem;
-    }
-
-    .feedback-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 999px;
-      background: #22c55e;
+    /* Klein beetje spacing in main */
+    main {
+      padding-bottom: 0.75rem;
     }
   </style>
 </head>
-<body>
-  <div class="app-shell">
-    <header class="app-header">
-      <div class="header-left">
-        <div class="game-title">Vossenjacht – Player App</div>
-        <div class="game-subtitle" id="headerSubtitle">
-          Verbindt met spel…
-        </div>
-      </div>
-      <div class="header-right">
-        <span class="pill" id="pillCode">Code: —</span>
-        <span class="pill" id="pillRound">Ronde: —</span>
-        <span class="pill pill-phase" id="pillPhase">Fase: —</span>
-        <span class="pill pill-turn-wait" id="pillTurn">Beurt: —</span>
-      </div>
-    </header>
+<body class="screen player-screen">
+  <header>
+    <h1>Vossenjacht – Speler</h1>
+    <div id="gameStatus" class="game-info"></div>
+  </header>
 
-    <main class="app-main">
-      <!-- TAB 1: SPEL UITLEG -->
-      <section id="tab-rules" class="tab-panel active">
-        <div class="vj-card">
-          <div class="section-grid">
-            <div>
-              <div class="vj-card-title">Verhaal & doel</div>
-              <div class="vj-card-body">
-                Je bent een tiener-vos in de Yard van de boerderij. ’s Nachts
-                vallen jullie het kippenhok aan om eieren en kippen te stelen.
-                Elke raid bestaat uit rondes met
-                <strong>MOVE → ACTIONS → DECISION → REVEAL</strong>. De vos met
-                de meeste buitpunten wint.
-                <ul style="margin-top:0.4rem;padding-left:1rem;">
-                  <li>Egg = 1 punt · Hen = 2 punten · Prize Hen = 3 punten</li>
-                  <li>Blijf in de Yard voor meer buit, of DASH weg met wat je hebt</li>
-                  <li>Events en Action Cards maken de nacht chaotisch en spannend</li>
-                </ul>
-              </div>
-            </div>
-            <div>
-              <div class="vj-card-title">Fases per ronde</div>
-              <div class="vj-card-body">
-                <ul style="padding-left:1rem;margin:0;">
-                  <li><strong>MOVE</strong> – kies één actie (Snatch/Forage/Scout/Shift)</li>
-                  <li><strong>ACTIONS</strong> – speel Action Cards of kies PASS</li>
-                  <li><strong>DECISION</strong> – LURK, BURROW of DASH</li>
-                  <li><strong>REVEAL</strong> – Event wordt onthuld en toegepast</li>
-                </ul>
-                <p class="muted" style="margin-top:0.4rem;">
-                  De Community Board laat het grote overzicht zien. Deze Player
-                  App helpt jou om je eigen keuzes goed te begrijpen en uit te
-                  voeren.
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="vj-card vj-card-soft">
-          <div class="vj-card-title">Kaart-encyclopedie</div>
-          <div class="vj-card-body">
-            <div class="segmented" id="rulesFilter">
-              <button data-filter="all" class="active">Alle</button>
-              <button data-filter="loot">Loot</button>
-              <button data-filter="event">Events</button>
-              <button data-filter="action">Action Cards</button>
-            </div>
-            <div class="card-grid" id="rulesCardsGrid">
-              <!-- JS vult alle kaarten -->
-            </div>
-          </div>
-        </div>
+  <main>
+    <!-- TAB 1: SPEL-UITLEG -->
+    <section id="tab-rules" class="vj-tab-panel">
+      <section class="panel">
+        <h2>Vossenjacht – Speluitleg</h2>
+        <p style="font-size:0.9rem; opacity:0.85;">
+          Je bent een tienervos in de Yard van de boerderij. ’s Nachts vallen jullie
+          het kippenhok aan om eieren en kippen te stelen. Elke raid bestaat uit
+          rondes met <strong>MOVE → ACTIONS → DECISION → REVEAL</strong>.
+        </p>
+        <ul style="font-size:0.85rem; opacity:0.85;">
+          <li>Doel: eindig met de meeste buitpunten</li>
+          <li>Egg = 1 punt · Hen = 2 punten · Prize Hen = 3 punten</li>
+          <li>Blijf in de Yard voor meer buit, of DASH weg met wat je hebt</li>
+        </ul>
       </section>
 
-      <!-- TAB 2: PLAYER PROFILE -->
-      <section id="tab-profile" class="tab-panel">
-        <div class="profile-layout">
-          <div>
-            <div class="vj-card">
-              <div class="vj-card-title">Mijn vos</div>
-              <div class="vj-card-body">
-                <div class="player-info-grid">
-                  <div class="card-23" id="myPlayerCardVisual">
-                    <div class="card-23-header">
-                      <div class="card-23-title" id="myPlayerName">—</div>
-                      <div class="card-23-type" id="myPlayerDen">Den: —</div>
-                    </div>
-                    <div class="card-23-body">
-                      <div>
-                        <span
-                          class="badge"
-                          id="myPlayerStatusBadge"
-                          >Status: —</span
-                        >
-                      </div>
-                      <div style="margin-top:0.3rem;font-size:0.72rem;">
-                        <div>🥚 Eggs: <span id="myEggs">0</span></div>
-                        <div>🐔 Hens: <span id="myHens">0</span></div>
-                        <div>👑 Prize: <span id="myPrize">0</span></div>
-                      </div>
-                    </div>
-                    <div class="card-23-footer">
-                      Totaal punten:
-                      <span id="myPoints">0</span> · Burrow:
-                      <span id="myBurrow">—</span>
-                    </div>
-                  </div>
-                  <div>
-                    <div style="font-size:0.82rem;margin-bottom:0.4rem;">
-                      <div>
-                        Jij speelt als
-                        <strong id="myPlayerLabel">—</strong>.
-                      </div>
-                      <div id="myFlavourText" class="muted" style="margin-top:0.2rem;">
-                        Wacht op gegevens van het spel…
-                      </div>
-                    </div>
-                    <div>
-                      <div style="font-size:0.8rem;margin-bottom:0.2rem;">
-                        Skill set (flavour):
-                      </div>
-                      <div class="stat-row">
-                        <span class="badge">Stealth ★★★★☆</span>
-                        <span class="badge">Chaos ★★★☆☆</span>
-                        <span class="badge">Tactics ★★☆☆☆</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="vj-card vj-card-soft">
-              <div class="vj-card-title">Score overzicht</div>
-              <div class="vj-card-body">
-                <div class="stat-row" id="scoreSummary">
-                  <!-- JS vult korte samenvatting -->
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <div class="vj-card vj-card-soft">
-              <div class="vj-card-title">Overige spelers</div>
-              <div class="vj-card-body">
-                <div class="players-list" id="otherPlayersList">
-                  <!-- JS vult mini-cards -->
-                </div>
-                <p class="muted" id="noOtherPlayersMsg" style="margin-top:0.3rem;">
-                  Nog geen andere spelers zichtbaar.
-                </p>
-              </div>
-            </div>
-            <div class="vj-card vj-card-soft">
-              <div class="vj-card-title">Geselecteerde speler</div>
-              <div class="vj-card-body" id="otherPlayerDetail">
-                Klik op een andere speler om zijn/haar profiel te bekijken.
-              </div>
-            </div>
-          </div>
-        </div>
+      <section class="panel">
+        <h2>Ronde-flow</h2>
+        <ol style="font-size:0.85rem; opacity:0.9;">
+          <li><strong>MOVE</strong> – kies één actie (SNATCH, FORAGE, SCOUT of SHIFT)</li>
+          <li><strong>ACTIONS</strong> – om de beurt Action Cards spelen of PASS</li>
+          <li><strong>DECISION</strong> – LURK / BURROW / DASH kiezen</li>
+          <li><strong>REVEAL</strong> – Event wordt onthuld en toegepast</li>
+          <li><strong>Einde raid</strong> – o.a. na 3× Rooster Crow of laatste vos in de Yard</li>
+        </ol>
+        <p style="font-size:0.8rem; opacity:0.7; margin-top:0.5rem;">
+          De Community Board op het grote scherm laat het volledige overzicht zien.
+          Deze Game App helpt jou om je eigen keuzes helder te maken en uit te voeren.
+        </p>
       </section>
 
-      <!-- TAB 3: SPELVERLOOP -->
-      <section id="tab-play" class="tab-panel">
-        <div class="play-layout">
-          <div>
-            <div class="vj-card">
-              <div class="vj-card-title">Fase & beurt</div>
-              <div class="vj-card-body">
-                <div class="turn-indicator" id="turnIndicator">
-                  Fase: — · Beurt: —
-                </div>
-                <div class="mini-text" id="turnHint">
-                  Wacht op de host om de raid te starten.
-                </div>
-              </div>
-            </div>
+      <section class="panel">
+        <h2>Kaarten (kort overzicht)</h2>
+        <p style="font-size:0.85rem; opacity:0.9; margin-bottom:0.4rem;">
+          In de volgende stappen gaan we hier alle Loot-, Event- en Action Cards als
+          mooie Game Cards tonen. Voor nu is dit een placeholder-tabblad.
+        </p>
+      </section>
+    </section>
 
-            <div class="vj-card vj-card-soft">
-              <div class="vj-card-title">Mijn Action Cards</div>
-              <div class="vj-card-body">
-                <p class="mini-text">
-                  Dit zijn de kaarten die je kunt gebruiken in de
-                  ACTIONS-fase. Je kunt alvast aangeven welke kaart je als
-                  volgende wilt spelen.
-                </p>
-                <div class="card-grid" id="myCardsList">
-                  <!-- JS vult hand -->
-                </div>
-                <div style="margin-top:0.4rem;">
-                  <div class="mini-text" id="selectedCardLabel">
-                    Geselecteerde kaart: geen.
-                  </div>
-                  <button
-                    class="btn btn-secondary btn-sm"
-                    id="btnPlayNext"
-                    style="margin-top:0.3rem;"
-                  >
-                    Play Next instellen
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+    <!-- TAB 2: PLAYER PROFILE -->
+    <section id="tab-profile" class="vj-tab-panel">
+      <section class="panel">
+        <h2>Player Profile</h2>
+        <p style="font-size:0.85rem; opacity:0.9;">
+          Hier komt jouw persoonlijke Player Card, met:
+        </p>
+        <ul style="font-size:0.85rem; opacity:0.9;">
+          <li>Je naam en Den-kleur</li>
+          <li>Je huidige status (In Yard / Dashed / Caught)</li>
+          <li>Samenvatting van je buit en score</li>
+          <li>Een korte omschrijving van jouw vos-stijl</li>
+        </ul>
+        <p style="font-size:0.8rem; opacity:0.75; margin-top:0.5rem;">
+          In een volgende stap voegen we hier ook een overzicht toe van alle andere
+          spelers, zodat je hun Player Cards kunt aanklikken en bekijken.
+        </p>
+      </section>
+    </section>
 
-          <div>
-            <div class="vj-card vj-card-soft">
-              <div class="vj-card-title">MOVE & DECISION opties</div>
-              <div class="vj-card-body">
-                <div style="margin-bottom:0.5rem;">
-                  <strong>MOVE (1 keuze per ronde):</strong>
-                  <ul style="margin:0.2rem 0 0.4rem 1rem;">
-                    <li>SNATCH – 1 loot van de Deck</li>
-                    <li>FORAGE – 2 Action Cards trekken</li>
-                    <li>SCOUT – vooruitkijken op de Event Track</li>
-                    <li>SHIFT – twee Events omwisselen</li>
-                  </ul>
-                </div>
-                <div>
-                  <strong>DECISION:</strong>
-                  <ul style="margin:0.2rem 0 0.4rem 1rem;">
-                    <li>LURK – blijven in de Yard</li>
-                    <li>BURROW – éénmalig schuilen (per raid)</li>
-                    <li>DASH – weg rennen met je buit</li>
-                  </ul>
-                </div>
-                <p class="mini-text">
-                  Als het jouw beurt is, verschijnt een pop-up met duidelijke
-                  knoppen voor je MOVE of DECISION. In de ACTIONS-fase zie je
-                  een pop-up met jouw geselecteerde kaart en de opties
-                  <strong>Spelen</strong>, <strong>Wijzigen</strong> of
-                  <strong>Overslaan</strong>.
-                </p>
-              </div>
-            </div>
-
-            <div class="vj-card vj-card-soft">
-              <div class="vj-card-title">Fox BOT (later)</div>
-              <div class="vj-card-body" id="botAdvice">
-                Hier komt later persoonlijk advies op basis van jouw hand, buit
-                en de huidige fase. Voor nu is dit een placeholder.
-              </div>
-            </div>
-          </div>
-        </div>
+    <!-- TAB 3: SPELVERLOOP – HIER STAAT JE HUIDIGE SCHERM -->
+    <section id="tab-game" class="vj-tab-panel">
+      <section class="panel">
+        <h2>Jij</h2>
+        <div id="playerInfo"></div>
       </section>
 
-      <!-- TAB 4: COMMUNITY LOG -->
-      <section id="tab-log" class="tab-panel">
-        <div class="vj-card">
-          <div class="vj-card-title">Community Log</div>
-          <div class="vj-card-body">
-            <p class="mini-text" style="margin-bottom:0.4rem;">
-              Hier zie je wat er gebeurt is tijdens de raid: MOVE-keuzes,
-              gespeelde Action Cards, DECISION-keuzes en Events.
-            </p>
-            <div class="log-list" id="logList">
-              <!-- JS vult logregels -->
-            </div>
-          </div>
-        </div>
+      <section class="panel">
+        <h2>Huidige event</h2>
+        <div id="eventInfo"></div>
       </section>
-    </main>
-  </div>
 
-  <!-- POPUP -->
-  <div id="popupOverlay" class="popup-overlay hidden">
-    <div class="popup-card">
-      <div class="popup-header">
-        <div class="popup-title" id="popupTitle">—</div>
-        <button class="popup-close" id="popupCloseBtn" aria-label="Sluiten">
-          ×
-        </button>
-      </div>
-      <div class="popup-body" id="popupBody">
-        <!-- JS vult content -->
-      </div>
+      <section class="panel">
+        <h2>MOVE – één actie kiezen</h2>
+        <p id="moveHint" style="font-size:0.85rem; opacity:0.8;">
+          In de MOVE-fase mag je precies één actie doen zolang je in de Yard staat.
+        </p>
+        <div class="row">
+          <button id="btnSnatch">SNATCH – pak 1 loot van de Deck</button>
+          <button id="btnForage">FORAGE – trek 2 Action Cards</button>
+        </div>
+        <div class="row" style="margin-top:0.4rem;">
+          <button id="btnScout">SCOUT – kijk vooruit op de Event Track</button>
+          <button id="btnShift">SHIFT – wissel 2 Events</button>
+        </div>
+        <p id="moveState" style="font-size:0.8rem; opacity:0.8; margin-top:0.5rem;"></p>
+      </section>
+
+      <section class="panel">
+        <h2>ACTIONS-fase</h2>
+        <p style="font-size:0.85rem; opacity:0.8;">
+          In de ACTIONS-fase spelen vossen om de beurt Action Cards of kiezen PASS,
+          te beginnen bij de Lead Fox.
+        </p>
+        <div id="handPanel"></div>
+        <div class="row" style="margin-top:0.5rem;">
+          <button id="btnPass">PASS (geen kaart deze beurt)</button>
+        </div>
+        <p id="opsTurnInfo" style="font-size:0.8rem; opacity:0.8; margin-top:0.25rem;"></p>
+      </section>
+
+      <section class="panel">
+        <h2>DECISION – Lurk / Burrow / Dash</h2>
+        <p id="decisionHint" style="font-size:0.85rem; opacity:0.8;">
+          In de DECISION-fase kies je hoe je deze event-ronde ingaat.
+        </p>
+        <div class="row">
+          <button id="btnLurk">LURK (blijven staan)</button>
+          <button id="btnBurrow">BURROW (éénmalig schuilen)</button>
+          <button id="btnDash">DASH (rennen met buit)</button>
+        </div>
+        <p id="decisionState" style="font-size:0.8rem; opacity:0.8; margin-top:0.5rem;"></p>
+      </section>
+
+      <section class="panel">
+        <h2>Jouw loot</h2>
+        <div id="lootPanel"></div>
+      </section>
+    </section>
+
+    <!-- TAB 4: COMMUNITY LOG -->
+    <section id="tab-log" class="vj-tab-panel">
+      <section class="panel">
+        <h2>Community Log</h2>
+        <p style="font-size:0.85rem; opacity:0.9;">
+          Hier gaan we later alle belangrijke gebeurtenissen van het spel laten zien,
+          zoals MOVE-keuzes, gespeelde Action Cards, Events en scores.
+        </p>
+        <p style="font-size:0.8rem; opacity:0.75;">
+          Voor nu is dit een lege placeholder-tab. Je kunt het spel gewoon spelen via
+          het tabblad <strong>Spelverloop</strong>.
+        </p>
+      </section>
+    </section>
+  </main>
+
+  <!-- Onderaan: tab-navigatie -->
+  <nav class="vj-tabbar">
+    <div class="vj-tabbar-inner">
+      <button class="vj-tab-button" data-tab-target="tab-rules">
+        <div class="vj-tab-button-icon">📘</div>
+        <span>Speluitleg</span>
+      </button>
+      <button class="vj-tab-button" data-tab-target="tab-profile">
+        <div class="vj-tab-button-icon">🦊</div>
+        <span>Profiel</span>
+      </button>
+      <button class="vj-tab-button" data-tab-target="tab-game">
+        <div class="vj-tab-button-icon">🎮</div>
+        <span>Spelverloop</span>
+      </button>
+      <button class="vj-tab-button" data-tab-target="tab-log">
+        <div class="vj-tab-button-icon">📜</div>
+        <span>Log</span>
+      </button>
     </div>
-  </div>
+  </nav>
 
-  <!-- FEEDBACK TOAST -->
-  <div class="feedback-toast" id="feedbackToast">
-    <div class="feedback-dot"></div>
-    <span id="feedbackText">—</span>
-  </div>
+  <!-- Simpele tab-logica, los van player.js -->
+  <script>
+    (function () {
+      const panels = document.querySelectorAll(".vj-tab-panel");
+      const buttons = document.querySelectorAll(".vj-tab-button");
 
-  <script type="module" src="./player.js"></script>
+      function setActiveTab(id) {
+        panels.forEach((p) => {
+          p.classList.toggle("active", p.id === id);
+        });
+        buttons.forEach((b) => {
+          b.classList.toggle(
+            "active",
+            b.getAttribute("data-tab-target") === id
+          );
+        });
+      }
+
+      buttons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const target = btn.getAttribute("data-tab-target");
+          if (target) setActiveTab(target);
+        });
+      });
+
+      // Standaard: Spelverloop actief
+      setActiveTab("tab-game");
+    })();
+  </script>
+
+  <!-- Bestaande game-logica blijft gewoon hetzelfde -->
+  <script type="module" src="./js/player.js"></script>
 </body>
 </html>
