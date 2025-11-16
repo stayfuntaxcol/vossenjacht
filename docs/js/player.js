@@ -485,7 +485,24 @@ function renderHand() {
   list.style.gap = "0.25rem";
 
   hand.forEach((card, index) => {
-    const row = document.createElement("div");
+    
+const row = document.createElement("div");
+row.style.display = "flex";
+row.style.alignItems = "center";
+row.style.gap = "0.5rem";
+
+const cardEl = renderActionCard(card, { size: "medium" });
+row.appendChild(cardEl);
+
+const btn = document.createElement("button");
+btn.textContent = "Play Next";
+btn.disabled = !(canPlayOverall && myTurnOverall);
+btn.addEventListener("click", () => openActionModal(index));
+
+row.appendChild(btn);
+list.appendChild(row);
+
+    
     row.style.display = "flex";
     row.style.justifyContent = "space-between";
     row.style.alignItems = "center";
