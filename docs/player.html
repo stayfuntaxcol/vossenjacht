@@ -6,19 +6,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="./css/style.css" />
 
-  <!-- Extra styles voor tabs, profiel en log -->
+  <!-- Extra styles voor tabs, profiel, log en popup -->
   <style>
+    /* Algemeen */
+    body.player-screen {
+      padding-bottom: 72px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
     /* Tabs basis */
     .vj-tab-panel {
       display: none;
     }
     .vj-tab-panel.active {
       display: block;
-    }
-
-    /* Body extra ruimte voor tabbar onderaan */
-    body.player-screen {
-      padding-bottom: 64px;
     }
 
     /* Onderste tabbar */
@@ -250,6 +254,64 @@
       font-size: 0.8rem;
       opacity: 0.75;
     }
+
+    /* Popup / modal voor Action Cards */
+    .vj-modal-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      background: rgba(15, 23, 42, 0.8);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .vj-modal {
+      width: 100%;
+      max-width: 420px;
+      border-radius: 1rem;
+      padding: 1rem 1.1rem;
+      background: #020617;
+      border: 1px solid rgba(129, 140, 248, 0.9);
+      box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.9);
+    }
+
+    .vj-modal h2 {
+      margin: 0 0 0.4rem 0;
+      font-size: 1rem;
+    }
+
+    .vj-modal-body {
+      font-size: 0.85rem;
+      opacity: 0.9;
+    }
+
+    .vj-modal-actions {
+      display: flex;
+      gap: 0.4rem;
+      margin-top: 0.85rem;
+    }
+
+    .vj-modal-actions button {
+      flex: 1;
+      border-radius: 999px;
+      border: 1px solid rgba(31, 41, 55, 0.9);
+      background: rgba(15, 23, 42, 0.95);
+      color: #e5e7eb;
+      font-size: 0.8rem;
+      padding: 0.35rem 0.6rem;
+      cursor: pointer;
+    }
+
+    .vj-modal-actions button:nth-child(1) {
+      background: #4f46e5;
+      border-color: #6366f1;
+    }
+
+    .vj-modal-actions button:nth-child(3) {
+      background: rgba(127, 29, 29, 0.8);
+      border-color: rgba(248, 113, 113, 0.9);
+    }
   </style>
 </head>
 <body class="screen player-screen">
@@ -352,7 +414,8 @@
         <h2>ACTIONS-fase</h2>
         <p style="font-size:0.85rem; opacity:0.8;">
           In de ACTIONS-fase spelen vossen om de beurt Action Cards of kiezen PASS,
-          te beginnen bij de Lead Fox.
+          te beginnen bij de Lead Fox. Tik op <strong>Play Next</strong> bij een kaart
+          om een pop-up te openen met <em>Spelen / Wijzigen / Overslaan</em>.
         </p>
         <div id="handPanel"></div>
         <div class="row" style="margin-top:0.5rem;">
@@ -394,6 +457,21 @@
       </section>
     </section>
   </main>
+
+  <!-- Popup voor Action Cards -->
+  <div id="actionModalOverlay" class="vj-modal-overlay hidden">
+    <div class="vj-modal">
+      <h2 id="actionModalTitle">Action Card</h2>
+      <p id="actionModalBody" class="vj-modal-body">
+        Speel deze kaart nu, of wijzig je keuze als je een andere kaart wilt spelen.
+      </p>
+      <div class="vj-modal-actions">
+        <button id="actionModalPlay">Spelen</button>
+        <button id="actionModalChange">Wijzigen</button>
+        <button id="actionModalSkip">Overslaan</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Onderaan: tab-navigatie -->
   <nav class="vj-tabbar">
