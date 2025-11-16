@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="./css/style.css" />
 
-  <!-- Extra styles alleen voor tabs + layout van deze player app -->
+  <!-- Extra styles voor tabs, profiel en log -->
   <style>
     /* Tabs basis */
     .vj-tab-panel {
@@ -74,9 +74,181 @@
       transform: translateY(-1px);
     }
 
-    /* Klein beetje spacing in main */
     main {
       padding-bottom: 0.75rem;
+    }
+
+    /* Profiel tab */
+    .vj-profile-layout {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    @media (min-width: 720px) {
+      .vj-profile-layout {
+        flex-direction: row;
+        align-items: flex-start;
+      }
+    }
+
+    .vj-profile-my,
+    .vj-profile-others {
+      flex: 1;
+    }
+
+    .vj-profile-card {
+      border-radius: 0.75rem;
+      padding: 0.8rem 0.9rem;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+    }
+
+    .vj-profile-card h3 {
+      margin: 0 0 0.25rem 0;
+      font-size: 1rem;
+    }
+
+    .vj-profile-tagline {
+      font-size: 0.8rem;
+      opacity: 0.8;
+      margin-bottom: 0.4rem;
+    }
+
+    .vj-profile-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.25rem;
+      margin-bottom: 0.4rem;
+    }
+
+    .vj-badge {
+      font-size: 0.7rem;
+      padding: 0.1rem 0.4rem;
+      border-radius: 999px;
+      background: rgba(30, 64, 175, 0.3);
+      border: 1px solid rgba(129, 140, 248, 0.6);
+      white-space: nowrap;
+    }
+
+    .vj-badge-danger {
+      background: rgba(127, 29, 29, 0.4);
+      border-color: rgba(239, 68, 68, 0.8);
+    }
+
+    .vj-badge-safe {
+      background: rgba(22, 101, 52, 0.4);
+      border-color: rgba(74, 222, 128, 0.8);
+    }
+
+    .vj-profile-stat {
+      font-size: 0.85rem;
+      opacity: 0.9;
+      margin-bottom: 0.3rem;
+    }
+
+    .vj-profile-subtitle {
+      font-size: 0.8rem;
+      opacity: 0.8;
+      margin-bottom: 0.25rem;
+    }
+
+    .vj-profile-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    .vj-profile-list button {
+      width: 100%;
+      text-align: left;
+      border-radius: 0.6rem;
+      border: 1px solid rgba(31, 41, 55, 0.9);
+      background: rgba(15, 23, 42, 0.9);
+      color: #e5e7eb;
+      font-size: 0.8rem;
+      padding: 0.4rem 0.6rem;
+      cursor: pointer;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .vj-profile-list button.active {
+      border-color: rgba(129, 140, 248, 0.9);
+      background: rgba(30, 64, 175, 0.7);
+    }
+
+    .vj-profile-list-name {
+      font-weight: 500;
+    }
+
+    .vj-profile-list-meta {
+      font-size: 0.75rem;
+      opacity: 0.85;
+    }
+
+    /* Community Log */
+    .vj-log-filters {
+      display: flex;
+      gap: 0.3rem;
+      margin-bottom: 0.4rem;
+      flex-wrap: wrap;
+    }
+
+    .vj-log-filters button {
+      border-radius: 999px;
+      border: 1px solid rgba(31, 41, 55, 0.9);
+      background: rgba(15, 23, 42, 0.9);
+      color: #e5e7eb;
+      font-size: 0.75rem;
+      padding: 0.15rem 0.6rem;
+      cursor: pointer;
+    }
+
+    .vj-log-filters button.active {
+      border-color: rgba(129, 140, 248, 0.9);
+      background: rgba(30, 64, 175, 0.7);
+    }
+
+    .vj-log-list {
+      max-height: 320px;
+      overflow-y: auto;
+      font-size: 0.8rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .vj-log-entry {
+      padding: 0.25rem 0.4rem;
+      border-radius: 0.4rem;
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid rgba(31, 41, 55, 0.9);
+    }
+
+    .vj-log-entry.me {
+      border-color: rgba(129, 140, 248, 0.9);
+      background: rgba(30, 64, 175, 0.55);
+    }
+
+    .vj-log-entry-header {
+      font-size: 0.72rem;
+      opacity: 0.9;
+      margin-bottom: 0.1rem;
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+    }
+
+    .vj-log-entry-body {
+      font-size: 0.8rem;
+    }
+
+    .vj-log-empty {
+      font-size: 0.8rem;
+      opacity: 0.75;
     }
   </style>
 </head>
@@ -121,8 +293,8 @@
       <section class="panel">
         <h2>Kaarten (kort overzicht)</h2>
         <p style="font-size:0.85rem; opacity:0.9; margin-bottom:0.4rem;">
-          In de volgende stappen gaan we hier alle Loot-, Event- en Action Cards als
-          mooie Game Cards tonen. Voor nu is dit een placeholder-tabblad.
+          In een volgende stap vullen we hier alle Loot-, Event- en Action Cards in
+          als mooie Game Cards. Voor nu is dit een beknopte uitleg van de basis.
         </p>
       </section>
     </section>
@@ -131,23 +303,24 @@
     <section id="tab-profile" class="vj-tab-panel">
       <section class="panel">
         <h2>Player Profile</h2>
-        <p style="font-size:0.85rem; opacity:0.9;">
-          Hier komt jouw persoonlijke Player Card, met:
-        </p>
-        <ul style="font-size:0.85rem; opacity:0.9;">
-          <li>Je naam en Den-kleur</li>
-          <li>Je huidige status (In Yard / Dashed / Caught)</li>
-          <li>Samenvatting van je buit en score</li>
-          <li>Een korte omschrijving van jouw vos-stijl</li>
-        </ul>
-        <p style="font-size:0.8rem; opacity:0.75; margin-top:0.5rem;">
-          In een volgende stap voegen we hier ook een overzicht toe van alle andere
-          spelers, zodat je hun Player Cards kunt aanklikken en bekijken.
-        </p>
+        <div class="vj-profile-layout">
+          <div class="vj-profile-my">
+            <h3 style="margin-top:0;">Jouw vos</h3>
+            <div id="profileMy"></div>
+          </div>
+          <div class="vj-profile-others">
+            <h3 style="margin-top:0;">Overige spelers</h3>
+            <p style="font-size:0.8rem; opacity:0.8; margin-bottom:0.3rem;">
+              Tik een speler om zijn/haar kaart te bekijken.
+            </p>
+            <div id="profileOthersList" class="vj-profile-list"></div>
+            <div id="profileOthersDetail" style="margin-top:0.6rem;"></div>
+          </div>
+        </div>
       </section>
     </section>
 
-    <!-- TAB 3: SPELVERLOOP – HIER STAAT JE HUIDIGE SCHERM -->
+    <!-- TAB 3: SPELVERLOOP – HUIDIGE GAME UI -->
     <section id="tab-game" class="vj-tab-panel">
       <section class="panel">
         <h2>Jij</h2>
@@ -195,7 +368,7 @@
         </p>
         <div class="row">
           <button id="btnLurk">LURK (blijven staan)</button>
-          <button id="btnBurrow">BURROW (éénmalig schuilen)</button>
+          <button id="btnBurrow">BURROW (ondergronds)</button>
           <button id="btnDash">DASH (rennen met buit)</button>
         </div>
         <p id="decisionState" style="font-size:0.8rem; opacity:0.8; margin-top:0.5rem;"></p>
@@ -211,14 +384,13 @@
     <section id="tab-log" class="vj-tab-panel">
       <section class="panel">
         <h2>Community Log</h2>
-        <p style="font-size:0.85rem; opacity:0.9;">
-          Hier gaan we later alle belangrijke gebeurtenissen van het spel laten zien,
-          zoals MOVE-keuzes, gespeelde Action Cards, Events en scores.
-        </p>
-        <p style="font-size:0.8rem; opacity:0.75;">
-          Voor nu is dit een lege placeholder-tab. Je kunt het spel gewoon spelen via
-          het tabblad <strong>Spelverloop</strong>.
-        </p>
+        <div class="vj-log-filters">
+          <button type="button" data-log-filter="all" class="active">Alles</button>
+          <button type="button" data-log-filter="me">Alleen mijn acties</button>
+        </div>
+        <div id="communityLog" class="vj-log-list">
+          <div class="vj-log-empty">Log wordt geladen…</div>
+        </div>
       </section>
     </section>
   </main>
@@ -245,7 +417,7 @@
     </div>
   </nav>
 
-  <!-- Simpele tab-logica, los van player.js -->
+  <!-- Simpele tab-logica -->
   <script>
     (function () {
       const panels = document.querySelectorAll(".vj-tab-panel");
@@ -275,7 +447,9 @@
     })();
   </script>
 
-  <!-- Bestaande game-logica blijft gewoon hetzelfde -->
+  <!-- Bestaande game-logica -->
   <script type="module" src="./js/player.js"></script>
+  <!-- Extra script voor Profiel + Community Log -->
+  <script type="module" src="./js/player_profile_log.js"></script>
 </body>
 </html>
