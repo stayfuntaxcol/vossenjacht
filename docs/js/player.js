@@ -2,7 +2,6 @@
 import { initAuth } from "./firebase.js";
 import { addLog } from "./log.js";
 import { getEventById } from "./cards.js";
-import { renderEventCard, renderActionCard, renderLootCard } from "./cardRenderer.js";
 import {
   getFirestore,
   doc,
@@ -285,35 +284,7 @@ function renderGame() {
     gameStatusDiv.textContent = `Game ${gameId} · Ronde ${round} · Fase: ${phase}`;
   }
 
-function renderEventInfo() {
-  if (!eventInfoDiv || !currentGame) return;
-  const g = currentGame;
-
-  eventInfoDiv.innerHTML = "";
-
-  if (!Array.isArray(g.eventTrack) || g.eventTrack.length === 0) {
-    eventInfoDiv.textContent = "Geen event track geladen.";
-    return;
-  }
-
-  const idx =
-    typeof g.currentEventIndex === "number" ? g.currentEventIndex : 0;
-  const currentEventId = g.eventTrack[idx];
-  if (!currentEventId) {
-    eventInfoDiv.textContent = "Geen huidig event geselecteerd.";
-    return;
-  }
-
-  const cardEl = renderEventCard(currentEventId, { size: "large" });
-  if (!cardEl) {
-    eventInfoDiv.textContent = currentEventId;
-    return;
-  }
-
-  eventInfoDiv.appendChild(cardEl);
-}
-
-  
+  renderEventInfo();
   updateMoveButtonsState();
   updateDecisionButtonsState();
   updateOpsState();
@@ -436,20 +407,6 @@ function renderLoot() {
   line.style.fontSize = "0.9rem";
   line.textContent = `Eggs: ${eggs} · Hens: ${hens} · Prize Hens: ${prize} · Totaal punten: ${total}`;
   lootPanel.appendChild(line);
-const cardsRow = document.createElement("div");
-cardsRow.style.display = "flex";
-cardsRow.style.flexWrap = "wrap";
-cardsRow.style.gap = "0.3rem";
-cardsRow.style.marginTop = "0.4rem";
-
-loot.forEach((card) => {
-  const cardEl = renderLootCard(card, { size: "small" });
-  cardsRow.appendChild(cardEl);
-});
-
-lootPanel.appendChild(cardsRow);
-
-  
 }
 
 function renderHand() {
@@ -470,10 +427,8 @@ function renderHand() {
   const canPlayOverall = canPlayActionNow(g, p);
   const myTurnOverall = isMyOpsTurn(g);
 
-  // Geen kaarten op hand
   if (!hand.length) {
     handPanel.textContent = "Je hebt geen Action Cards op hand.";
-
     if (opsTurnInfo) {
       if (g.phase !== "ACTIONS") {
         opsTurnInfo.textContent = "OPS-fase is nu niet actief.";
@@ -488,88 +443,12 @@ function renderHand() {
           "Jij bent nu aan de beurt in OPS – je hebt geen kaarten, je kunt alleen PASS kiezen.";
       }
     }
-
     if (btnPass) {
       btnPass.disabled = !(canPlayOverall && myTurnOverall);
     }
-
     ensureActionFeedbackEl();
     return;
   }
-
-  // Lijst met kaarten
-  const list = document.createElement("div");
-  list.style.display = "flex";
-  list.style.flexWrap = "wrap";
-  list.style.gap = "0.5rem";
-
-  hand.forEach((card, index) => {
-    // container per kaart
-    const cardContainer = document.createElement("div");
-    cardContainer.style.display = "flex";
-    cardContainer.style.flexDirection = "column";
-    cardContainer.style.alignItems = "center";
-    cardContainer.style.gap = "0.25rem";
-
-    // Kaart zelf: als renderActionCard bestaat, gebruik die, anders fallback
-    let cardEl;
-    try {
-      if (typeof renderActionCard === "function") {
-        cardEl = renderActionCard(card, { size: "medium" });
-      } else {
-        cardEl = document.createElement("div");
-        cardEl.textContent =
-          card.name || card.id || `Kaart ${index + 1}`;
-        cardEl.className = "fallback-card";
-        cardEl.style.padding = "0.4rem 0.6rem";
-        cardEl.style.borderRadius = "0.4rem";
-        cardEl.style.border = "1px solid #4b5563";
-        cardEl.style.fontSize = "0.8rem";
-      }
-    } catch (e) {
-      cardEl = document.createElement("div");
-      cardEl.textContent =
-        card.name || card.id || `Kaart ${index + 1}`;
-      cardEl.className = "fallback-card";
-    }
-    cardContainer.appendChild(cardEl);
-
-    // Play-knop voor deze kaart
-    const playBtn = document.createElement("button");
-    playBtn.textContent = "Play Next";
-    playBtn.disabled = !(canPlayOverall && myTurnOverall);
-    playBtn.addEventListener("click", () => openActionModal(index));
-
-    cardContainer.appendChild(playBtn);
-    list.appendChild(cardContainer);
-  });
-
-  handPanel.appendChild(list);
-
-  // Info onder de hand
-  if (opsTurnInfo) {
-    if (g.phase !== "ACTIONS") {
-      opsTurnInfo.textContent = "OPS-fase is nu niet actief.";
-    } else if (!canPlayOverall) {
-      opsTurnInfo.textContent =
-        "Je kunt nu geen Action Cards spelen (niet in de Yard of al gedashed).";
-    } else if (!myTurnOverall) {
-      opsTurnInfo.textContent =
-        "Niet jouw beurt in OPS – wacht tot je weer aan de beurt bent.";
-    } else {
-      opsTurnInfo.textContent =
-        "Jij bent nu aan de beurt in OPS – kies een kaart met Play Next of PASS.";
-    }
-  }
-
-  // PASS-knop aan/uit
-  if (btnPass) {
-    btnPass.disabled = !(canPlayOverall && myTurnOverall);
-  }
-
-  ensureActionFeedbackEl();
-}
-
 
   const list = document.createElement("div");
   list.style.display = "flex";
@@ -577,24 +456,7 @@ function renderHand() {
   list.style.gap = "0.25rem";
 
   hand.forEach((card, index) => {
-    
-const row = document.createElement("div");
-row.style.display = "flex";
-row.style.alignItems = "center";
-row.style.gap = "0.5rem";
-
-const cardEl = renderActionCard(card, { size: "medium" });
-row.appendChild(cardEl);
-
-const btn = document.createElement("button");
-btn.textContent = "Play Next";
-btn.disabled = !(canPlayOverall && myTurnOverall);
-btn.addEventListener("click", () => openActionModal(index));
-
-row.appendChild(btn);
-list.appendChild(row);
-
-    
+    const row = document.createElement("div");
     row.style.display = "flex";
     row.style.justifyContent = "space-between";
     row.style.alignItems = "center";
