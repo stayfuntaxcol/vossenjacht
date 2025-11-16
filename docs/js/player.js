@@ -1300,7 +1300,7 @@ async function addActionDoc(kind, choice, extraMessage) {
   };
   await addDoc(actionsCol, payload);
 
-  await addLog(db, gameId, {
+  await addLog(gameId, {
     kind: "PLAYER_ACTION",
     message:
       extraMessage ||
