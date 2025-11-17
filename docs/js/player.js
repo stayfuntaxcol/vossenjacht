@@ -856,14 +856,14 @@ async function playActionCard(index) {
   const card = hand[index];
   const cardName = card.name;
 
-  // Check Hold Still: alleen Countermove mag nog gespeeld worden
+  // Check Hold Still: als opsLocked aan staat, mag je geen Action Cards meer spelen
   const flagsBefore = mergeRoundFlags(game);
-  if (flagsBefore.opsLocked && cardName !== "Countermove") {
+  if (flagsBefore.opsLocked) {
     alert(
-      "Hold Still is actief: er mogen geen nieuwe Action Cards meer worden gespeeld, behalve Countermove."
+      "Hold Still is actief: er mogen geen nieuwe Action Cards meer worden gespeeld. Je kunt alleen PASS kiezen."
     );
     setActionFeedback(
-      "Hold Still is actief – je kunt alleen Countermove spelen of PASS."
+      "Hold Still is actief – je kunt deze ronde geen Action Cards meer spelen, alleen PASS."
     );
     return;
   }
@@ -910,9 +910,6 @@ async function playActionCard(index) {
       break;
     case "Mask Swap":
       executed = await playMaskSwap(game, player);
-      break;
-    case "Countermove":
-      executed = await playCountermove(game, player);
       break;
     default:
       alert(
@@ -1179,7 +1176,7 @@ async function playMoltingMask(game, player) {
   return true;
 }
 
-// Hold Still – lockt OPS: alleen Countermove mag nog
+// Hold Still – lockt OPS: geen nieuwe Action Cards meer
 async function playHoldStill(game, player) {
   const flags = mergeRoundFlags(game);
   flags.opsLocked = true;
@@ -1194,11 +1191,11 @@ async function playHoldStill(game, player) {
     kind: "ACTION",
     playerId,
     message:
-      `${player.name || "Speler"} speelt Hold Still – geen nieuwe Action Cards meer deze ronde, behalve Countermove.`,
+      `${player.name || "Speler"} speelt Hold Still – geen nieuwe Action Cards meer deze ronde (alleen PASS).`,
   });
 
   setActionFeedback(
-    "Hold Still is actief – alleen Countermove mag nog gespeeld worden, of PASS."
+    "Hold Still is actief – er kunnen deze ronde geen Action Cards meer worden gespeeld. Alleen PASS is nog mogelijk."
   );
 
   return true;
@@ -1492,23 +1489,6 @@ async function playMaskSwap(game, player) {
 
   setActionFeedback(
     "Mask Swap: Den-kleuren van alle vossen in de Yard zijn gehusseld."
-  );
-
-  return true;
-}
-
-// Countermove – voorlopig simpele versie, telt wel als gespeelde kaart
-async function playCountermove(game, player) {
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Countermove (digitale effect nog niet actief).`,
-  });
-
-  setActionFeedback(
-    "Countermove gespeeld – in deze versie nog zonder automatisch tegen-effect (gebruik eventueel een huisregel)."
   );
 
   return true;
