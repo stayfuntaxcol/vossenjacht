@@ -26,7 +26,7 @@ const gameInfo      = document.getElementById("gameInfo");
 const roundInfo     = document.getElementById("roundInfo");
 const logPanel      = document.getElementById("logPanel");
 const startBtn      = document.getElementById("startRoundBtn");
-const endBtn        = document.getElementById("endRoundBtn");
+const endBtn        = document.getElementById("endRoundBtn"); // oude testknop
 const nextPhaseBtn  = document.getElementById("nextPhaseBtn");
 const playAsHostBtn = document.getElementById("playAsHostBtn");
 
@@ -52,6 +52,11 @@ if (fullscreenBtn) {
   fullscreenBtn.addEventListener("click", () => {
     document.body.classList.toggle("fullscreen-board");
   });
+}
+
+// Verberg oude test-knop (endBtn)
+if (endBtn) {
+  endBtn.style.display = "none";
 }
 
 let currentRoundNumber     = 0;
@@ -80,8 +85,8 @@ function shuffleArray(array) {
   return arr;
 }
 
+// Event track incl. SHEEPDOG_PATROL en SECOND_CHARGE, zonder BAD_MAP
 function buildEventTrack() {
-  // Basis-set event cards, inclusief Sheepdog Patrol en Second Charge
   const baseTrack = [
     "DEN_RED",
     "DEN_BLUE",
@@ -101,6 +106,7 @@ function buildEventTrack() {
   return shuffleArray(baseTrack);
 }
 
+// Action deck ZONDER Countermove
 function buildActionDeck() {
   const defs = [
     { name: "Molting Mask", count: 4 },
@@ -110,7 +116,6 @@ function buildActionDeck() {
     { name: "Den Signal", count: 3 },
     { name: "Alpha Call", count: 3 },
     { name: "No-Go Zone", count: 2 },
-    // Countermove wordt in deze versie niet gebruikt
     { name: "Hold Still", count: 2 },
     { name: "Kick Up Dust", count: 3 },
     { name: "Pack Tinker", count: 3 },
@@ -206,7 +211,7 @@ function renderStatusCards(game) {
     phaseCard.innerHTML = `
       <div class="card-title">Phase</div>
       <div class="card-value">${phase}</div>
-      <div class="card-sub">MOVE / ACTIONS / DECISION / REVEAL</div>
+      <div class="card-sub">MOVE / ACTIONS / DECISION / REVEAL / END</div>
     `;
   }
 
@@ -351,7 +356,61 @@ function createPlayerCard(p, zoneType) {
   return card;
 }
 
+// ==== EINDSCORE / SCOREBOARD ====
+
+function renderFinalScoreboard(game) {
+  if (!roundInfo) return;
+
+  const players = [...latestPlayers];
+  if (!players.length) {
+    roundInfo.textContent = "Geen spelers gevonden voor het scorebord.";
+    return;
+  }
+
+  const sorted = players.sort((a, b) => (b.score || 0) - (a.score || 0));
+  const bestScore = sorted.length ? (sorted[0].score || 0) : 0;
+  const winners = sorted.filter((p) => (p.score || 0) === bestScore);
+
+  roundInfo.innerHTML = "";
+
+  const h2 = document.createElement("h2");
+  h2.textContent = "Eindscore – Fox Raid";
+  roundInfo.appendChild(h2);
+
+  const pIntro = document.createElement("p");
+  pIntro.textContent = "Het spel is afgelopen. Dit is de ranglijst:";
+  pIntro.className = "scoreboard-intro";
+  roundInfo.appendChild(pIntro);
+
+  if (winners.length && bestScore >= 0) {
+    const pWin = document.createElement("p");
+    const names = winners.map((w) => w.name || "Vos").join(", ");
+    pWin.textContent = `Winnaar(s): ${names} met ${bestScore} punten.`;
+    pWin.className = "scoreboard-winners";
+    roundInfo.appendChild(pWin);
+  }
+
+  const list = document.createElement("ol");
+  list.className = "scoreboard-list";
+
+  sorted.forEach((pl) => {
+    const li = document.createElement("li");
+    const eggs = pl.eggs || 0;
+    const hens = pl.hens || 0;
+    const prize = pl.prize || 0;
+    const score = pl.score || 0;
+    li.textContent = `${pl.name || "Vos"} – ${score} punten (P:${prize} H:${hens} E:${eggs})`;
+    list.appendChild(li);
+  });
+
+  roundInfo.appendChild(list);
+}
+
 // ==== INIT RAID (eerste keer) ====
+
+function isInYardLocal(p) {
+  return p.inYard !== false && !p.dashed;
+}
 
 async function initRaidIfNeeded(gameRef) {
   const snap = await getDoc(gameRef);
@@ -392,6 +451,9 @@ async function initRaidIfNeeded(gameRef) {
     denImmune: {},
     noPeek: [],
     predictions: [],
+    opsLocked: false,
+    followTail: {},
+    scentChecks: [],
   };
 
   const updates = [];
@@ -480,7 +542,7 @@ initAuth(async (authUser) => {
   // ==== GAME SNAPSHOT ====
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
-      gameInfo.textContent = "Spel niet gevonden";
+      if (gameInfo) gameInfo.textContent = "Spel niet gevonden";
       return;
     }
 
@@ -495,6 +557,12 @@ initAuth(async (authUser) => {
         ? getEventById(game.currentEventId)
         : null;
 
+    // Start-knop blokkeren als spel al klaar is
+    if (startBtn) {
+      startBtn.disabled =
+        game.status === "finished" || game.raidEndedByRooster === true;
+    }
+
     renderEventTrack(game);
     renderStatusCards(game);
 
@@ -502,13 +570,32 @@ initAuth(async (authUser) => {
     if (game.raidEndedByRooster) {
       extraStatus = " – Raid geëindigd door Rooster Crow (limiet bereikt)";
     }
+    if (game.status === "finished") {
+      extraStatus = extraStatus
+        ? extraStatus + " – spel afgelopen."
+        : " – spel afgelopen.";
+    }
 
-    gameInfo.textContent =
-      `Code: ${game.code} – Status: ${game.status} – ` +
-      `Ronde: ${currentRoundNumber} – Fase: ${currentPhase}${extraStatus}`;
+    if (gameInfo) {
+      gameInfo.textContent =
+        `Code: ${game.code} – Status: ${game.status} – ` +
+        `Ronde: ${currentRoundNumber} – Fase: ${currentPhase}${extraStatus}`;
+    }
+
+    // Spel afgelopen → eindscore tonen & actions-stoppen
+    if (game.status === "finished" || game.phase === "END") {
+      if (unsubActions) {
+        unsubActions();
+        unsubActions = null;
+      }
+      renderFinalScoreboard(game);
+      return;
+    }
 
     if (game.status !== "round" && game.status !== "raid") {
-      roundInfo.textContent = "Nog geen actieve ronde.";
+      if (roundInfo) {
+        roundInfo.textContent = "Nog geen actieve ronde.";
+      }
       if (unsubActions) {
         unsubActions();
         unsubActions = null;
@@ -530,6 +617,7 @@ initAuth(async (authUser) => {
 
     if (unsubActions) unsubActions();
     unsubActions = onSnapshot(actionsQuery, (snapActions) => {
+      if (!roundInfo) return;
       roundInfo.innerHTML = "";
 
       const phaseLabel = currentPhase;
@@ -610,9 +698,7 @@ initAuth(async (authUser) => {
       return ao - bo;
     });
 
-    const activeOrdered = ordered.filter(
-      (p) => p.inYard !== false && !p.dashed
-    );
+    const activeOrdered = ordered.filter(isInYardLocal);
     const baseList = activeOrdered.length ? activeOrdered : ordered;
 
     let leadIdx =
@@ -677,6 +763,7 @@ initAuth(async (authUser) => {
     snap.forEach((docSnap) => entries.push(docSnap.data()));
     entries.reverse();
 
+    if (!logPanel) return;
     logPanel.innerHTML = "";
     const inner = document.createElement("div");
     inner.className = "log-lines";
@@ -694,121 +781,29 @@ initAuth(async (authUser) => {
   });
 
   // ==== START ROUND (met Lead Fox rotatie) ====
-  startBtn.addEventListener("click", async () => {
-    const game = await initRaidIfNeeded(gameRef);
-    if (!game) return;
+  if (startBtn) {
+    startBtn.addEventListener("click", async () => {
+      const game = await initRaidIfNeeded(gameRef);
+      if (!game) return;
 
-    if (game.raidEndedByRooster) {
-      alert(
-        "De raid is geëindigd door de Rooster-limiet. Er kunnen geen nieuwe rondes meer gestart worden."
-      );
-      return;
-    }
-
-    const previousRound = game.round || 0;
-    const newRound = previousRound + 1;
-
-    const ordered = [...latestPlayers].sort((a, b) => {
-      const ao =
-        typeof a.joinOrder === "number"
-          ? a.joinOrder
-          : Number.MAX_SAFE_INTEGER;
-      const bo =
-        typeof b.joinOrder === "number"
-          ? b.joinOrder
-          : Number.MAX_SAFE_INTEGER;
-      return ao - bo;
-    });
-
-    const activeOrdered = ordered.filter(
-      (p) => p.inYard !== false && !p.dashed
-    );
-    const baseList = activeOrdered.length ? activeOrdered : ordered;
-
-    let leadIndex =
-      typeof game.leadIndex === "number" ? game.leadIndex : 0;
-
-    if (baseList.length) {
-      leadIndex =
-        ((leadIndex % baseList.length) + baseList.length) % baseList.length;
-
-      if (previousRound >= 1) {
-        leadIndex = (leadIndex + 1) % baseList.length;
-      }
-    } else {
-      leadIndex = 0;
-    }
-
-    let leadName = "";
-    if (baseList.length) {
-      const lf = baseList[leadIndex];
-      if (lf) leadName = lf.name || "";
-    }
-
-    await updateDoc(gameRef, {
-      status: "round",
-      round: newRound,
-      phase: "MOVE",
-      currentEventId: null,
-      movedPlayerIds: [],
-      opsTurnOrder: [],
-      opsTurnIndex: 0,
-      opsConsecutivePasses: 0,
-      leadIndex,
-    });
-
-    await addLog(gameId, {
-      round: newRound,
-      phase: "MOVE",
-      kind: "SYSTEM",
-      message: leadName
-        ? `Ronde ${newRound} gestart. Lead Fox: ${leadName}.`
-        : `Ronde ${newRound} gestart.`,
-    });
-  });
-
-  // ==== PHASE SWITCHER ====
-  nextPhaseBtn.addEventListener("click", async () => {
-    const snap = await getDoc(gameRef);
-    if (!snap.exists()) return;
-    const game = snap.data();
-
-    const current     = game.phase || "MOVE";
-    const roundNumber = game.round || 0;
-
-    if (game.status !== "round" && game.status !== "raid") {
-      alert("Er is geen actieve ronde in de raid.");
-      return;
-    }
-
-    // MOVE -> ACTIONS
-    if (current === "MOVE") {
-      const active = latestPlayers.filter(
-        (p) => p.inYard !== false && !p.dashed
-      );
-      const mustMoveCount = active.length;
-      const moved = game.movedPlayerIds || [];
-
-      if (mustMoveCount > 0 && moved.length < mustMoveCount) {
+      if (game.status === "finished") {
         alert(
-          `Niet alle vossen hebben hun MOVE gedaan (${moved.length}/${mustMoveCount}).`
+          "Dit spel is al afgelopen. Start een nieuwe game als je opnieuw wilt spelen."
         );
         return;
       }
 
-      if (!active.length) {
-        await updateDoc(gameRef, { phase: "DECISION" });
-        await addLog(gameId, {
-          round: roundNumber,
-          phase: "DECISION",
-          kind: "SYSTEM",
-          message:
-            "Geen actieve vossen in de Yard na MOVE – OPS wordt overgeslagen. Door naar DECISION.",
-        });
+      if (game.raidEndedByRooster) {
+        alert(
+          "De raid is geëindigd door de Rooster-limiet. Er kunnen geen nieuwe rondes meer gestart worden."
+        );
         return;
       }
 
-      const ordered = [...active].sort((a, b) => {
+      const previousRound = game.round || 0;
+      const newRound = previousRound + 1;
+
+      const ordered = [...latestPlayers].sort((a, b) => {
         const ao =
           typeof a.joinOrder === "number"
             ? a.joinOrder
@@ -820,243 +815,302 @@ initAuth(async (authUser) => {
         return ao - bo;
       });
 
-      const baseOrder = ordered.map((p) => p.id);
+      const activeOrdered = ordered.filter(isInYardLocal);
+      const baseList = activeOrdered.length ? activeOrdered : ordered;
 
       let leadIndex =
         typeof game.leadIndex === "number" ? game.leadIndex : 0;
-      if (leadIndex < 0 || leadIndex >= baseOrder.length) {
+
+      if (baseList.length) {
+        leadIndex =
+          ((leadIndex % baseList.length) + baseList.length) % baseList.length;
+
+        if (previousRound >= 1) {
+          leadIndex = (leadIndex + 1) % baseList.length;
+        }
+      } else {
         leadIndex = 0;
       }
 
-      const opsTurnOrder = [];
-      for (let i = 0; i < baseOrder.length; i++) {
-        opsTurnOrder.push(baseOrder[(leadIndex + i) % baseOrder.length]);
+      let leadName = "";
+      if (baseList.length) {
+        const lf = baseList[leadIndex];
+        if (lf) leadName = lf.name || "";
       }
 
       await updateDoc(gameRef, {
-        phase: "ACTIONS",
-        opsTurnOrder,
+        status: "round",
+        round: newRound,
+        phase: "MOVE",
+        currentEventId: null,
+        movedPlayerIds: [],
+        opsTurnOrder: [],
         opsTurnIndex: 0,
         opsConsecutivePasses: 0,
+        flagsRound: {
+          lockEvents: false,
+          scatter: false,
+          denImmune: {},
+          noPeek: [],
+          predictions: [],
+          opsLocked: false,
+          followTail: {},
+          scentChecks: [],
+        },
       });
 
       await addLog(gameId, {
-        round: roundNumber,
-        phase: "ACTIONS",
+        round: newRound,
+        phase: "MOVE",
         kind: "SYSTEM",
-        message:
-          "OPS-fase gestart. Lead Fox begint met het spelen van Action Cards of PASS.",
+        message: leadName
+          ? `Ronde ${newRound} gestart. Lead Fox: ${leadName}.`
+          : `Ronde ${newRound} gestart.`,
       });
+    });
+  }
 
-      return;
-    }
+  // ==== PHASE SWITCHER ====
+  if (nextPhaseBtn) {
+    nextPhaseBtn.addEventListener("click", async () => {
+      const snap = await getDoc(gameRef);
+      if (!snap.exists()) return;
+      const game = snap.data();
 
-    // ACTIONS -> DECISION
-    if (current === "ACTIONS") {
-      const active = latestPlayers.filter(
-        (p) => p.inYard !== false && !p.dashed
-      );
-      const activeCount = active.length;
-      const passes = game.opsConsecutivePasses || 0;
+      const current     = game.phase || "MOVE";
+      const roundNumber = game.round || 0;
 
-      if (activeCount > 0 && passes < activeCount) {
-        alert(
-          `OPS-fase is nog bezig: opeenvolgende PASSes: ${passes}/${activeCount}.`
-        );
+      if (game.status === "finished" || current === "END") {
+        alert("Het spel is al afgelopen; er is geen volgende fase meer.");
         return;
       }
 
-      await updateDoc(gameRef, { phase: "DECISION" });
-
-      await addLog(gameId, {
-        round: roundNumber,
-        phase: "DECISION",
-        kind: "SYSTEM",
-        message:
-          "Iedereen heeft na elkaar gepast in OPS – door naar DECISION-fase.",
-      });
-
-      return;
-    }
-
-    // DECISION -> REVEAL
-    if (current === "DECISION") {
-      const active = latestPlayers.filter(
-        (p) => p.inYard !== false && !p.dashed
-      );
-      const decided = active.filter((p) => !!p.decision).length;
-
-      if (active.length > 0 && decided < active.length) {
-        alert(
-          `Niet alle vossen hebben een DECISION gekozen (${decided}/${active.length}).`
-        );
+      if (game.status !== "round" && game.status !== "raid") {
+        alert("Er is geen actieve ronde in de raid.");
         return;
       }
 
-      const track = game.eventTrack || [];
-      let eventIndex =
-        typeof game.eventIndex === "number" ? game.eventIndex : 0;
+      // MOVE -> ACTIONS
+      if (current === "MOVE") {
+        const active = latestPlayers.filter(isInYardLocal);
+        const mustMoveCount = active.length;
+        const moved = game.movedPlayerIds || [];
 
-      if (!track.length || eventIndex >= track.length) {
-        alert("Er zijn geen events meer op de Track om te onthullen.");
-        return;
-      }
-
-      const eventId = track[eventIndex];
-      const ev = getEventById(eventId);
-      const revealed = game.eventRevealed
-        ? [...game.eventRevealed]
-        : track.map(() => false);
-      revealed[eventIndex] = true;
-
-      let newRoosterSeen = game.roosterSeen || 0;
-      let raidEndedByRooster = game.raidEndedByRooster || false;
-
-      const updatePayload = {
-        phase: "REVEAL",
-        currentEventId: eventId,
-        eventRevealed: revealed,
-        eventIndex: eventIndex + 1,
-      };
-
-      if (eventId === "ROOSTER_CROW") {
-        newRoosterSeen += 1;
-        updatePayload.roosterSeen = newRoosterSeen;
-        if (newRoosterSeen >= 3) {
-          raidEndedByRooster = true;
-          updatePayload.raidEndedByRooster = true;
+        if (mustMoveCount > 0 && moved.length < mustMoveCount) {
+          alert(
+            `Niet alle vossen hebben hun MOVE gedaan (${moved.length}/${mustMoveCount}).`
+          );
+          return;
         }
+
+        if (!active.length) {
+          await updateDoc(gameRef, { phase: "DECISION" });
+          await addLog(gameId, {
+            round: roundNumber,
+            phase: "DECISION",
+            kind: "SYSTEM",
+            message:
+              "Geen actieve vossen in de Yard na MOVE – OPS wordt overgeslagen. Door naar DECISION.",
+          });
+          return;
+        }
+
+        const ordered = [...active].sort((a, b) => {
+          const ao =
+            typeof a.joinOrder === "number"
+              ? a.joinOrder
+              : Number.MAX_SAFE_INTEGER;
+          const bo =
+            typeof b.joinOrder === "number"
+              ? b.joinOrder
+              : Number.MAX_SAFE_INTEGER;
+          return ao - bo;
+        });
+
+        const baseOrder = ordered.map((p) => p.id);
+
+        let leadIndex =
+          typeof game.leadIndex === "number" ? game.leadIndex : 0;
+        if (leadIndex < 0 || leadIndex >= baseOrder.length) {
+          leadIndex = 0;
+        }
+
+        const opsTurnOrder = [];
+        for (let i = 0; i < baseOrder.length; i++) {
+          opsTurnOrder.push(baseOrder[(leadIndex + i) % baseOrder.length]);
+        }
+
+        await updateDoc(gameRef, {
+          phase: "ACTIONS",
+          opsTurnOrder,
+          opsTurnIndex: 0,
+          opsConsecutivePasses: 0,
+        });
+
+        await addLog(gameId, {
+          round: roundNumber,
+          phase: "ACTIONS",
+          kind: "SYSTEM",
+          message:
+            "OPS-fase gestart. Lead Fox begint met het spelen van Action Cards of PASS.",
+        });
+
+        return;
       }
 
-      await updateDoc(gameRef, updatePayload);
+      // ACTIONS -> DECISION
+      if (current === "ACTIONS") {
+        const active = latestPlayers.filter(isInYardLocal);
+        const activeCount = active.length;
+        const passes = game.opsConsecutivePasses || 0;
 
-      await addLog(gameId, {
-        round: roundNumber,
-        phase: "REVEAL",
-        kind: "EVENT",
-        cardId: eventId,
-        message: ev ? ev.title : eventId,
-      });
+        if (activeCount > 0 && passes < activeCount) {
+          alert(
+            `OPS-fase is nog bezig: opeenvolgende PASSes: ${passes}/${activeCount}.`
+          );
+          return;
+        }
 
-      if (eventId === "ROOSTER_CROW") {
+        await updateDoc(gameRef, { phase: "DECISION" });
+
+        await addLog(gameId, {
+          round: roundNumber,
+          phase: "DECISION",
+          kind: "SYSTEM",
+          message:
+            "Iedereen heeft na elkaar gepast in OPS – door naar DECISION-fase.",
+        });
+
+        return;
+      }
+
+      // DECISION -> REVEAL
+      if (current === "DECISION") {
+        const active = latestPlayers.filter(isInYardLocal);
+        const decided = active.filter((p) => !!p.decision).length;
+
+        if (active.length > 0 && decided < active.length) {
+          alert(
+            `Niet alle vossen hebben een DECISION gekozen (${decided}/${active.length}).`
+          );
+          return;
+        }
+
+        const track = game.eventTrack || [];
+        let eventIndex =
+          typeof game.eventIndex === "number" ? game.eventIndex : 0;
+
+        if (!track.length || eventIndex >= track.length) {
+          alert("Er zijn geen events meer op de Track om te onthullen.");
+          return;
+        }
+
+        const eventId = track[eventIndex];
+        const ev = getEventById(eventId);
+        const revealed = game.eventRevealed
+          ? [...game.eventRevealed]
+          : track.map(() => false);
+        revealed[eventIndex] = true;
+
+        let newRoosterSeen = game.roosterSeen || 0;
+        let raidEndedByRooster = game.raidEndedByRooster || false;
+
+        const updatePayload = {
+          phase: "REVEAL",
+          currentEventId: eventId,
+          eventRevealed: revealed,
+          eventIndex: eventIndex + 1,
+        };
+
+        if (eventId === "ROOSTER_CROW") {
+          newRoosterSeen += 1;
+          updatePayload.roosterSeen = newRoosterSeen;
+          if (newRoosterSeen >= 3) {
+            raidEndedByRooster = true;
+            updatePayload.raidEndedByRooster = true;
+          }
+        }
+
+        await updateDoc(gameRef, updatePayload);
+
         await addLog(gameId, {
           round: roundNumber,
           phase: "REVEAL",
           kind: "EVENT",
           cardId: eventId,
-          message: `Rooster Crow (${newRoosterSeen}/3).`,
+          message: ev ? ev.title : eventId,
         });
-        if (raidEndedByRooster) {
+
+        if (eventId === "ROOSTER_CROW") {
           await addLog(gameId, {
             round: roundNumber,
             phase: "REVEAL",
-            kind: "SYSTEM",
-            message:
-              "Derde Rooster Crow: dashers verdelen de Sack en daarna eindigt de raid.",
+            kind: "EVENT",
+            cardId: eventId,
+            message: `Rooster Crow (${newRoosterSeen}/3).`,
           });
+          if (raidEndedByRooster) {
+            await addLog(gameId, {
+              round: roundNumber,
+              phase: "REVEAL",
+              kind: "SYSTEM",
+              message:
+                "Derde Rooster Crow: dashers verdelen de Sack en daarna eindigt de raid.",
+            });
+          }
         }
+
+        await resolveAfterReveal(gameId);
+        return;
       }
 
-      await resolveAfterReveal(gameId);
-      return;
-    }
+      // REVEAL -> MOVE (volgende ronde) – alleen als spel nog niet klaar is
+      if (current === "REVEAL") {
+        const latest = (await getDoc(gameRef)).data();
+        if (latest && (latest.status === "finished" || latest.phase === "END")) {
+          // engine.js heeft het spel al afgesloten
+          return;
+        }
 
-    // REVEAL -> MOVE (volgende ronde)
-    if (current === "REVEAL") {
-      await updateDoc(gameRef, { phase: "MOVE" });
+        await updateDoc(gameRef, { phase: "MOVE" });
 
-      await addLog(gameId, {
-        round: roundNumber,
-        phase: "MOVE",
-        kind: "SYSTEM",
-        message:
-          "REVEAL afgerond. Terug naar MOVE-fase voor de volgende ronde (of einde raid als er geen actieve vossen meer zijn).",
-      });
+        await addLog(gameId, {
+          round: roundNumber,
+          phase: "MOVE",
+          kind: "SYSTEM",
+          message:
+            "REVEAL afgerond. Terug naar MOVE-fase voor de volgende ronde (of einde raid als er geen actieve vossen meer zijn).",
+        });
 
-      return;
-    }
-  });
-
-  // ==== OUD TEST-KNOPJE END ROUND ====
-  endBtn.addEventListener("click", async () => {
-    const gameSnap = await getDoc(gameRef);
-    if (!gameSnap.exists()) return;
-    const game = gameSnap.data();
-    const roundNumber = game.round || 0;
-
-    if (game.status !== "round" || roundNumber === 0) {
-      alert("Er is geen actieve ronde om af te sluiten.");
-      return;
-    }
-
-    const actionsCol = collection(db, "games", gameId, "actions");
-    const actionsQuery = query(actionsCol, where("round", "==", roundNumber));
-    const actionsSnap = await getDocs(actionsQuery);
-
-    const scoreChanges = {};
-
-    actionsSnap.forEach((aDoc) => {
-      const a = aDoc.data();
-      if (!a.playerId) return;
-      if (a.choice === "GRAB_LOOT") {
-        scoreChanges[a.playerId] = (scoreChanges[a.playerId] || 0) + 1;
+        return;
       }
     });
-
-    const playersSnap = await getDocs(playersColRef);
-    const updates = [];
-    playersSnap.forEach((pDoc) => {
-      const p = pDoc.data();
-      const delta = scoreChanges[pDoc.id] || 0;
-      const newScore = (p.score || 0) + delta;
-      updates.push(updateDoc(pDoc.ref, { score: newScore }));
-    });
-
-    await Promise.all(updates);
-
-    const updatedPlayersSnap = await getDocs(playersColRef);
-    const standings = [];
-    updatedPlayersSnap.forEach((pDoc) => {
-      const p = pDoc.data();
-      standings.push(`${p.name}: ${p.score || 0}`);
-    });
-
-    await addLog(gameId, {
-      round: roundNumber,
-      phase: "REVEAL",
-      kind: "SCORE",
-      message: `Tussenstand na ronde ${roundNumber}: ${standings.join(", ")}`,
-    });
-
-    await updateDoc(gameRef, {
-      status: "lobby",
-    });
-
-    alert("Ronde afgesloten en scores bijgewerkt (oude test-teller).");
-  });
+  }
 
   // ==== Host eigen player view openen ====
-  playAsHostBtn.addEventListener("click", async () => {
-    const q = query(
-      playersColRef,
-      where("uid", "==", authUser.uid),
-      where("isHost", "==", true)
-    );
-
-    const snap = await getDocs(q);
-    if (snap.empty) {
-      alert(
-        "Geen host-speler gevonden. Start het spel opnieuw of join met de code."
+  if (playAsHostBtn) {
+    playAsHostBtn.addEventListener("click", async () => {
+      const q = query(
+        playersColRef,
+        where("uid", "==", authUser.uid),
+        where("isHost", "==", true)
       );
-      return;
-    }
 
-    const playerDoc = snap.docs[0];
-    const hostPlayerId = playerDoc.id;
+      const snap = await getDocs(q);
+      if (snap.empty) {
+        alert(
+          "Geen host-speler gevonden. Start het spel opnieuw of join met de code."
+        );
+        return;
+      }
 
-    window.open(
-      `player.html?game=${gameId}&player=${hostPlayerId}`,
-      "_blank"
-    );
-  });
+      const playerDoc = snap.docs[0];
+      const hostPlayerId = playerDoc.id;
+
+      window.open(
+        `player.html?game=${gameId}&player=${hostPlayerId}`,
+        "_blank"
+      );
+    });
+  }
 });
