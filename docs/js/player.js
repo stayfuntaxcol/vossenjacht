@@ -1,4 +1,4 @@
-// VOSSENJACHT player.js – versie met Scent Check confirm + veilige Action-kaarten
+// VOSSENJACHT player.js – fase 2: geen Countermove, eindscorebord op speler-scherm
 import { initAuth } from "./firebase.js";
 import { addLog } from "./log.js";
 import { getEventById } from "./cards.js";
@@ -219,6 +219,62 @@ function isMyOpsTurn(game) {
   return order[idx] === playerId;
 }
 
+// === SCOREBORD speler-scherm ===
+
+async function renderPlayerFinalScoreboard() {
+  if (!eventInfoDiv) return;
+  const g = currentGame;
+  if (!g) return;
+
+  const players = await fetchPlayersForGame();
+  if (!players.length) {
+    eventInfoDiv.textContent = "Geen scorebord beschikbaar.";
+    return;
+  }
+
+  const sorted = players.sort((a, b) => (b.score || 0) - (a.score || 0));
+  const bestScore = sorted.length ? (sorted[0].score || 0) : 0;
+  const winners = sorted.filter((p) => (p.score || 0) === bestScore);
+
+  eventInfoDiv.innerHTML = "";
+
+  const title = document.createElement("div");
+  title.style.fontWeight = "600";
+  title.textContent = "Eindscore – Fox Raid";
+  eventInfoDiv.appendChild(title);
+
+  const pIntro = document.createElement("div");
+  pIntro.style.fontSize = "0.9rem";
+  pIntro.style.opacity = "0.85";
+  pIntro.textContent = "Het spel is afgelopen. Dit is de ranglijst:";
+  eventInfoDiv.appendChild(pIntro);
+
+  if (winners.length && bestScore >= 0) {
+    const pWin = document.createElement("div");
+    const names = winners.map((w) => w.name || "Vos").join(", ");
+    pWin.style.marginTop = "0.25rem";
+    pWin.textContent = `Winnaar(s): ${names} met ${bestScore} punten.`;
+    eventInfoDiv.appendChild(pWin);
+  }
+
+  const list = document.createElement("ol");
+  list.className = "scoreboard-list";
+  list.style.marginTop = "0.5rem";
+
+  sorted.forEach((pl) => {
+    const li = document.createElement("li");
+    const eggs  = pl.eggs  || 0;
+    const hens  = pl.hens  || 0;
+    const prize = pl.prize || 0;
+    const score = pl.score || 0;
+    const meTag = pl.id === playerId ? " (jij)" : "";
+    li.textContent = `${pl.name || "Vos"} – ${score} punten (P:${prize} H:${hens} E:${eggs})${meTag}`;
+    list.appendChild(li);
+  });
+
+  eventInfoDiv.appendChild(list);
+}
+
 // === RENDERING ===
 
 function renderGame() {
@@ -228,6 +284,20 @@ function renderGame() {
 
   gameStatusDiv.textContent =
     `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
+
+  // Spel afgelopen? → alles uit, scorebord tonen
+  if (g.status === "finished" || g.phase === "END") {
+    setActionFeedback("");
+    if (opsTurnInfo) {
+      opsTurnInfo.textContent =
+        "Het spel is afgelopen – het scorebord is zichtbaar op het Community Board en hieronder.";
+    }
+    if (btnPass) btnPass.disabled = true;
+    renderPlayerFinalScoreboard();
+    updateMoveButtonsState();
+    updateDecisionButtonsState();
+    return;
+  }
 
   // OPS-feedback wissen zodra we uit ACTIONS gaan
   if (g.phase !== "ACTIONS") {
@@ -330,6 +400,17 @@ function updateMoveButtonsState() {
 
   const g = currentGame;
   const p = currentPlayer;
+
+  if (g.status === "finished" || g.phase === "END") {
+    btnSnatch.disabled = true;
+    btnForage.disabled = true;
+    btnScout.disabled  = true;
+    btnShift.disabled  = true;
+    moveState.textContent =
+      "Het spel is afgelopen – je kunt geen MOVE meer doen.";
+    return;
+  }
+
   const canMove = canMoveNow(g, p);
   const moved = g.movedPlayerIds || [];
 
@@ -372,6 +453,15 @@ function updateDecisionButtonsState() {
 
   const g = currentGame;
   const p = currentPlayer;
+
+  if (g.status === "finished" || g.phase === "END") {
+    btnLurk.disabled = true;
+    btnBurrow.disabled = true;
+    btnDash.disabled = true;
+    decisionState.textContent =
+      "Het spel is afgelopen – geen DECISION meer nodig.";
+    return;
+  }
 
   if (g.phase !== "DECISION") {
     btnLurk.disabled = true;
@@ -434,6 +524,18 @@ function renderHand() {
 
   const g = currentGame;
   const p = currentPlayer;
+
+  if (g.status === "finished" || g.phase === "END") {
+    handPanel.textContent =
+      "Het spel is afgelopen – je kunt geen Action Cards meer spelen.";
+    if (opsTurnInfo) {
+      opsTurnInfo.textContent = "Het spel is afgelopen.";
+    }
+    if (btnPass) btnPass.disabled = true;
+    ensureActionFeedbackEl();
+    return;
+  }
+
   const hand = p.hand || [];
 
   const canPlayOverall = canPlayActionNow(g, p);
@@ -856,14 +958,14 @@ async function playActionCard(index) {
   const card = hand[index];
   const cardName = card.name;
 
-  // Check Hold Still: als opsLocked aan staat, mag je geen Action Cards meer spelen
+  // Hold Still: opsLocked = true → niemand mag nog actiekaarten spelen
   const flagsBefore = mergeRoundFlags(game);
   if (flagsBefore.opsLocked) {
     alert(
       "Hold Still is actief: er mogen geen nieuwe Action Cards meer worden gespeeld. Je kunt alleen PASS kiezen."
     );
     setActionFeedback(
-      "Hold Still is actief – je kunt deze ronde geen Action Cards meer spelen, alleen PASS."
+      "Hold Still is actief – speel geen kaarten meer, kies PASS als je aan de beurt bent."
     );
     return;
   }
@@ -1176,7 +1278,7 @@ async function playMoltingMask(game, player) {
   return true;
 }
 
-// Hold Still – lockt OPS: geen nieuwe Action Cards meer
+// Hold Still – lockt OPS: geen Action Cards meer, alleen PASS
 async function playHoldStill(game, player) {
   const flags = mergeRoundFlags(game);
   flags.opsLocked = true;
@@ -1191,11 +1293,11 @@ async function playHoldStill(game, player) {
     kind: "ACTION",
     playerId,
     message:
-      `${player.name || "Speler"} speelt Hold Still – geen nieuwe Action Cards meer deze ronde (alleen PASS).`,
+      `${player.name || "Speler"} speelt Hold Still – geen nieuwe Action Cards meer deze ronde, alleen PASS.`,
   });
 
   setActionFeedback(
-    "Hold Still is actief – er kunnen deze ronde geen Action Cards meer worden gespeeld. Alleen PASS is nog mogelijk."
+    "Hold Still is actief – er mogen geen Action Cards meer gespeeld worden, alleen PASS."
   );
 
   return true;
@@ -1209,7 +1311,6 @@ async function playNoseForTrouble(game, player) {
     return false;
   }
 
-  // unieklijst van eventIds op de track
   const uniqueIds = [...new Set(track)];
   const menuLines = uniqueIds.map((id, idx) => {
     const ev = getEventById(id);
@@ -1520,14 +1621,14 @@ initAuth(async () => {
     renderPlayer();
   });
 
-  btnSnatch.addEventListener("click", performSnatch);
-  btnForage.addEventListener("click", performForage);
-  btnScout.addEventListener("click", performScout);
-  btnShift.addEventListener("click", performShift);
+  if (btnSnatch) btnSnatch.addEventListener("click", performSnatch);
+  if (btnForage) btnForage.addEventListener("click", performForage);
+  if (btnScout)  btnScout.addEventListener("click", performScout);
+  if (btnShift)  btnShift.addEventListener("click", performShift);
 
-  btnLurk.addEventListener("click", () => selectDecision("LURK"));
-  btnBurrow.addEventListener("click", () => selectDecision("BURROW"));
-  btnDash.addEventListener("click", () => selectDecision("DASH"));
+  if (btnLurk)   btnLurk.addEventListener("click", () => selectDecision("LURK"));
+  if (btnBurrow) btnBurrow.addEventListener("click", () => selectDecision("BURROW"));
+  if (btnDash)   btnDash.addEventListener("click", () => selectDecision("DASH"));
 
-  btnPass.addEventListener("click", passAction);
+  if (btnPass)   btnPass.addEventListener("click", passAction);
 });
