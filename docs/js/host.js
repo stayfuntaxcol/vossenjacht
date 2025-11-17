@@ -81,13 +81,15 @@ function shuffleArray(array) {
 }
 
 function buildEventTrack() {
-  // Placeholder: 12 events; later vervangen door exacte EggRun set
+  // Basis-set event cards, inclusief Sheepdog Patrol en Second Charge
   const baseTrack = [
     "DEN_RED",
     "DEN_BLUE",
     "DEN_GREEN",
     "DEN_YELLOW",
     "DOG_CHARGE",
+    "SHEEPDOG_PATROL",
+    "SECOND_CHARGE",
     "ROOSTER_CROW",
     "ROOSTER_CROW",
     "ROOSTER_CROW",
@@ -108,7 +110,7 @@ function buildActionDeck() {
     { name: "Den Signal", count: 3 },
     { name: "Alpha Call", count: 3 },
     { name: "No-Go Zone", count: 2 },
-    { name: "Countermove", count: 4 },
+    // Countermove wordt in deze versie niet gebruikt
     { name: "Hold Still", count: 2 },
     { name: "Kick Up Dust", count: 3 },
     { name: "Pack Tinker", count: 3 },
