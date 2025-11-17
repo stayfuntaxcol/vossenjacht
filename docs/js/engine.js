@@ -222,9 +222,18 @@ export async function resolveAfterReveal(gameId) {
     ...(game.flagsRound || {}),
   };
 
-  // ====== Rooster: limiet-check (we gebruiken hier nog 3 Rooster Crows) ======
+  // ====== Rooster: limiet-check ======
   if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
-    await endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, ev, round);
+    await endRaidByRooster(
+      gameId,
+      gameRef,
+      game,
+      players,
+      lootDeck,
+      sack,
+      ev,
+      round
+    );
     return;
   }
 
@@ -337,6 +346,7 @@ export async function resolveAfterReveal(gameId) {
       });
     }
   } else if (eventId === "DOG_CHARGE") {
+    // Eerste Sheepdog Charge – iedereen in de Yard, behalve BURROW / Den Signal / DASH
     for (const p of players) {
       if (!isInYardForEvents(p)) continue;
 
@@ -372,6 +382,7 @@ export async function resolveAfterReveal(gameId) {
       }
 
       if (p.decision === "DASH") {
+        // Dashers rennen net op tijd weg
         continue;
       }
 
@@ -385,6 +396,78 @@ export async function resolveAfterReveal(gameId) {
         message: `${
           p.name || "Vos"
         } wordt onder de voet gelopen door de herderhond en verliest alle buit.`,
+      });
+    }
+  } else if (eventId === "SHEEPDOG_PATROL") {
+    // Patrol: specifiek op jacht naar Dashers – BURROW/Den Signal helpen niet
+    for (const p of players) {
+      if (!isInYardForEvents(p)) continue;
+      if (p.decision !== "DASH") continue;
+
+      p.inYard = false;
+      p.loot = [];
+
+      await addLog(gameId, {
+        round,
+        phase: "REVEAL",
+        kind: "EVENT",
+        playerId: p.id,
+        message: `${
+          p.name || "Vos"
+        } wordt tijdens de Sheepdog Patrol gepakt terwijl hij probeert te dashen en verliest alle buit.`,
+      });
+    }
+  } else if (eventId === "SECOND_CHARGE") {
+    // Tweede Sheepdog Charge – zelfde effect als DOG_CHARGE
+    for (const p of players) {
+      if (!isInYardForEvents(p)) continue;
+
+      const immune =
+        flagsRound.denImmune &&
+        (flagsRound.denImmune[p.color] ||
+          flagsRound.denImmune[(p.color || "").toLowerCase()]);
+
+      if (immune) {
+        await addLog(gameId, {
+          round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          playerId: p.id,
+          message: `${
+            p.name || "Vos"
+          } ontsnapt aan de tweede herderhond-charge dankzij Den Signal.`,
+        });
+        continue;
+      }
+
+      if (p.decision === "BURROW") {
+        await addLog(gameId, {
+          round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          playerId: p.id,
+          message: `${
+            p.name || "Vos"
+          } schuilt opnieuw in zijn hol en ontwijkt de tweede charge.`,
+        });
+        continue;
+      }
+
+      if (p.decision === "DASH") {
+        // Dashers rennen net op tijd weg
+        continue;
+      }
+
+      p.inYard = false;
+      p.loot = [];
+      await addLog(gameId, {
+        round,
+        phase: "REVEAL",
+        kind: "EVENT",
+        playerId: p.id,
+        message: `${
+          p.name || "Vos"
+        } wordt alsnog ingehaald bij de Second Charge en verliest alle buit.`,
       });
     }
   } else if (eventId === "HIDDEN_NEST") {
