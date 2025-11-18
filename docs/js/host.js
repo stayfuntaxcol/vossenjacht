@@ -385,55 +385,198 @@ function renderFinalScoreboard(game) {
     return;
   }
 
-  const sorted = players.sort((a, b) => (b.score || 0) - (a.score || 0));
-  const bestScore = sorted.length ? (sorted[0].score || 0) : 0;
-  const winners = sorted.filter((p) => (p.score || 0) === bestScore);
+  // We vertrouwen op p.score als bron, maar tonen ook loot + bonus
+  const enriched = players.map((p) => {
+    const eggs = p.eggs || 0;
+    const hens = p.hens || 0;
+    const prize = p.prize || 0;
+
+    const baseScore = eggs + hens * 2 + prize * 3;
+    const storedScore = typeof p.score === "number" ? p.score : baseScore;
+
+    // Bonus = alles boven de basiswaarde van loot
+    const bonus = Math.max(0, storedScore - baseScore);
+
+    return {
+      ...p,
+      eggs,
+      hens,
+      prize,
+      baseScore,
+      totalScore: storedScore,
+      bonus,
+    };
+  });
+
+  enriched.sort((a, b) => b.totalScore - a.totalScore);
+
+  const bestScore = enriched.length ? enriched[0].totalScore : 0;
+  const winners = enriched.filter((p) => p.totalScore === bestScore);
   const winnerIds = new Set(winners.map((w) => w.id));
 
   roundInfo.innerHTML = "";
 
+  const section = document.createElement("div");
+  section.className = "scoreboard-section";
+
   const h2 = document.createElement("h2");
   h2.textContent = "Eindscore – Fox Raid";
-  roundInfo.appendChild(h2);
+  section.appendChild(h2);
 
   const pIntro = document.createElement("p");
-  pIntro.textContent = "Het spel is afgelopen. Dit is de ranglijst:";
+  pIntro.textContent =
+    "Het spel is afgelopen. Dit is de eindranglijst (Eieren, Kippen, Prize Kippen en Bonus):";
   pIntro.className = "scoreboard-intro";
-  roundInfo.appendChild(pIntro);
+  section.appendChild(pIntro);
 
   if (winners.length && bestScore >= 0) {
     const pWin = document.createElement("p");
     const names = winners.map((w) => w.name || "Vos").join(", ");
     pWin.textContent = `🏆 Winnaar(s): ${names} met ${bestScore} punten.`;
     pWin.className = "scoreboard-winners";
-    roundInfo.appendChild(pWin);
+    section.appendChild(pWin);
   }
 
-  const list = document.createElement("ol");
-  list.className = "scoreboard-list";
+  // Scoreboard tabel
+  const table = document.createElement("table");
+  table.className = "scoreboard-table";
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Fox</th>
+        <th>E</th>
+        <th>H</th>
+        <th>P</th>
+        <th>Bonus</th>
+        <th>Totaal</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  `;
 
-  sorted.forEach((p, idx) => {
-    const li = document.createElement("li");
-    const eggs = p.eggs || 0;
-    const hens = p.hens || 0;
-    const prize = p.prize || 0;
-    const score = p.score || 0;
-    const isWinner = winnerIds.has(p.id);
-    const prefix = isWinner ? "🏆 " : "";
+  const tbody = table.querySelector("tbody");
 
-    li.textContent = `${prefix}${idx + 1}. ${p.name || "Vos"} – ${
-      score
-    } punten (P:${prize} H:${hens} E:${eggs})`;
+  let sumEggs = 0;
+  let sumHens = 0;
+  let sumPrize = 0;
+  let sumBonus = 0;
+  let sumTotal = 0;
 
-    if (isWinner) {
-      li.classList.add("scoreboard-winner");
+  enriched.forEach((p, idx) => {
+    const tr = document.createElement("tr");
+    if (winnerIds.has(p.id)) {
+      tr.classList.add("scoreboard-row-winner");
     }
 
-    list.appendChild(li);
+    sumEggs += p.eggs;
+    sumHens += p.hens;
+    sumPrize += p.prize;
+    sumBonus += p.bonus;
+    sumTotal += p.totalScore;
+
+    tr.innerHTML = `
+      <td>${idx + 1}</td>
+      <td>${p.name || "Vos"}</td>
+      <td>${p.eggs}</td>
+      <td>${p.hens}</td>
+      <td>${p.prize}</td>
+      <td>${p.bonus}</td>
+      <td>${p.totalScore}</td>
+    `;
+    tbody.appendChild(tr);
   });
 
-  roundInfo.appendChild(list);
+  const tfoot = document.createElement("tfoot");
+  const trTotal = document.createElement("tr");
+  trTotal.innerHTML = `
+    <td colspan="2">Totaal</td>
+    <td>${sumEggs}</td>
+    <td>${sumHens}</td>
+    <td>${sumPrize}</td>
+    <td>${sumBonus}</td>
+    <td>${sumTotal}</td>
+  `;
+  tfoot.appendChild(trTotal);
+  table.appendChild(tfoot);
+
+  section.appendChild(table);
+
+  // Container voor lifetime Top 10 (leaderboard)
+  const leaderboardSection = document.createElement("div");
+  leaderboardSection.innerHTML = `
+    <div class="leaderboard-title">Top 10 – hoogste scores ooit</div>
+    <ul class="leaderboard-list" id="leaderboardList"></ul>
+  `;
+  section.appendChild(leaderboardSection);
+
+  roundInfo.appendChild(section);
+
+  // Probeer een globale Top 10 te laden (als een 'leaderboard' collectie bestaat)
+  loadLeaderboardTop10();
 }
+// Lees een globale Top 10 uit Firestore (collectie: "leaderboard").
+// Deze functie is optioneel: als er geen collectie bestaat, toont hij een lege staat.
+async function loadLeaderboardTop10() {
+  if (!roundInfo) return;
+
+  const listEl = roundInfo.querySelector("#leaderboardList");
+  if (!listEl) return;
+
+  listEl.innerHTML = "";
+
+  try {
+    const leaderboardCol = collection(db, "leaderboard");
+    const q = query(leaderboardCol, orderBy("score", "desc"), limit(10));
+    const snap = await getDocs(q);
+
+    if (snap.empty) {
+      const empty = document.createElement("li");
+      empty.className = "leaderboard-empty";
+      empty.textContent = "Nog geen data in het leaderboard.";
+      listEl.appendChild(empty);
+      return;
+    }
+
+    let rank = 1;
+    snap.forEach((docSnap) => {
+      const data = docSnap.data();
+      const eggs = data.eggs || 0;
+      const hens = data.hens || 0;
+      const prize = data.prize || 0;
+      const bonus = data.bonus || 0;
+      const score = data.score || 0;
+
+      let dateLabel = "";
+      if (data.playedAt && data.playedAt.seconds != null) {
+        const d = new Date(data.playedAt.seconds * 1000);
+        dateLabel = d.toLocaleDateString();
+      }
+
+      const li = document.createElement("li");
+      li.className = "leaderboard-item";
+      li.innerHTML = `
+        <div class="leaderboard-item-main">
+          <span>${rank}. ${data.name || "Fox"}</span>
+          <span class="leaderboard-item-loot">E:${eggs} H:${hens} P:${prize} +${bonus}</span>
+        </div>
+        <div class="leaderboard-item-meta">
+          <div>${score} pts</div>
+          <div class="leaderboard-item-date">${dateLabel}</div>
+        </div>
+      `;
+      listEl.appendChild(li);
+      rank += 1;
+    });
+  } catch (err) {
+    console.error("Fout bij laden leaderboard:", err);
+    const li = document.createElement("li");
+    li.className = "leaderboard-empty";
+    li.textContent = "Leaderboard kon niet geladen worden.";
+    listEl.appendChild(li);
+  }
+}
+
 
 // ==== INIT RAID (eerste keer) ====
 
