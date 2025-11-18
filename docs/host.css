@@ -91,6 +91,31 @@
   background: rgba(15, 23, 42, 0.9);
 }
 
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 998;
+}
+
+.overlay-box {
+  background: #111;
+  padding: 2rem;
+  border-radius: 1rem;
+  max-width: 960px;
+  width: 90%;
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.overlay-score h2 {
+  margin-top: 0;
+}
+
+
 /* ==========================================
    BOARD 16:9
    ========================================== */
