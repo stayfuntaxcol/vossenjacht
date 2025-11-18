@@ -27,6 +27,14 @@
         <button id="fullscreenBtn" class="btn btn-ghost">
           Fullscreen
         </button>
+        <!-- QR-knop voor spelers -->
+        <button id="qrJoinToggleBtn" class="btn btn-ghost">
+          📱 Join via QR
+        </button>
+        <!-- Optionele knop voor toekomstig full-screen scoreboard -->
+        <button id="showScoreboardBtn" class="btn btn-secondary">
+          Scoreboard
+        </button>
       </div>
     </header>
 
@@ -114,8 +122,7 @@
               </div>
             </div>
 
-            <!-- PhaseCard / LeadFoxCard worden nu niet visueel gebruikt,
-                 maar blijven bestaan voor host.js -->
+            <!-- Verborgen statuskaarten, alleen gebruikt door host.js voor data -->
             <div id="phaseCard" class="board-card card-status hidden"></div>
             <div id="leadFoxCard" class="board-card card-status hidden"></div>
           </div>
@@ -123,6 +130,50 @@
       </div>
     </main>
 
+    <!-- QR overlay voor join-link -->
+    <div id="qrJoinOverlay" class="qr-overlay hidden">
+      <div class="qr-box">
+        <div id="qrJoinLabel" class="qr-label"></div>
+        <div id="qrJoin" class="qr-container"></div>
+        <button id="qrJoinCloseBtn" class="btn btn-secondary qr-close">
+          Sluiten
+        </button>
+      </div>
+    </div>
+
+    <!-- SCOREBOARD OVERLAY (voor later full-screen eindscore) -->
+    <div id="scoreOverlay" class="overlay hidden">
+      <div class="overlay-box overlay-score">
+        <div class="overlay-header">
+          <h2>Eindscore – Fox Raid</h2>
+          <button id="scoreOverlayCloseBtn" class="btn btn-secondary">
+            Sluiten
+          </button>
+        </div>
+        <div id="scoreOverlayContent" class="overlay-content"></div>
+      </div>
+    </div>
+
+    <!-- EVENT POSTER OVERLAY (voor grote event art) -->
+    <div id="eventPosterOverlay" class="overlay hidden">
+      <div class="overlay-box overlay-event">
+        <div class="overlay-header">
+          <h2 id="eventPosterTitle"></h2>
+          <button id="eventPosterCloseBtn" class="btn btn-secondary">
+            Sluiten
+          </button>
+        </div>
+        <div class="overlay-content">
+          <img id="eventPosterImage" alt="" class="event-poster-img" />
+          <p id="eventPosterText"></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- QR-code library (globale QRCode) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+    <!-- Host logic -->
     <script type="module" src="js/host.js"></script>
   </body>
 </html>
