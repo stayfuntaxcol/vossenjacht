@@ -85,25 +85,43 @@ function shuffleArray(array) {
   return arr;
 }
 
-// Event track incl. SHEEPDOG_PATROL en SECOND_CHARGE, zonder BAD_MAP
+// Event track: precies 12 kaarten, met DOG_CHARGE altijd in de eerste helft
+// en SECOND_CHARGE altijd in de tweede helft.
 function buildEventTrack() {
-  const baseTrack = [
+  const others = [
     "DEN_RED",
     "DEN_BLUE",
     "DEN_GREEN",
     "DEN_YELLOW",
-    "DOG_CHARGE",
     "SHEEPDOG_PATROL",
-    "SECOND_CHARGE",
-    "ROOSTER_CROW",
-    "ROOSTER_CROW",
-    "ROOSTER_CROW",
     "HIDDEN_NEST",
     "GATE_TOLL",
-    "MAGPIE_SNITCH",
-    "PAINT_BOMB_NEST",
+    "ROOSTER_CROW",
+    "ROOSTER_CROW",
+    "ROOSTER_CROW",
   ];
-  return shuffleArray(baseTrack);
+  const pool = shuffleArray(others);
+
+  const track = new Array(12).fill(null);
+
+  const firstHalfSlots  = [0, 1, 2, 3, 4, 5];
+  const secondHalfSlots = [6, 7, 8, 9, 10, 11];
+
+  const dogIndex =
+    firstHalfSlots[Math.floor(Math.random() * firstHalfSlots.length)];
+  const secondIndex =
+    secondHalfSlots[Math.floor(Math.random() * secondHalfSlots.length)];
+
+  track[dogIndex] = "DOG_CHARGE";
+  track[secondIndex] = "SECOND_CHARGE";
+
+  let pIdx = 0;
+  for (let i = 0; i < track.length; i++) {
+    if (track[i] !== null) continue;
+    track[i] = pool[pIdx++];
+  }
+
+  return track;
 }
 
 // Action deck ZONDER Countermove
@@ -370,6 +388,7 @@ function renderFinalScoreboard(game) {
   const sorted = players.sort((a, b) => (b.score || 0) - (a.score || 0));
   const bestScore = sorted.length ? (sorted[0].score || 0) : 0;
   const winners = sorted.filter((p) => (p.score || 0) === bestScore);
+  const winnerIds = new Set(winners.map((w) => w.id));
 
   roundInfo.innerHTML = "";
 
@@ -385,7 +404,7 @@ function renderFinalScoreboard(game) {
   if (winners.length && bestScore >= 0) {
     const pWin = document.createElement("p");
     const names = winners.map((w) => w.name || "Vos").join(", ");
-    pWin.textContent = `Winnaar(s): ${names} met ${bestScore} punten.`;
+    pWin.textContent = `🏆 Winnaar(s): ${names} met ${bestScore} punten.`;
     pWin.className = "scoreboard-winners";
     roundInfo.appendChild(pWin);
   }
@@ -393,13 +412,23 @@ function renderFinalScoreboard(game) {
   const list = document.createElement("ol");
   list.className = "scoreboard-list";
 
-  sorted.forEach((pl) => {
+  sorted.forEach((p, idx) => {
     const li = document.createElement("li");
-    const eggs = pl.eggs || 0;
-    const hens = pl.hens || 0;
-    const prize = pl.prize || 0;
-    const score = pl.score || 0;
-    li.textContent = `${pl.name || "Vos"} – ${score} punten (P:${prize} H:${hens} E:${eggs})`;
+    const eggs = p.eggs || 0;
+    const hens = p.hens || 0;
+    const prize = p.prize || 0;
+    const score = p.score || 0;
+    const isWinner = winnerIds.has(p.id);
+    const prefix = isWinner ? "🏆 " : "";
+
+    li.textContent = `${prefix}${idx + 1}. ${p.name || "Vos"} – ${
+      score
+    } punten (P:${prize} H:${hens} E:${eggs})`;
+
+    if (isWinner) {
+      li.classList.add("scoreboard-winner");
+    }
+
     list.appendChild(li);
   });
 
@@ -408,6 +437,9 @@ function renderFinalScoreboard(game) {
 
 // ==== INIT RAID (eerste keer) ====
 
+function isInYardForEvents(p) {
+  return p.inYard !== false && !p.dashed;
+}
 function isInYardLocal(p) {
   return p.inYard !== false && !p.dashed;
 }
@@ -699,7 +731,7 @@ initAuth(async (authUser) => {
     });
 
     const activeOrdered = ordered.filter(isInYardLocal);
-    const baseList = activeOrdered.length ? activeOrdered : ordered;
+    const baseList = activeOrdered.length ? activeOrdered : [];
 
     let leadIdx =
       latestGame && typeof latestGame.leadIndex === "number"
@@ -732,8 +764,6 @@ initAuth(async (authUser) => {
       let zoneType = "yard";
 
       if (latestGame && latestGame.raidEndedByRooster) {
-        // Raid is geëindigd door Rooster Crow:
-        // alle niet-dashers worden als CAUGHT getoond.
         if (p.dashed) zoneType = "dash";
         else zoneType = "caught";
       } else {
@@ -752,6 +782,14 @@ initAuth(async (authUser) => {
         caughtZone.appendChild(card);
       }
     });
+
+    // Als het spel al finished is, ook hier nogmaals scoreboard renderen met up-to-date spelers
+    if (
+      latestGame &&
+      (latestGame.status === "finished" || latestGame.phase === "END")
+    ) {
+      renderFinalScoreboard(latestGame);
+    }
   });
 
   // ==== LOGPANEL ====
@@ -816,7 +854,7 @@ initAuth(async (authUser) => {
       });
 
       const activeOrdered = ordered.filter(isInYardLocal);
-      const baseList = activeOrdered.length ? activeOrdered : ordered;
+      const baseList = activeOrdered.length ? activeOrdered : [];
 
       let leadIndex =
         typeof game.leadIndex === "number" ? game.leadIndex : 0;
@@ -857,6 +895,7 @@ initAuth(async (authUser) => {
           followTail: {},
           scentChecks: [],
         },
+        leadIndex,
       });
 
       await addLog(gameId, {
@@ -892,7 +931,7 @@ initAuth(async (authUser) => {
 
       // MOVE -> ACTIONS
       if (current === "MOVE") {
-        const active = latestPlayers.filter(isInYardLocal);
+        const active = latestPlayers.filter(isInYardForEvents);
         const mustMoveCount = active.length;
         const moved = game.movedPlayerIds || [];
 
@@ -960,7 +999,7 @@ initAuth(async (authUser) => {
 
       // ACTIONS -> DECISION
       if (current === "ACTIONS") {
-        const active = latestPlayers.filter(isInYardLocal);
+        const active = latestPlayers.filter(isInYardForEvents);
         const activeCount = active.length;
         const passes = game.opsConsecutivePasses || 0;
 
@@ -986,7 +1025,7 @@ initAuth(async (authUser) => {
 
       // DECISION -> REVEAL
       if (current === "DECISION") {
-        const active = latestPlayers.filter(isInYardLocal);
+        const active = latestPlayers.filter(isInYardForEvents);
         const decided = active.filter((p) => !!p.decision).length;
 
         if (active.length > 0 && decided < active.length) {
