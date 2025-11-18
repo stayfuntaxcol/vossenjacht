@@ -34,75 +34,90 @@
       <div id="boardShell">
         <div id="board">
           <div id="boardInner">
-            <!-- 8 x 6 UNIT GRID -->
-            <div id="boardGrid">
-              <!-- TOP ROW (row 1) -->
-              <!-- col1: Farm Sack (links boven) -->
-              <div id="sackCard" class="board-card card-sack"></div>
+            <!-- TOP ROW: LOOT / SPECIALS / ACTION / ROOSTER -->
+            <div class="board-row board-top">
+              <div class="top-left">
+                <div
+                  id="sackCard"
+                  class="board-card card-stack"
+                ></div>
+                <div
+                  id="lootDeckCard"
+                  class="board-card card-stack"
+                ></div>
+              </div>
 
-              <!-- col2: Loot Deck (links van het midden) -->
-              <div id="lootDeckCard" class="board-card card-deck"></div>
+              <div class="top-center">
+                <div
+                  id="fullMoonCard"
+                  class="board-card card-status"
+                ></div>
+                <div
+                  id="beaconCard"
+                  class="board-card card-status"
+                ></div>
+                <div
+                  id="scatterCard"
+                  class="board-card card-status"
+                ></div>
+                <div
+                  id="optionACard"
+                  class="board-card card-status"
+                ></div>
+                <div
+                  id="optionBCard"
+                  class="board-card card-status"
+                ></div>
+              </div>
 
-              <!-- col3: Beacon (midden links) -->
-              <div id="beaconCard" class="board-card card-status"></div>
-
-              <!-- col4: Scatter (midden rechts) -->
-              <div id="scatterCard" class="board-card card-status"></div>
-
-              <!-- col5: Action Stack (rechts van het midden) -->
-              <div
-                id="actionDeckCard"
-                class="board-card card-deck"
-              ></div>
-
-              <!-- col8: Rooster (rechtsboven) -->
-              <div
-                id="roosterCard"
-                class="board-card card-status"
-              ></div>
-
-              <!-- MIDDLE BLOCK: EVENT CARDS (rows 2–3, cols 2–7: 2 x 6 units) -->
-              <div id="eventTrack" class="event-zone"></div>
-
-              <!-- PLAYERS: YARD + DASHED + CAUGHT -->
-              <!-- row4, col1–8: Yard (8 units) -->
-              <div
-                id="yardZone"
-                class="player-zone player-zone-yard"
-              ></div>
-
-              <!-- row5, col1–2: Dashed (2 units) -->
-              <div
-                id="dashZone"
-                class="player-zone player-zone-dash"
-              ></div>
-
-              <!-- row5, col7–8: Caught (2 units, boven log) -->
-              <div
-                id="caughtZone"
-                class="player-zone player-zone-caught"
-              ></div>
-
-              <!-- BOTTOM LEFT: Phase + Lead Fox -->
-              <!-- row6, col1: Phase Card -->
-              <div
-                id="phaseCard"
-                class="board-card card-status"
-              ></div>
-
-              <!-- row6, col2: Lead Fox Card -->
-              <div
-                id="leadFoxCard"
-                class="board-card card-status"
-              ></div>
-
-              <!-- BOTTOM RIGHT: INFO PANEL (round info + log popup) -->
-              <!-- row6, col7–8: Log popup (2 units) -->
-              <div id="infoPanel" class="info-panel">
-                <div id="roundInfo" class="info-section"></div>
-                <div id="logPanel" class="info-section"></div>
+              <div class="top-right">
+                <div
+                  id="actionDeckCard"
+                  class="board-card card-stack"
+                ></div>
+                <div
+                  id="roosterCard"
+                  class="board-card card-status"
+                ></div>
               </div>
             </div>
+
+            <!-- MIDDLE: EVENT GRID + CAUGHT -->
+            <div class="board-row board-middle">
+              <div class="event-area">
+                <div class="event-area-label">EVENTS</div>
+                <div id="eventTrack" class="event-track"></div>
+              </div>
+
+              <div id="caughtZone" class="player-zone player-zone-caught">
+                <div class="player-zone-label">CAUGHT</div>
+              </div>
+            </div>
+
+            <!-- BOTTOM: DASH / PLAYERS YARD / LOG POPUP -->
+            <div class="board-row board-bottom">
+              <div id="dashZone" class="player-zone player-zone-dash">
+                <div class="player-zone-label">DASH</div>
+              </div>
+
+              <div class="players-yard-area">
+                <div class="players-yard-label">PLAYERS YARD</div>
+                <div
+                  id="yardZone"
+                  class="player-zone player-zone-yard"
+                ></div>
+              </div>
+
+              <div class="log-area">
+                <div id="roundInfo" class="round-info"></div>
+                <div id="logPanel" class="log-panel"></div>
+              </div>
+            </div>
+
+            <!-- PhaseCard / LeadFoxCard worden nu niet visueel gebruikt,
+                 maar blijven bestaan voor host.js -->
+            <div id="phaseCard" class="board-card card-status hidden"></div>
+            <div id="leadFoxCard" class="board-card card-status hidden"></div>
           </div>
         </div>
       </div>
