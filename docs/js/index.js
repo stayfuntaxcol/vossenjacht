@@ -22,10 +22,31 @@ function generateCode(length = 4) {
 }
 
 initAuth((user) => {
-  const hostBtn = document.getElementById("hostGameBtn");
-  const joinBtn = document.getElementById("joinGameBtn");
+  const hostBtn   = document.getElementById("hostGameBtn");
+  const joinBtn   = document.getElementById("joinGameBtn");
   const nameInput = document.getElementById("playerName");
   const codeInput = document.getElementById("joinCode");
+
+  // Safety-check: als de knoppen/inputs ontbreken, gewoon stoppen
+  if (!hostBtn || !joinBtn || !nameInput || !codeInput) {
+    console.warn("Join/host UI elementen niet gevonden op deze pagina.");
+    return;
+  }
+
+  // --- NIEUW: code uit URL (voor QR) uitlezen en invullen ---
+  // Voorbeeld-URL: .../join.html?code=ABCD
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const codeFromUrl = params.get("code");
+    if (codeFromUrl) {
+      codeInput.value = codeFromUrl.toUpperCase();
+      // Handig: cursor direct in naamveld
+      nameInput.focus();
+    }
+  } catch (e) {
+    console.warn("Kon querystring niet parsen:", e);
+  }
+  // --- EINDE NIEUW ---
 
   hostBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();
