@@ -2,6 +2,7 @@ import { initAuth } from "./firebase.js";
 import { getEventById } from "./cards.js";
 import { addLog } from "./log.js";
 import { resolveAfterReveal } from "./engine.js";
+import { renderPlayerSlotCard } from "./cardRenderer.js";
 import {
   getFirestore,
   doc,
@@ -31,28 +32,35 @@ const nextPhaseBtn  = document.getElementById("nextPhaseBtn");
 const playAsHostBtn = document.getElementById("playAsHostBtn");
 
 // Board / zones
-const eventTrackDiv   = document.getElementById("eventTrack");
-const yardZone        = document.getElementById("yardZone");
-const caughtZone      = document.getElementById("caughtZone");
-const dashZone        = document.getElementById("dashZone");
+const eventTrackDiv = document.getElementById("eventTrack");
+const yardZone      = document.getElementById("yardZone");
+const caughtZone    = document.getElementById("caughtZone");
+const dashZone      = document.getElementById("dashZone");
 
 // Status cards
-const phaseCard       = document.getElementById("phaseCard");
-const leadFoxCard     = document.getElementById("leadFoxCard");
-const roosterCard     = document.getElementById("roosterCard");
-const beaconCard      = document.getElementById("beaconCard");
-const scatterCard     = document.getElementById("scatterCard");
-const sackCard        = document.getElementById("sackCard");
-const lootDeckCard    = document.getElementById("lootDeckCard");
-const actionDeckCard  = document.getElementById("actionDeckCard");
+const phaseCard     = document.getElementById("phaseCard");
+const leadFoxCard   = document.getElementById("leadFoxCard");
+const roosterCard   = document.getElementById("roosterCard");
+const beaconCard    = document.getElementById("beaconCard");
+const scatterCard   = document.getElementById("scatterCard");
+const sackCard      = document.getElementById("sackCard");
+const lootDeckCard  = document.getElementById("lootDeckCard");
+const actionDeckCard= document.getElementById("actionDeckCard");
 
 // Fullscreen toggle
-const fullscreenBtn   = document.getElementById("fullscreenBtn");
+const fullscreenBtn = document.getElementById("fullscreenBtn");
 if (fullscreenBtn) {
   fullscreenBtn.addEventListener("click", () => {
     document.body.classList.toggle("fullscreen-board");
   });
 }
+
+// QR Join overlay / controls
+const qrJoinOverlay   = document.getElementById("qrJoinOverlay");
+const qrJoinLabel     = document.getElementById("qrJoinLabel");
+const qrJoinContainer = document.getElementById("qrJoin");
+const qrJoinToggleBtn = document.getElementById("qrJoinToggleBtn");
+const qrJoinCloseBtn  = document.getElementById("qrJoinCloseBtn");
 
 // Verberg oude test-knop (endBtn)
 if (endBtn) {
@@ -73,6 +81,54 @@ let currentLeadFoxName     = "";
 
 // Kleur-cycling voor Dens
 const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
+
+// QR Join: join.html pad en QR instance
+const JOIN_PAGE_PATH = "/join.html"; // pas aan als jouw join-pagina anders heet
+let qrInstance = null;
+
+function getJoinUrl(game) {
+  if (!game || !game.code) return null;
+  const origin = window.location.origin || "";
+  const code   = game.code || "";
+  return `${origin}${JOIN_PAGE_PATH}?code=${encodeURIComponent(code)}`;
+}
+
+function renderJoinQr(game) {
+  if (!qrJoinContainer || !qrJoinLabel) return;
+  if (typeof QRCode === "undefined") return;
+  if (!game || !game.code) return;
+
+  const joinUrl = getJoinUrl(game);
+  if (!joinUrl) return;
+
+  qrJoinLabel.textContent = `Scan om te joinen: ${game.code}`;
+  qrJoinContainer.innerHTML = "";
+
+  if (!qrInstance) {
+    qrInstance = new QRCode(qrJoinContainer, {
+      text: joinUrl,
+      width: 256,
+      height: 256,
+    });
+  } else {
+    qrInstance.clear();
+    qrInstance.makeCode(joinUrl);
+  }
+}
+
+// QR overlay show/hide
+if (qrJoinToggleBtn && qrJoinOverlay) {
+  qrJoinToggleBtn.addEventListener("click", () => {
+    qrJoinOverlay.classList.remove("hidden"); // CSS: .hidden { display:none; }
+  });
+}
+if (qrJoinCloseBtn && qrJoinOverlay) {
+  qrJoinCloseBtn.addEventListener("click", () => {
+    qrJoinOverlay.classList.add("hidden");
+  });
+}
+
+let latestPlayersCacheForScoreboard = [];
 
 // ==== Helpers: decks, event track ====
 
@@ -195,8 +251,12 @@ function renderEventTrack(game) {
     const slot = document.createElement("div");
     slot.classList.add("event-slot", `event-state-${state}`);
 
+    // Oud: ev.type, Nieuw: ev.category → beide ondersteunen
     if (ev && ev.type) {
       slot.classList.add("event-type-" + ev.type.toLowerCase());
+    }
+    if (ev && ev.category) {
+      slot.classList.add("event-cat-" + ev.category.toLowerCase());
     }
 
     const idx = document.createElement("div");
@@ -287,7 +347,7 @@ function renderStatusCards(game) {
   if (scatterCard) {
     const on = !!flags.scatter;
     scatterCard.innerHTML = `
-      <div class="card-title">Scatter!</div>
+      <div class="card-title">Scatter!</</div>
       <div class="card-value">${on ? "ON" : "OFF"}</div>
       <div class="card-sub">${
         on ? "Niemand mag Scouten" : "Scout toegestaan"
@@ -329,63 +389,20 @@ function renderStatusCards(game) {
   }
 }
 
-// ==== PLAYER CARDS / ZONES ====
-
-function createPlayerCard(p, zoneType) {
-  const card = document.createElement("div");
-  card.className = "card-player";
-
-  if (currentLeadFoxId && p.id === currentLeadFoxId) {
-    card.classList.add("card-player-lead");
-  }
-
-  const denColor = (p.color || "none").toLowerCase();
-
-  const statusLabel =
-    zoneType === "yard"
-      ? "IN YARD"
-      : zoneType === "dash"
-      ? "DASHED"
-      : "CAUGHT";
-
-  const statusClass =
-    zoneType === "yard"
-      ? "chip-status-yard"
-      : zoneType === "dash"
-      ? "chip-status-dashed"
-      : "chip-status-caught";
-
-  card.innerHTML = `
-    <div class="card-header">
-      <span class="card-name">${p.name || "(naam onbekend)"}</span>
-      <span class="card-den den-${denColor}"></span>
-    </div>
-    <div class="card-body">
-      <div class="card-score">${p.score || 0} pts</div>
-      <div class="card-tags">
-        ${p.isHost ? '<span class="chip chip-host">HOST</span>' : ""}
-      </div>
-    </div>
-    <div class="card-footer">
-      <span class="chip ${statusClass}">${statusLabel}</span>
-    </div>
-  `;
-
-  return card;
-}
-
 // ==== EINDSCORE / SCOREBOARD ====
+// (ongewijzigd t.o.v. jouw versie, alleen iets netter geordend)
 
 function renderFinalScoreboard(game) {
   if (!roundInfo) return;
 
   const players = [...latestPlayers];
+  latestPlayersCacheForScoreboard = players;
+
   if (!players.length) {
     roundInfo.textContent = "Geen spelers gevonden voor het scorebord.";
     return;
   }
 
-  // We vertrouwen op p.score als bron, maar tonen ook loot + bonus
   const enriched = players.map((p) => {
     const eggs = p.eggs || 0;
     const hens = p.hens || 0;
@@ -393,8 +410,6 @@ function renderFinalScoreboard(game) {
 
     const baseScore = eggs + hens * 2 + prize * 3;
     const storedScore = typeof p.score === "number" ? p.score : baseScore;
-
-    // Bonus = alles boven de basiswaarde van loot
     const bonus = Math.max(0, storedScore - baseScore);
 
     return {
@@ -437,7 +452,6 @@ function renderFinalScoreboard(game) {
     section.appendChild(pWin);
   }
 
-  // Scoreboard tabel
   const table = document.createElement("table");
   table.className = "scoreboard-table";
   table.innerHTML = `
@@ -502,7 +516,6 @@ function renderFinalScoreboard(game) {
 
   section.appendChild(table);
 
-  // Container voor lifetime Top 10 (leaderboard)
   const leaderboardSection = document.createElement("div");
   leaderboardSection.innerHTML = `
     <div class="leaderboard-title">Top 10 – hoogste scores ooit</div>
@@ -512,11 +525,9 @@ function renderFinalScoreboard(game) {
 
   roundInfo.appendChild(section);
 
-  // Probeer een globale Top 10 te laden (als een 'leaderboard' collectie bestaat)
   loadLeaderboardTop10();
 }
-// Lees een globale Top 10 uit Firestore (collectie: "leaderboard").
-// Deze functie is optioneel: als er geen collectie bestaat, toont hij een lege staat.
+
 async function loadLeaderboardTop10() {
   if (!roundInfo) return;
 
@@ -576,7 +587,6 @@ async function loadLeaderboardTop10() {
     listEl.appendChild(li);
   }
 }
-
 
 // ==== INIT RAID (eerste keer) ====
 
@@ -741,6 +751,11 @@ initAuth(async (authUser) => {
     renderEventTrack(game);
     renderStatusCards(game);
 
+    // QR-code updaten als er een game-code is
+    if (game.code) {
+      renderJoinQr(game);
+    }
+
     let extraStatus = "";
     if (game.raidEndedByRooster) {
       extraStatus = " – Raid geëindigd door Rooster Crow (limiet bereikt)";
@@ -860,7 +875,6 @@ initAuth(async (authUser) => {
       return;
     }
 
-    // Volgorde op basis van joinOrder
     const ordered = [...players].sort((a, b) => {
       const ao =
         typeof a.joinOrder === "number"
@@ -902,7 +916,6 @@ initAuth(async (authUser) => {
       renderStatusCards(latestGame);
     }
 
-    // Zet spelers in zones (met rooster-einde logica)
     ordered.forEach((p) => {
       let zoneType = "yard";
 
@@ -915,7 +928,22 @@ initAuth(async (authUser) => {
         else zoneType = "yard";
       }
 
-      const card = createPlayerCard(p, zoneType);
+      const isLead = currentLeadFoxId && p.id === currentLeadFoxId;
+
+      const footerBase =
+        zoneType === "yard"
+          ? "IN YARD"
+          : zoneType === "dash"
+          ? "DASHED"
+          : "CAUGHT";
+
+      const card = renderPlayerSlotCard(p, {
+        size: "medium",
+        footer: footerBase,
+        isLead,
+      });
+
+      if (!card) return;
 
       if (zoneType === "yard") {
         yardZone.appendChild(card);
@@ -926,7 +954,6 @@ initAuth(async (authUser) => {
       }
     });
 
-    // Als het spel al finished is, ook hier nogmaals scoreboard renderen met up-to-date spelers
     if (
       latestGame &&
       (latestGame.status === "finished" || latestGame.phase === "END")
@@ -1250,7 +1277,6 @@ initAuth(async (authUser) => {
       if (current === "REVEAL") {
         const latest = (await getDoc(gameRef)).data();
         if (latest && (latest.status === "finished" || latest.phase === "END")) {
-          // engine.js heeft het spel al afgesloten
           return;
         }
 
