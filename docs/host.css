@@ -595,3 +595,36 @@ body.fullscreen-board #board {
   height: 100vh;
   aspect-ratio: auto;
 }
+
+.hidden {
+  display: none;
+}
+
+.qr-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+
+.qr-box {
+  background: #111;
+  padding: 2rem;
+  border-radius: 1rem;
+  text-align: center;
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.6);
+}
+
+.qr-label {
+  margin-bottom: 1rem;
+  font-size: 1.25rem;
+}
+
+.qr-container canvas,
+.qr-container img {
+  display: block;
+  margin: 0 auto 1rem;
+}
