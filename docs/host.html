@@ -5,23 +5,6 @@
     <title>Vossenjacht – Community Board</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="stylesheet" href="host.css" />
-    <style>
-      /* Overrides: zwarte placeholders + geen glas/gradient effect op kaarten */
-      .board-card,
-      .board-card.card-stack,
-      .board-card.card-status {
-        background-color: #000000;
-      }
-
-      /* Glas/gradient overlays verwijderen (voor ::before/::after) */
-      .board-card::before,
-      .board-card::after {
-        background: none !important;
-        box-shadow: none !important;
-        backdrop-filter: none !important;
-        -webkit-backdrop-filter: none !important;
-      }
-    </style>
   </head>
   <body class="host-body">
     <header class="host-header">
@@ -51,100 +34,75 @@
       <div id="boardShell">
         <div id="board">
           <div id="boardInner">
-            <!-- TOP ROW: LOOT / SPECIALS / ACTION / ROOSTER -->
-            <div class="board-row board-top">
-              <div class="top-left">
-                <div
-                  id="sackCard"
-                  class="board-card card-stack"
-                ></div>
-                <div
-                  id="lootDeckCard"
-                  class="board-card card-stack"
-                ></div>
-              </div>
+            <!-- 8 x 6 UNIT GRID -->
+            <div id="boardGrid">
+              <!-- TOP ROW (row 1) -->
+              <!-- col1: Farm Sack (links boven) -->
+              <div id="sackCard" class="board-card card-sack"></div>
 
-              <div class="top-center">
-                <div
-                  id="fullMoonCard"
-                  class="board-card card-status"
-                ></div>
-                <div
-                  id="beaconCard"
-                  class="board-card card-status"
-                ></div>
-                <div
-                  id="scatterCard"
-                  class="board-card card-status"
-                ></div>
-                <div
-                  id="optionACard"
-                  class="board-card card-status"
-                ></div>
-                <div
-                  id="optionBCard"
-                  class="board-card card-status"
-                ></div>
-              </div>
+              <!-- col2: Loot Deck (links van het midden) -->
+              <div id="lootDeckCard" class="board-card card-deck"></div>
 
-              <div class="top-right">
-                <div
-                  id="actionDeckCard"
-                  class="board-card card-stack"
-                ></div>
-                <div
-                  id="roosterCard"
-                  class="board-card card-status"
-                ></div>
-              </div>
-            </div>
+              <!-- col3: Beacon (midden links) -->
+              <div id="beaconCard" class="board-card card-status"></div>
 
-            <!-- MIDDLE: EVENT GRID + CAUGHT -->
-            <div class="board-row board-middle">
-              <div class="event-area">
-                <div class="event-area-label">EVENTS</div>
-                <div id="eventTrack" class="event-track"></div>
-              </div>
+              <!-- col4: Scatter (midden rechts) -->
+              <div id="scatterCard" class="board-card card-status"></div>
 
-              <div class="caught-area">
-                <div class="player-zone-label">CAUGHT</div>
-                <div
-                  id="caughtZone"
-                  class="player-zone player-zone-caught"
-                ></div>
-              </div>
-            </div>
+              <!-- col5: Action Stack (rechts van het midden) -->
+              <div
+                id="actionDeckCard"
+                class="board-card card-deck"
+              ></div>
 
-            <!-- BOTTOM: YARD + DASH + LOG -->
-            <div class="board-row board-bottom">
-              <div class="yard-dash-wrapper">
-                <div class="player-zone-wrapper">
-                  <div class="player-zone-label">DASH</div>
-                  <div
-                    id="dashZone"
-                    class="player-zone player-zone-dash"
-                  ></div>
-                </div>
+              <!-- col8: Rooster (rechtsboven) -->
+              <div
+                id="roosterCard"
+                class="board-card card-status"
+              ></div>
 
-                <div class="player-zone-wrapper">
-                  <div class="player-zone-label">YARD</div>
-                  <div
-                    id="yardZone"
-                    class="player-zone player-zone-yard"
-                  ></div>
-                </div>
-              </div>
+              <!-- MIDDLE BLOCK: EVENT CARDS (rows 2–3, cols 2–7: 2 x 6 units) -->
+              <div id="eventTrack" class="event-zone"></div>
 
-              <div class="log-area">
-                <div id="roundInfo" class="round-info"></div>
-                <div id="logPanel" class="log-panel"></div>
+              <!-- PLAYERS: YARD + DASHED + CAUGHT -->
+              <!-- row4, col1–8: Yard (8 units) -->
+              <div
+                id="yardZone"
+                class="player-zone player-zone-yard"
+              ></div>
+
+              <!-- row5, col1–2: Dashed (2 units) -->
+              <div
+                id="dashZone"
+                class="player-zone player-zone-dash"
+              ></div>
+
+              <!-- row5, col7–8: Caught (2 units, boven log) -->
+              <div
+                id="caughtZone"
+                class="player-zone player-zone-caught"
+              ></div>
+
+              <!-- BOTTOM LEFT: Phase + Lead Fox -->
+              <!-- row6, col1: Phase Card -->
+              <div
+                id="phaseCard"
+                class="board-card card-status"
+              ></div>
+
+              <!-- row6, col2: Lead Fox Card -->
+              <div
+                id="leadFoxCard"
+                class="board-card card-status"
+              ></div>
+
+              <!-- BOTTOM RIGHT: INFO PANEL (round info + log popup) -->
+              <!-- row6, col7–8: Log popup (2 units) -->
+              <div id="infoPanel" class="info-panel">
+                <div id="roundInfo" class="info-section"></div>
+                <div id="logPanel" class="info-section"></div>
               </div>
             </div>
-
-            <!-- PhaseCard / LeadFoxCard worden nu niet visueel gebruikt,
-                 maar blijven bestaan voor host.js -->
-            <div id="phaseCard" class="board-card card-status hidden"></div>
-            <div id="leadFoxCard" class="board-card card-status hidden"></div>
           </div>
         </div>
       </div>
