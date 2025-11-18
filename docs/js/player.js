@@ -1,4 +1,4 @@
-// VOSSENJACHT player.js – fase 2: geen Countermove, eindscorebord op speler-scherm
+// VOSSENJACHT player.js – fase 2: geen Countermove, eindscorebord & SCOUT preview
 import { initAuth } from "./firebase.js";
 import { addLog } from "./log.js";
 import { getEventById } from "./cards.js";
@@ -235,6 +235,7 @@ async function renderPlayerFinalScoreboard() {
   const sorted = players.sort((a, b) => (b.score || 0) - (a.score || 0));
   const bestScore = sorted.length ? (sorted[0].score || 0) : 0;
   const winners = sorted.filter((p) => (p.score || 0) === bestScore);
+  const winnerIds = new Set(winners.map((w) => w.id));
 
   eventInfoDiv.innerHTML = "";
 
@@ -253,7 +254,7 @@ async function renderPlayerFinalScoreboard() {
     const pWin = document.createElement("div");
     const names = winners.map((w) => w.name || "Vos").join(", ");
     pWin.style.marginTop = "0.25rem";
-    pWin.textContent = `Winnaar(s): ${names} met ${bestScore} punten.`;
+    pWin.textContent = `🏆 Winnaar(s): ${names} met ${bestScore} punten.`;
     eventInfoDiv.appendChild(pWin);
   }
 
@@ -268,7 +269,13 @@ async function renderPlayerFinalScoreboard() {
     const prize = pl.prize || 0;
     const score = pl.score || 0;
     const meTag = pl.id === playerId ? " (jij)" : "";
-    li.textContent = `${pl.name || "Vos"} – ${score} punten (P:${prize} H:${hens} E:${eggs})${meTag}`;
+    const isWinner = winnerIds.has(pl.id);
+    const prefix = isWinner ? "🏆 " : "";
+
+    li.textContent = `${prefix}${pl.name || "Vos"} – ${score} punten (P:${prize} H:${hens} E:${eggs})${meTag}`;
+    if (isWinner) {
+      li.classList.add("scoreboard-winner");
+    }
     list.appendChild(li);
   });
 
@@ -304,16 +311,33 @@ function renderGame() {
     setActionFeedback("");
   }
 
-  // Event info alleen tonen bij REVEAL
+  // Event info (SCOUT preview of REVEAL)
   eventInfoDiv.innerHTML = "";
-  const ev =
-    g.currentEventId && g.phase === "REVEAL"
-      ? getEventById(g.currentEventId)
-      : null;
+  let ev = null;
+  let label = "";
+
+  if (g.phase === "REVEAL" && g.currentEventId) {
+    ev = getEventById(g.currentEventId);
+    label = "Actueel Event (REVEAL)";
+  } else if (
+    currentPlayer &&
+    currentPlayer.scoutPeek &&
+    typeof currentPlayer.scoutPeek.index === "number" &&
+    currentPlayer.scoutPeek.round === (g.round || 0)
+  ) {
+    const peek = currentPlayer.scoutPeek;
+    const track = g.eventTrack || [];
+    const idx = peek.index;
+    if (idx >= 0 && idx < track.length && track[idx] === peek.eventId) {
+      ev = getEventById(peek.eventId);
+      label = "SCOUT preview (alleen zichtbaar voor jou)";
+    }
+  }
 
   if (!ev) {
     const p = document.createElement("p");
-    p.textContent = "Nog geen Event Card onthuld (pas zichtbaar bij REVEAL).";
+    p.textContent =
+      "Nog geen Event Card onthuld (pas zichtbaar bij REVEAL of via jouw eigen SCOUT).";
     eventInfoDiv.appendChild(p);
   } else {
     const title = document.createElement("div");
@@ -323,6 +347,14 @@ function renderGame() {
     text.style.fontSize = "0.9rem";
     text.style.opacity = "0.85";
     text.textContent = ev.text || "";
+
+    const sub = document.createElement("div");
+    sub.style.fontSize = "0.8rem";
+    sub.style.opacity = "0.7";
+    sub.style.marginBottom = "0.25rem";
+    sub.textContent = label;
+
+    eventInfoDiv.appendChild(sub);
     eventInfoDiv.appendChild(title);
     eventInfoDiv.appendChild(text);
   }
@@ -795,11 +827,24 @@ async function performScout() {
     `Je scout Event #${pos}: ` + (ev ? ev.title : eventId || "Onbekend event")
   );
 
+  // Voor deze ronde een persoonlijke preview bijhouden
+  await updateDoc(playerRef, {
+    scoutPeek: {
+      round: game.round || 0,
+      index: idx,
+      eventId,
+    },
+  });
+
   await updateDoc(gameRef, {
     movedPlayerIds: arrayUnion(playerId),
   });
 
   await logMoveAction(game, player, `MOVE_SCOUT_${pos}`, "MOVE");
+
+  setActionFeedback(
+    `SCOUT: je hebt event #${pos} bekeken. Deze ronde zie je deze kaart als persoonlijke preview.`
+  );
 }
 
 async function performShift() {
@@ -1303,7 +1348,7 @@ async function playHoldStill(game, player) {
   return true;
 }
 
-// Nose for Trouble – voorspel het volgende Event
+// Nose for Trouble – voorspel het volgende Event (alfabetische lijst)
 async function playNoseForTrouble(game, player) {
   const track = game.eventTrack || [];
   if (!track.length) {
@@ -1311,12 +1356,24 @@ async function playNoseForTrouble(game, player) {
     return false;
   }
 
-  const uniqueIds = [...new Set(track)];
-  const menuLines = uniqueIds.map((id, idx) => {
-    const ev = getEventById(id);
-    const title = ev ? ev.title : id;
-    return `${idx + 1}. ${title}`;
-  });
+  // Unieke events + titel ophalen en alfabetisch sorteren
+  const map = new Map();
+  for (const id of track) {
+    if (!map.has(id)) {
+      const ev = getEventById(id);
+      map.set(id, ev ? ev.title : id);
+    }
+  }
+
+  const options = Array.from(map.entries()).map(([id, title]) => ({
+    id,
+    title,
+  }));
+  options.sort((a, b) => a.title.localeCompare(b.title, "nl"));
+
+  const menuLines = options.map(
+    (opt, idx) => `${idx + 1}. ${opt.title}`
+  );
 
   const choiceStr = prompt(
     "Nose for Trouble – kies het volgende Event dat je verwacht:\n" +
@@ -1324,12 +1381,13 @@ async function playNoseForTrouble(game, player) {
   );
   if (!choiceStr) return false;
   const idx = parseInt(choiceStr, 10) - 1;
-  if (Number.isNaN(idx) || idx < 0 || idx >= uniqueIds.length) {
+  if (Number.isNaN(idx) || idx < 0 || idx >= options.length) {
     alert("Ongeldige keuze.");
     return false;
   }
 
-  const chosenId = uniqueIds[idx];
+  const chosen = options[idx];
+  const chosenId = chosen.id;
   const ev = getEventById(chosenId);
 
   const flags = mergeRoundFlags(game);
@@ -1567,7 +1625,6 @@ async function playMaskSwap(game, player) {
   }
 
   const colors = inYard.map((p) => (p.color || "").toUpperCase());
-  // eenvoudige shuffle
   for (let i = colors.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [colors[i], colors[j]] = [colors[j], colors[i]];
