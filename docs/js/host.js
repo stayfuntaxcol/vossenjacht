@@ -38,14 +38,14 @@ const caughtZone    = document.getElementById("caughtZone");
 const dashZone      = document.getElementById("dashZone");
 
 // Status cards
-const phaseCard     = document.getElementById("phaseCard");
-const leadFoxCard   = document.getElementById("leadFoxCard");
-const roosterCard   = document.getElementById("roosterCard");
-const beaconCard    = document.getElementById("beaconCard");
-const scatterCard   = document.getElementById("scatterCard");
-const sackCard      = document.getElementById("sackCard");
-const lootDeckCard  = document.getElementById("lootDeckCard");
-const actionDeckCard= document.getElementById("actionDeckCard");
+const phaseCard      = document.getElementById("phaseCard");
+const leadFoxCard    = document.getElementById("leadFoxCard");
+const roosterCard    = document.getElementById("roosterCard");
+const beaconCard     = document.getElementById("beaconCard");
+const scatterCard    = document.getElementById("scatterCard");
+const sackCard       = document.getElementById("sackCard");
+const lootDeckCard   = document.getElementById("lootDeckCard");
+const actionDeckCard = document.getElementById("actionDeckCard");
 
 // Fullscreen toggle
 const fullscreenBtn = document.getElementById("fullscreenBtn");
@@ -119,7 +119,7 @@ function renderJoinQr(game) {
 // QR overlay show/hide
 if (qrJoinToggleBtn && qrJoinOverlay) {
   qrJoinToggleBtn.addEventListener("click", () => {
-    qrJoinOverlay.classList.remove("hidden"); // CSS: .hidden { display:none; }
+    qrJoinOverlay.classList.remove("hidden");
   });
 }
 if (qrJoinCloseBtn && qrJoinOverlay) {
@@ -347,7 +347,7 @@ function renderStatusCards(game) {
   if (scatterCard) {
     const on = !!flags.scatter;
     scatterCard.innerHTML = `
-      <div class="card-title">Scatter!</</div>
+      <div class="card-title">Scatter!</div>
       <div class="card-value">${on ? "ON" : "OFF"}</div>
       <div class="card-sub">${
         on ? "Niemand mag Scouten" : "Scout toegestaan"
@@ -390,7 +390,6 @@ function renderStatusCards(game) {
 }
 
 // ==== EINDSCORE / SCOREBOARD ====
-// (ongewijzigd t.o.v. jouw versie, alleen iets netter geordend)
 
 function renderFinalScoreboard(game) {
   if (!roundInfo) return;
@@ -626,11 +625,11 @@ async function initRaidIfNeeded(gameRef) {
     return aSec - bSec;
   });
 
-  let actionDeck    = buildActionDeck();
-  const lootDeck    = buildLootDeck();
-  const eventTrack  = buildEventTrack();
+  let actionDeck      = buildActionDeck();
+  const lootDeck      = buildLootDeck();
+  const eventTrack    = buildEventTrack();
   const eventRevealed = eventTrack.map(() => false);
-  const flagsRound  = {
+  const flagsRound    = {
     lockEvents: false,
     scatter: false,
     denImmune: {},
@@ -788,7 +787,7 @@ initAuth(async (authUser) => {
       }
       if (unsubActions) {
         unsubActions();
-        unsubActions = null;
+        null;
       }
       return;
     }
@@ -857,19 +856,18 @@ initAuth(async (authUser) => {
 
     if (!yardZone || !caughtZone || !dashZone) return;
 
+    // Bewaar de bestaande labels in CAUGHT en DASH
+    const caughtLabel = caughtZone.querySelector(".player-zone-label");
+    const dashLabel   = dashZone.querySelector(".player-zone-label");
+
+    // Zones leegmaken
     yardZone.innerHTML   = "";
     caughtZone.innerHTML = "";
     dashZone.innerHTML   = "";
 
-    const labelCaught = document.createElement("div");
-    labelCaught.className = "player-zone-label";
-    labelCaught.textContent = "CAUGHT";
-    caughtZone.appendChild(labelCaught);
-
-    const labelDash = document.createElement("div");
-    labelDash.className = "player-zone-label";
-    labelDash.textContent = "DASH";
-    dashZone.appendChild(labelDash);
+    // Labels terugplaatsen
+    if (caughtLabel) caughtZone.appendChild(caughtLabel);
+    if (dashLabel)   dashZone.appendChild(dashLabel);
 
     if (!players.length) {
       return;
@@ -1277,6 +1275,7 @@ initAuth(async (authUser) => {
       if (current === "REVEAL") {
         const latest = (await getDoc(gameRef)).data();
         if (latest && (latest.status === "finished" || latest.phase === "END")) {
+          // engine.js heeft het spel al afgesloten
           return;
         }
 
