@@ -2,127 +2,130 @@
 <html lang="nl">
   <head>
     <meta charset="UTF-8" />
-    <title>Vossenjacht – Community Board</title>
+    <title>Vossenjacht – Host Board</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="stylesheet" href="host.css" />
+    <link rel="stylesheet" href="css/host.css" />
   </head>
-  <body class="host-body">
-    <header class="host-header">
-      <div id="gameInfo" class="host-game-info">
-        Spel wordt geladen...
-      </div>
-      <div class="host-controls">
-        <button id="startRoundBtn" class="btn btn-primary">
-          Nieuwe ronde
-        </button>
-        <button id="nextPhaseBtn" class="btn btn-secondary">
-          Volgende fase
-        </button>
-        <button id="endRoundBtn" class="btn btn-ghost">
-          Test: ronde afsluiten
-        </button>
-        <button id="playAsHostBtn" class="btn btn-secondary">
-          Speel als Host
-        </button>
-        <button id="fullscreenBtn" class="btn btn-ghost">
-          Fullscreen
-        </button>
-      </div>
-    </header>
-
-    <main class="host-main">
-      <div id="boardShell">
-        <div id="board">
-          <div id="boardInner">
-            <!-- TOP ROW: LOOT / SPECIALS / ACTION / ROOSTER -->
-            <div class="board-row board-top">
-              <div class="top-left">
-                <div
-                  id="sackCard"
-                  class="board-card card-stack"
-                ></div>
-                <div
-                  id="lootDeckCard"
-                  class="board-card card-stack"
-                ></div>
-              </div>
-
-              <div class="top-center">
-                <div
-                  id="fullMoonCard"
-                  class="board-card card-status"
-                ></div>
-                <div
-                  id="beaconCard"
-                  class="board-card card-status"
-                ></div>
-                <div
-                  id="scatterCard"
-                  class="board-card card-status"
-                ></div>
-                <div
-                  id="optionACard"
-                  class="board-card card-status"
-                ></div>
-                <div
-                  id="optionBCard"
-                  class="board-card card-status"
-                ></div>
-              </div>
-
-              <div class="top-right">
-                <div
-                  id="actionDeckCard"
-                  class="board-card card-stack"
-                ></div>
-                <div
-                  id="roosterCard"
-                  class="board-card card-status"
-                ></div>
-              </div>
-            </div>
-
-            <!-- MIDDLE: EVENT GRID + CAUGHT -->
-            <div class="board-row board-middle">
-              <div class="event-area">
-                <div class="event-area-label">EVENTS</div>
-                <div id="eventTrack" class="event-track"></div>
-              </div>
-
-              <div id="caughtZone" class="player-zone player-zone-caught">
-                <div class="player-zone-label">CAUGHT</div>
-              </div>
-            </div>
-
-            <!-- BOTTOM: DASH / PLAYERS YARD / LOG POPUP -->
-            <div class="board-row board-bottom">
-              <div id="dashZone" class="player-zone player-zone-dash">
-                <div class="player-zone-label">DASH</div>
-              </div>
-
-              <div class="players-yard-area">
-                <div class="players-yard-label">PLAYERS YARD</div>
-                <div
-                  id="yardZone"
-                  class="player-zone player-zone-yard"
-                ></div>
-              </div>
-
-              <div class="log-area">
-                <div id="roundInfo" class="round-info"></div>
-                <div id="logPanel" class="log-panel"></div>
-              </div>
-            </div>
-
-            <!-- PhaseCard / LeadFoxCard worden nu niet visueel gebruikt,
-                 maar blijven bestaan voor host.js -->
-            <div id="phaseCard" class="board-card card-status hidden"></div>
-            <div id="leadFoxCard" class="board-card card-status hidden"></div>
+  <body>
+    <div class="host-root">
+      <header class="host-header">
+        <div id="gameInfo" class="host-game-info">
+          Spel wordt geladen...
+        </div>
+        <div class="host-controls">
+          <button id="fullscreenBtn" class="btn">
+            ⛶ Volledig scherm
+          </button>
+          <button id="playAsHostBtn" class="btn">
+            Speel als Host
+          </button>
+          <button id="startRoundBtn" class="btn btn-primary">
+            Nieuwe ronde
+          </button>
+          <button id="nextPhaseBtn" class="btn btn-secondary">
+            Volgende fase
+          </button>
+          <button id="endRoundBtn" class="btn btn-warn">
+            (Oude) End Round test
+          </button>
+        </div>
+        <div id="qrJoinBlock" class="host-qr-block">
+          <div id="qrJoin" class="host-qr"></div>
+          <div id="qrJoinLabel" class="host-qr-label">
+            Scan om mee te doen
           </div>
         </div>
-      </div>
-    </main>
+      </header>
 
+      <main class="host-main">
+        <section class="host-top-row">
+          <div class="host-top-left">
+            <div class="status-grid">
+              <article class="status-card" id="phaseCard">
+                <h3>Phase</h3>
+                <p>–</p>
+              </article>
+              <article class="status-card" id="leadFoxCard">
+                <h3>Lead Fox</h3>
+                <p>–</p>
+              </article>
+              <article class="status-card" id="roosterCard">
+                <h3>Rooster</h3>
+                <p>–</p>
+              </article>
+              <article class="status-card" id="beaconCard">
+                <h3>Beacon</h3>
+                <p>–</p>
+              </article>
+              <article class="status-card" id="scatterCard">
+                <h3>Scatter!</h3>
+                <p>–</p>
+              </article>
+              <article class="status-card" id="sackCard">
+                <h3>Farm Sack</h3>
+                <p>–</p>
+              </article>
+              <article class="status-card" id="lootDeckCard">
+                <h3>Loot Deck</h3>
+                <p>–</p>
+              </article>
+              <article class="status-card" id="actionDeckCard">
+                <h3>Action Deck</h3>
+                <p>–</p>
+              </article>
+            </div>
+          </div>
+
+          <div class="host-top-right">
+            <section class="event-track-panel">
+              <h2>Event Track</h2>
+              <div id="eventTrack" class="event-track">
+                <!-- Event slots worden via JS gevuld -->
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="host-board-row">
+          <div class="host-board-column">
+            <h2>Yard (actieve vossen)</h2>
+            <div id="yardZone" class="player-zone">
+              <!-- Spelers in de Yard -->
+            </div>
+          </div>
+
+          <div class="host-board-column host-board-column-wide">
+            <section class="round-info-panel">
+              <h2>Ronde / acties</h2>
+              <div id="roundInfo" class="round-info">
+                Nog geen actieve ronde.
+              </div>
+            </section>
+
+            <section class="log-panel-wrapper">
+              <h2>Community Log (laatste 10 regels)</h2>
+              <div id="logPanel" class="log-panel">
+                <!-- Log wordt via JS gevuld -->
+              </div>
+            </section>
+          </div>
+
+          <div class="host-board-column">
+            <h2>Dash / Caught</h2>
+            <div id="dashZone" class="player-zone">
+              <!-- Dashers -->
+            </div>
+            <div id="caughtZone" class="player-zone">
+              <!-- Gevangen vossen -->
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- QR-code library (maakt globale QRCode beschikbaar) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <!-- Host logica -->
     <script type="module" src="js/host.js"></script>
   </body>
 </html>
