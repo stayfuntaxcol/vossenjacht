@@ -1,102 +1,140 @@
 /* ==========================================
-   GLOBAL CARD SIZE (2:3) + COLORS
+   ROOT VARS – KAARTGROOTTES & SPACING
    ========================================== */
 
 :root {
-  /* 1 kaart in het board (unit) */
   --card-h: 150px;
-  --card-w: 100px; /* 2:3 verhouding */
+  --card-w: 100px;
   --gap-lg: 24px;
   --gap-md: 16px;
   --gap-sm: 8px;
+
+  --clr-bg: #020617;
+  --clr-bg-soft: #0b1120;
+  --clr-panel: #020617;
+  --clr-panel-alt: #0f172a;
+  --clr-border: rgba(15, 23, 42, 0.9);
+  --clr-border-soft: rgba(148, 163, 184, 0.6);
+  --clr-text: #e5e7eb;
+  --clr-text-soft: #9ca3af;
+  --clr-accent: #38bdf8;
+  --clr-fox: #f97316;
+  --clr-ok: #22c55e;
+  --clr-warn: #fbbf24;
+  --clr-bad: #ef4444;
 }
 
 /* ==========================================
-   BASIC LAYOUT / HEADER
+   BASIC LAYOUT / BODY / HEADER
    ========================================== */
 
-.host-body {
+html,
+body {
   margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body.host-body {
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #0f172a, #020617);
+  color: var(--clr-text);
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
-  background: #020617;
-  color: #e5e7eb;
 }
+
+/* HEADER */
 
 .host-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
-  padding: 0.75rem 1rem;
-  gap: 1rem;
+  align-items: center;
+  padding: 12px 20px;
+  background: linear-gradient(90deg, #020617, #0f172a, #020617);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.8);
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.6);
 }
 
 .host-game-info {
   font-size: 0.9rem;
   font-weight: 500;
+  letter-spacing: 0.02em;
 }
 
 .host-controls {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: 8px;
 }
 
-.host-main {
-  padding: 0 1rem 1rem;
-}
-
-/* Buttons */
+/* BUTTONS */
 
 .btn {
-  border: none;
   border-radius: 999px;
-  padding: 0.35rem 0.9rem;
-  font-size: 0.8rem;
-  font-weight: 500;
+  border: 1px solid rgba(148, 163, 184, 0.7);
+  background: rgba(15, 23, 42, 0.9);
+  color: var(--clr-text);
+  padding: 6px 14px;
+  font-size: 0.78rem;
   cursor: pointer;
-  transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.08s ease;
-  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.15s ease, transform 0.08s ease,
+    box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.btn:hover {
+  background: #020617;
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.8),
+    0 8px 20px rgba(15, 23, 42, 0.8);
+  transform: translateY(-1px);
+}
+
+.btn:active {
+  transform: translateY(0);
+  box-shadow: none;
 }
 
 .btn-primary {
-  background: #4f46e5;
-  color: #e5e7eb;
-  box-shadow: 0 6px 14px rgba(79, 70, 229, 0.55);
+  border-color: rgba(56, 189, 248, 0.8);
+  background: radial-gradient(circle at top left, #38bdf8, #0f172a);
 }
 
 .btn-primary:hover {
-  background: #4338ca;
-  transform: translateY(-1px);
+  background: radial-gradient(circle at top left, #0ea5e9, #020617);
 }
 
 .btn-secondary {
-  background: #0f172a;
-  color: #e5e7eb;
-  border: 1px solid rgba(148, 163, 184, 0.6);
+  border-color: rgba(129, 140, 248, 0.8);
+  background: radial-gradient(circle at top left, #4f46e5, #020617);
 }
 
 .btn-secondary:hover {
-  background: #1e293b;
-  transform: translateY(-1px);
+  background: radial-gradient(circle at top left, #6366f1, #020617);
 }
 
 .btn-ghost {
-  background: transparent;
-  color: #9ca3af;
-  border: 1px dashed rgba(148, 163, 184, 0.6);
-}
-
-.btn-ghost:hover {
-  background: rgba(15, 23, 42, 0.9);
+  border-style: dashed;
+  border-color: rgba(148, 163, 184, 0.7);
 }
 
 /* ==========================================
-   BOARD 16:9
+   MAIN / BOARD SHELL
    ========================================== */
 
-#boardShell {
+.host-main {
+  padding: 16px 20px 24px;
+  display: flex;
+  justify-content: center;
+}
+
+.board-wrapper {
+  width: 100%;
   max-width: 1360px;
+}
+
+#boardShell {
+  width: 100%;
   margin: 0 auto;
 }
 
@@ -104,82 +142,24 @@
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  background: radial-gradient(circle at top, #1e293b, #020617);
   border-radius: 18px;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.9);
-  overflow: hidden;
+  background: radial-gradient(circle at 20% 0, #1f2937, #020617 60%);
+  border: 2px solid rgba(15, 23, 42, 0.9);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.95);
+  padding: 10px;
+  box-sizing: border-box;
 }
 
 #boardInner {
-  position: relative;
   width: 100%;
   height: 100%;
-  padding: 24px 32px;
-  box-sizing: border-box;
-  border-radius: 16px;
-  background: radial-gradient(circle at top, #0f172a, #020617);
+  border-radius: 14px;
+  background: radial-gradient(circle at bottom, #020617, #020617 60%);
   display: flex;
   flex-direction: column;
-  gap: var(--gap-lg);
-}
-
-/* ==========================================
-   GENERIC CARD
-   ========================================== */
-
-.board-card {
-  position: relative;
-  width: var(--card-w);
-  height: var(--card-h);
-  background: linear-gradient(145deg, #0ea5e9 0%, #22c55e 40%, #0f172a 100%);
-  border-radius: 12px;
-  border: 1px solid rgba(15, 23, 42, 0.9);
-  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.7);
-  padding: 0.4rem 0.5rem;
+  gap: 8px;
+  padding: 10px;
   box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  font-size: 0.8rem;
-  color: #020617;
-}
-
-/* Wolk/lucht overlay */
-.board-card::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(to top, rgba(15, 23, 42, 0.1), rgba(255, 255, 255, 0.8));
-  opacity: 0.8;
-  mix-blend-mode: screen;
-  pointer-events: none;
-}
-
-.board-card-inner {
-  position: relative;
-  z-index: 1;
-}
-
-.card-title {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #0f172a;
-}
-
-.card-value {
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-
-/* decks (achterkant) */
-.card-stack {
-  border: 2px solid rgba(15, 23, 42, 0.9);
-}
-
-/* verstopte kaarten (phase/leadfox) */
-.hidden {
-  display: none;
 }
 
 /* ==========================================
@@ -188,131 +168,186 @@
 
 .board-row {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   width: 100%;
 }
 
-/* ---------- TOP ROW ---------- */
-
 .board-top {
+  flex: 0 0 auto;
+  display: flex;
   justify-content: space-between;
+  gap: 16px;
 }
+
+.board-middle {
+  flex: 1 1 auto;
+  display: flex;
+  gap: 16px;
+}
+
+.board-bottom {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 16px;
+}
+
+/* TOP ZONES */
 
 .top-left,
 .top-center,
 .top-right {
   display: flex;
-  align-items: flex-start;
-  gap: var(--gap-sm);
+  align-items: center;
+  gap: 10px;
 }
 
-/* ---------- MIDDLE: EVENTS + CAUGHT ---------- */
-
-.board-middle {
-  flex: 1;
-  justify-content: space-between;
-  align-items: stretch;
-  gap: var(--gap-lg);
+.top-left {
+  flex: 0 0 auto;
 }
 
-.event-area {
+.top-center {
   flex: 1 1 auto;
-  border-radius: 18px;
-  border: 2px dashed #f59e0b;
-  padding: 12px;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  justify-content: center;
 }
 
-.event-area-label {
-  font-size: 0.8rem;
-  color: #facc15;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+.top-right {
+  flex: 0 0 auto;
 }
 
-/* container voor 12 event cards (2 x 6) */
-.event-track {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
+/* ==========================================
+   GENERIC BOARD CARDS
+   ========================================== */
 
-.event-track-status {
-  font-size: 0.75rem;
-  color: #9ca3af;
-}
-
-/* Landscape: breedte = card-h, hoogte = card-w */
-.event-track-grid {
-  display: grid;
-  grid-template-columns: repeat(6, var(--card-h));
-  grid-auto-rows: var(--card-w);
-  gap: var(--gap-sm);
-}
-
-/* event cards in landscape */
-.event-slot {
-  width: var(--card-h);
-  height: var(--card-w);
-  border-radius: 10px;
-  border: 1px solid rgba(15, 23, 42, 0.7);
-  padding: 0.35rem 0.4rem;
-  box-sizing: border-box;
-  background: radial-gradient(circle at top, #dbeafe, #22c55e);
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  font-size: 0.75rem;
-  color: #0f172a;
+.board-card {
   position: relative;
+  width: var(--card-w);
+  height: var(--card-h);
+  border-radius: 12px;
+  border: 1px solid rgba(30, 64, 175, 0.6);
+  background: radial-gradient(circle at top left, #1e293b, #020617);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.7);
   overflow: hidden;
 }
 
+/* Decks tonen de achterkant van de kaarten */
+.card-stack {
+  border: 2px solid rgba(15, 23, 42, 0.9);
+  background-image: url("./assets/card_vossenjacht.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* Statuskaarten (Full Moon, Beacon, Scatter etc.) */
+.card-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #e5e7eb;
+  background: radial-gradient(circle at top, #1f2937, #020617);
+}
+
+/* ==========================================
+   EVENT-TRACK – 12 KAARTEN
+   ========================================== */
+
+.event-area {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.event-area-label {
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #9ca3af;
+}
+
+.event-track {
+  flex: 1 1 auto;
+}
+
+.event-track-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+}
+
+.event-slot {
+  position: relative;
+  border-radius: 10px;
+  border: 1px solid rgba(30, 64, 175, 0.7);
+  background: radial-gradient(circle at top, #0f172a, #020617);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.7);
+  overflow: hidden;
+}
+
+/* Nog niet onthulde events tonen de placeholder kaart */
+.event-state-future {
+  background-image: url("./assets/card_placeholder.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* Huidige event krijgt glow */
+.event-state-current {
+  border-color: rgba(250, 204, 21, 0.95);
+  box-shadow: 0 0 20px rgba(250, 204, 21, 0.7);
+}
+
+/* Voorbije events iets gedimd */
+.event-state-past {
+  opacity: 0.85;
+}
+
+/* Index + titel overlay */
+
 .event-slot-index {
-  font-size: 0.65rem;
-  color: #4b5563;
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  color: #e5e7eb;
 }
 
 .event-slot-title {
-  font-size: 0.8rem;
-  font-weight: 600;
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 4px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-shadow: 0 1px 2px #000;
 }
 
-/* visuele staten */
-.event-state-future {
-  opacity: 0.95;
-}
-
-.event-state-current {
-  box-shadow: 0 0 0 2px #38bdf8;
-}
-
-.event-state-past {
-  opacity: 0.9;
-  background: radial-gradient(circle at top, #bbf7d0, #22c55e);
-}
-
-/* ---------- CAUGHT ZONE ---------- */
+/* ==========================================
+   PLAYER ZONES (YARD / DASH / CAUGHT)
+   ========================================== */
 
 .player-zone {
   position: relative;
-  border-radius: 18px;
-  border: 2px dashed #f97316;
-  padding: 10px;
-  box-sizing: border-box;
+  border-radius: 14px;
+  border: 1px solid rgba(31, 41, 55, 0.9);
+  background: radial-gradient(circle at top, #020617, #020617);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.7);
+  padding: 8px 10px 10px;
   display: flex;
-  align-items: flex-start;
   flex-wrap: wrap;
-  gap: var(--gap-sm);
-  min-height: calc(var(--card-h) + 20px);
-  background: rgba(15, 23, 42, 0.8);
-}
-
-.player-zone-caught {
-  width: 220px;
+  gap: 6px;
+  min-height: 80px;
 }
 
 /* label in hoek */
@@ -326,48 +361,27 @@
   color: #fed7aa;
 }
 
-/* ==========================================
-   BOTTOM ROW: DASH / PLAYERS / LOG
-   ========================================== */
-
-.board-bottom {
-  justify-content: space-between;
-  align-items: stretch;
-  gap: var(--gap-lg);
-}
-
-/* DASH left */
-
-.player-zone-dash {
-  width: 220px;
-}
-
-/* PLAYERS YARD center */
-
 .players-yard-area {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .players-yard-label {
-  font-size: 0.9rem;
-  letter-spacing: 0.12em;
+  font-size: 0.78rem;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: #e5e7eb;
+  color: #9ca3af;
 }
 
-.player-zone-yard {
-  width: 100%;
-  justify-content: center;
-  background: transparent;
-  border-color: transparent;
-  min-height: var(--card-h);
+#yardZone {
+  margin-top: 4px;
 }
 
-/* spelerskaarten */
+/* ==========================================
+   PLAYER CARDS
+   ========================================== */
 
 .card-player {
   position: relative;
@@ -384,51 +398,63 @@
   justify-content: space-between;
   font-size: 0.75rem;
   color: #020617;
+  overflow: hidden;
 }
 
+/* Header + naam + den-indicator */
+
 .card-header {
+  position: relative;
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-start;
   align-items: center;
   gap: 0.25rem;
+  padding-right: 18px; /* ruimte voor driehoek */
 }
 
 .card-name {
   font-weight: 600;
+  letter-spacing: 0.02em;
   font-size: 0.8rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Den-indicator als driehoek rechtsboven */
 .card-den {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  border: 1px solid #020617;
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 18px 18px; /* diagonaal naar links-onder */
+  border-color: transparent transparent #4b5563 transparent; /* default grijs */
 }
 
-/* den kleuren */
-
+/* Den-kleuren */
 .den-red {
-  background: #ef4444;
+  border-color: transparent transparent #ef4444 transparent;
 }
 
 .den-blue {
-  background: #3b82f6;
+  border-color: transparent transparent #3b82f6 transparent;
 }
 
 .den-green {
-  background: #22c55e;
+  border-color: transparent transparent #22c55e transparent;
 }
 
 .den-yellow {
-  background: #eab308;
+  border-color: transparent transparent #eab308 transparent;
 }
 
 .den-none {
-  background: #4b5563;
+  border-color: transparent transparent #4b5563 transparent;
 }
+
+/* Body / score / tags */
 
 .card-body {
   display: flex;
@@ -447,27 +473,30 @@
   justify-content: flex-end;
 }
 
+/* Footer / status-chip */
+
 .card-footer {
   display: flex;
   justify-content: flex-start;
+  align-items: center;
 }
 
-/* chips */
+/* Chips */
 
 .chip {
   display: inline-flex;
   align-items: center;
-  border-radius: 999px;
-  padding: 0.1rem 0.5rem;
+  padding: 1px 6px;
   font-size: 0.65rem;
-  font-weight: 500;
-  background: rgba(15, 23, 42, 0.12);
-  border: 1px solid rgba(15, 23, 42, 0.4);
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.8);
+  background: rgba(15, 23, 42, 0.9);
+  color: var(--clr-text);
 }
 
 .chip-host {
-  background: rgba(249, 115, 22, 0.2);
-  border-color: rgba(249, 115, 22, 0.7);
+  border-color: rgba(251, 191, 36, 0.9);
+  background: rgba(251, 191, 36, 0.1);
 }
 
 .chip-status-yard {
@@ -485,69 +514,203 @@
   border-color: rgba(248, 113, 113, 0.7);
 }
 
-.card-player-lead {
-  box-shadow: 0 0 0 2px #38bdf8, 0 12px 24px rgba(0, 0, 0, 0.8);
+/* Lead Fox – NEON glow */
+
+@keyframes leadFoxGlow {
+  0% {
+    box-shadow:
+      0 0 0 0 rgba(251, 191, 36, 0.9),
+      0 0 18px rgba(251, 191, 36, 0.9);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px rgba(251, 191, 36, 0.4),
+      0 0 26px rgba(251, 191, 36, 1);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 rgba(251, 191, 36, 0.9),
+      0 0 18px rgba(251, 191, 36, 0.9);
+  }
 }
 
-/* LOG POPUP right */
+.card-player-lead {
+  border-color: rgba(251, 191, 36, 0.95);
+  box-shadow:
+    0 0 0 2px rgba(251, 191, 36, 0.95),
+    0 0 26px rgba(251, 191, 36, 1);
+  animation: leadFoxGlow 1.8s ease-in-out infinite;
+}
 
-.log-area {
+/* DASH & CAUGHT – OVERLAPPENDE KAARTEN, RECHTS */
+
+.player-zone-caught,
+.player-zone-dash {
+  width: 220px;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-wrap: nowrap;
+  padding-top: 24px;
+}
+
+.player-zone-caught .card-player,
+.player-zone-dash .card-player {
+  margin-top: -40px;
+}
+
+.player-zone-caught .card-player:first-of-type,
+.player-zone-dash .card-player:first-of-type {
+  margin-top: 0;
+}
+
+.player-zone-caught .player-zone-label,
+.player-zone-dash .player-zone-label {
+  left: 12px;
+}
+
+/* ==========================================
+   ROUND INFO & LOG PANEL
+   ========================================== */
+
+.round-area {
   width: 260px;
-  height: 260px;
-  border-radius: 18px;
-  border: 2px solid rgba(15, 23, 42, 0.9);
-  background: linear-gradient(145deg, #0ea5e9, #22c55e, #0f172a);
-  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.8);
-  padding: 8px;
-  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
 
-.round-info {
+#roundInfo {
   flex: 0 0 auto;
-  max-height: 40%;
-  overflow-y: auto;
-  font-size: 0.8rem;
-  color: #020617;
-  background: rgba(255, 255, 255, 0.75);
-  border-radius: 10px;
-  padding: 6px;
-  box-sizing: border-box;
-}
-
-#roundInfo h2 {
-  font-size: 0.9rem;
-  margin: 0 0 0.2rem;
-  color: #0f172a;
-}
-
-#roundInfo p {
-  margin: 0 0 0.15rem;
-}
-
-.log-panel {
-  flex: 1;
-  overflow-y: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(31, 41, 55, 0.9);
+  background: radial-gradient(circle at top, #020617, #020617);
+  padding: 8px 10px;
   font-size: 0.78rem;
-  background: rgba(15, 23, 42, 0.9);
+  overflow-y: auto;
+  max-height: 220px;
+}
+
+#logPanel {
+  flex: 1 1 auto;
+  border-radius: 12px;
+  border: 1px solid rgba(31, 41, 55, 0.9);
+  background: radial-gradient(circle at top, #020617, #020617);
+  padding: 8px 10px;
+  font-size: 0.75rem;
+  overflow-y: auto;
+  max-height: 220px;
+}
+
+/* LOG items */
+.log-entry {
+  margin-bottom: 2px;
+}
+
+/* ==========================================
+   SCOREBOARD & LEADERBOARD
+   ========================================== */
+
+.scoreboard-section {
+  margin-top: 0.35rem;
+}
+
+.scoreboard-intro {
+  font-size: 0.75rem;
   color: #e5e7eb;
-  border-radius: 10px;
-  padding: 6px 6px 6px 8px;
-  box-sizing: border-box;
+  margin: 0.2rem 0 0.35rem;
 }
 
-/* wordt gevuld door host.js */
-.log-lines {
-  font-size: 0.78rem;
-  max-height: 100%;
-  overflow-y: auto;
+.scoreboard-winners {
+  margin: 0.15rem 0 0.3rem;
+  font-weight: 600;
+  color: #fbbf24;
 }
 
-.log-line {
-  padding: 0.1rem 0;
-  border-bottom: 1px dashed rgba(55, 65, 81, 0.7);
+.scoreboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+  margin-top: 0.25rem;
+}
+
+.scoreboard-table thead {
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.scoreboard-table th,
+.scoreboard-table td {
+  padding: 2px 4px;
+  text-align: right;
+}
+
+.scoreboard-table th:first-child,
+.scoreboard-table td:first-child {
+  text-align: left;
+}
+
+.scoreboard-row-winner {
+  background: rgba(250, 204, 21, 0.16);
+}
+
+.scoreboard-table tfoot td {
+  border-top: 1px solid rgba(148, 163, 184, 0.6);
+  font-weight: 600;
+}
+
+/* Lifetime Top 10 */
+
+.leaderboard-title {
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.leaderboard-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0 0;
+  font-size: 0.7rem;
+}
+
+.leaderboard-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  border-bottom: 1px dashed rgba(148, 163, 184, 0.4);
+}
+
+.leaderboard-item-main {
+  display: flex;
+  flex-direction: column;
+}
+
+.leaderboard-item-loot {
+  font-size: 0.65rem;
+  color: #9ca3af;
+}
+
+.leaderboard-item-meta {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.leaderboard-item-date {
+  font-size: 0.65rem;
+  color: #9ca3af;
+}
+
+.leaderboard-empty {
+  font-size: 0.7rem;
+  color: #9ca3af;
+  margin-top: 0.2rem;
+}
+
+/* ==========================================
+   MISC
+   ========================================== */
+
+.hidden {
+  display: none;
 }
 
 .zone-label {
@@ -557,41 +720,12 @@
   color: #9ca3af;
 }
 
-/* ==========================================
-   CARD BACK: card_vossenjacht.png
-   ========================================== */
-
-/* Decks + niet onthulde events krijgen de backside */
-.card-stack,
-.event-state-future {
-  background-image: url("./assets/card_vossenjacht.png");
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
-}
-
-/* we willen de overlay van .board-card niet op event-slot,
-   dus daar geen ::before */
-
-/* ==========================================
-   FULLSCREEN MODE
-   ========================================== */
+/* FULLSCREEN (optioneel) */
 
 body.fullscreen-board .host-header {
   display: none;
 }
 
 body.fullscreen-board .host-main {
-  padding: 0;
-}
-
-body.fullscreen-board #boardShell {
-  max-width: none;
-  width: 100vw;
-}
-
-body.fullscreen-board #board {
-  width: 100vw;
-  height: 100vh;
-  aspect-ratio: auto;
+  padding-top: 8px;
 }
