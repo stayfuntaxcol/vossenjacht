@@ -83,7 +83,7 @@ let currentLeadFoxName     = "";
 const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
 
 // QR Join: join.html pad en QR instance
-const JOIN_PAGE_PATH = "/join.html"; // pas aan als jouw join-pagina anders heet
+const JOIN_PAGE_PATH = "/vossenjacht"; // pas aan als jouw join-pagina anders heet
 let qrInstance = null;
 
 function getJoinUrl(game) {
