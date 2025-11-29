@@ -433,11 +433,7 @@ function renderFinalScoreboard(game) {
   latestPlayersCacheForScoreboard = players;
 
   if (!players.length) {
-    const msg = "Geen spelers gevonden voor het scorebord.";
-    roundInfo.textContent = msg;
-    if (scoreOverlayContent) {
-      scoreOverlayContent.textContent = msg;
-    }
+    roundInfo.textContent = "Geen spelers gevonden voor het scorebord.";
     return;
   }
 
@@ -490,6 +486,7 @@ function renderFinalScoreboard(game) {
     section.appendChild(pWin);
   }
 
+  // Tabel met de eindstand van dit spel
   const table = document.createElement("table");
   table.className = "scoreboard-table";
   table.innerHTML = `
@@ -509,23 +506,11 @@ function renderFinalScoreboard(game) {
 
   const tbody = table.querySelector("tbody");
 
-  let sumEggs = 0;
-  let sumHens = 0;
-  let sumPrize = 0;
-  let sumBonus = 0;
-  let sumTotal = 0;
-
   enriched.forEach((p, idx) => {
     const tr = document.createElement("tr");
     if (winnerIds.has(p.id)) {
       tr.classList.add("scoreboard-row-winner");
     }
-
-    sumEggs += p.eggs;
-    sumHens += p.hens;
-    sumPrize += p.prize;
-    sumBonus += p.bonus;
-    sumTotal += p.totalScore;
 
     tr.innerHTML = `
       <td>${idx + 1}</td>
@@ -539,110 +524,309 @@ function renderFinalScoreboard(game) {
     tbody.appendChild(tr);
   });
 
-  const tfoot = document.createElement("tfoot");
-  const trTotal = document.createElement("tr");
-  trTotal.innerHTML = `
-    <td colspan="2">Totaal</td>
-    <td>${sumEggs}</td>
-    <td>${sumHens}</td>
-    <td>${sumPrize}</td>
-    <td>${sumBonus}</td>
-    <td>${sumTotal}</td>
-  `;
-  tfoot.appendChild(trTotal);
-  table.appendChild(tfoot);
-
   section.appendChild(table);
 
+  // ===== nieuwe multi-leaderboards =====
   const leaderboardSection = document.createElement("div");
+  leaderboardSection.className = "leaderboard-section-multi";
   leaderboardSection.innerHTML = `
-    <div class="leaderboard-title">Top 10 – hoogste scores ooit</div>
-    <ul class="leaderboard-list" id="leaderboardList"></ul>
+    <h3 class="leaderboard-main-title">Leaderboards</h3>
+    <div class="leaderboard-grid">
+      <div class="leaderboard-block">
+        <div class="leaderboard-title">Top 10 – Vandaag</div>
+        <ul class="leaderboard-list" id="leaderboardToday"></ul>
+      </div>
+      <div class="leaderboard-block">
+        <div class="leaderboard-title">Top 25 – Deze maand</div>
+        <ul class="leaderboard-list" id="leaderboardMonth"></ul>
+      </div>
+      <div class="leaderboard-block">
+        <div class="leaderboard-title">Top 100 – All-time</div>
+        <ul class="leaderboard-list" id="leaderboardAllTime"></ul>
+      </div>
+    </div>
   `;
   section.appendChild(leaderboardSection);
 
-  // rechts in de log-kolom
   roundInfo.appendChild(section);
 
-  // kopie in de overlay, maar zonder tweede H2
-  if (scoreOverlayContent) {
-    const clone = section.cloneNode(true);
-    const innerTitle = clone.querySelector("h2");
-    if (innerTitle) innerTitle.remove(); // voorkomt dubbele "Eindscore – Fox Raid"
-    scoreOverlayContent.innerHTML = "";
-    scoreOverlayContent.appendChild(clone);
-  }
-
-  loadLeaderboardTop10();
+  // laad de drie leaderboards
+  loadLeaderboardsMulti();
 }
 
-async function loadLeaderboardTop10() {
+function appendLeaderboardRow(listEl, rank, data) {
+  const eggs = data.eggs || 0;
+  const hens = data.hens || 0;
+  const prize = data.prize || 0;
+  const bonus = data.bonus || 0;
+  const score = data.score || 0;
+
+  let dateLabel = "";
+  if (data.playedAt && data.playedAt.seconds != null) {
+    const d = new Date(data.playedAt.seconds * 1000);
+    dateLabel = d.toLocaleDateString();
+  }
+
+  const li = document.createElement("li");
+  li.className = "leaderboard-item";
+  li.innerHTML = `
+    <div class="leaderboard-item-main">
+      <span>${rank}. ${data.name || "Fox"}</span>
+      <span class="leaderboard-item-loot">
+        E:${eggs} H:${hens} P:${prize} +${bonus}
+      </span>
+    </div>
+    <div class="leaderboard-item-meta">
+      <div>${score} pts</div>
+      <div class="leaderboard-item-date">${dateLabel}</div>
+    </div>
+  `;
+  listEl.appendChild(li);
+}
+
+async function loadLeaderboardsMulti() {
   if (!roundInfo) return;
 
-  const listEl = roundInfo.querySelector("#leaderboardList");
-  if (!listEl) return;
+  const listToday   = roundInfo.querySelector("#leaderboardToday");
+  const listMonth   = roundInfo.querySelector("#leaderboardMonth");
+  const listAllTime = roundInfo.querySelector("#leaderboardAllTime");
 
-  listEl.innerHTML = "";
+  if (!listToday || !listMonth || !listAllTime) return;
+
+  listToday.innerHTML = "";
+  listMonth.innerHTML = "";
+  listAllTime.innerHTML = "";
 
   try {
-    const leaderboardCol = collection(db, "leaderboard");
-    const q = query(leaderboardCol, orderBy("score", "desc"), limit(10));
-    const snap = await getDocs(q);
-
-    if (snap.empty) {
-      const empty = document.createElement("li");
-      empty.className = "leaderboard-empty";
-      empty.textContent = "Nog geen data in het leaderboard.";
-      listEl.appendChild(empty);
-      return;
-    }
-
-    let rank = 1;
-    snap.forEach((docSnap) => {
-      const data = docSnap.data();
-      const eggs = data.eggs || 0;
-      const hens = data.hens || 0;
-      const prize = data.prize || 0;
-      const bonus = data.bonus || 0;
-      const score = data.score || 0;
-
-      let dateLabel = "";
-      if (data.playedAt && data.playedAt.seconds != null) {
-        const d = new Date(data.playedAt.seconds * 1000);
-        dateLabel = d.toLocaleDateString();
-      }
-
-      const li = document.createElement("li");
-      li.className = "leaderboard-item";
-      li.innerHTML = `
-        <div class="leaderboard-item-main">
-          <span>${rank}. ${data.name || "Fox"}</span>
-          <span class="leaderboard-item-loot">E:${eggs} H:${hens} P:${prize} +${bonus}</span>
-        </div>
-        <div class="leaderboard-item-meta">
-          <div>${score} pts</div>
-          <div class="leaderboard-item-date">${dateLabel}</div>
-        </div>
-      `;
-      listEl.appendChild(li);
-      rank += 1;
-    });
+    await Promise.all([
+      fillLeaderboardToday(listToday),
+      fillLeaderboardMonth(listMonth),
+      fillLeaderboardAllTime(listAllTime),
+    ]);
   } catch (err) {
-    console.error("Fout bij laden leaderboard:", err);
-    const li = document.createElement("li");
-    li.className = "leaderboard-empty";
-    li.textContent = "Leaderboard kon niet geladen worden.";
-    listEl.appendChild(li);
+    console.error("Fout bij laden leaderboards:", err);
   }
 }
-  // Synchroniseer leaderboard naar overlay, als die er is
-  if (scoreOverlayContent && roundInfo) {
-    const src = roundInfo.querySelector("#leaderboardList");
-    const dst = scoreOverlayContent.querySelector("#leaderboardList");
-    if (src && dst) {
-      dst.innerHTML = src.innerHTML;
-    }
+
+async function fillLeaderboardAllTime(listEl) {
+  const leaderboardCol = collection(db, "leaderboard");
+  const qAll = query(leaderboardCol, orderBy("score", "desc"), limit(100));
+  const snap = await getDocs(qAll);
+
+  if (snap.empty) {
+    const li = document.createElement("li");
+    li.className = "leaderboard-empty";
+    li.textContent = "Nog geen scores.";
+    listEl.appendChild(li);
+    return;
   }
+
+  let rank = 1;
+  snap.forEach((docSnap) => {
+    const data = docSnap.data();
+    appendLeaderboardRow(listEl, rank++, data);
+  });
+}
+
+async function fillLeaderboardToday(listEl) {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  const leaderboardCol = collection(db, "leaderboard");
+  const qToday = query(
+    leaderboardCol,
+    where("playedAt", ">=", todayStart),
+    orderBy("playedAt", "desc"),
+    limit(200)
+  );
+
+  const snap = await getDocs(qToday);
+
+  if (snap.empty) {
+    const li = document.createElement("li");
+    li.className = "leaderboard-empty";
+    li.textContent = "Nog geen scores voor vandaag.";
+    listEl.appendChild(li);
+    return;
+  }
+
+  const docs = [];
+  snap.forEach((docSnap) => docs.push(docSnap.data()));
+
+  // sorteer lokaal op score
+  docs.sort((a, b) => (b.score || 0) - (a.score || 0));
+  const top = docs.slice(0, 10);
+
+  top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
+}
+
+async function fillLeaderboardMonth(listEl) {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const leaderboardCol = collection(db, "leaderboard");
+  const qMonth = query(
+    leaderboardCol,
+    where("playedAt", ">=", monthStart),
+    orderBy("playedAt", "desc"),
+    limit(500)
+  );
+
+  const snap = await getDocs(qMonth);
+
+  if (snap.empty) {
+    const li = document.createElement("li");
+    li.className = "leaderboard-empty";
+    li.textContent = "Nog geen scores voor deze maand.";
+    listEl.appendChild(li);
+    return;
+  }
+
+  const docs = [];
+  snap.forEach((docSnap) => docs.push(docSnap.data()));
+
+  docs.sort((a, b) => (b.score || 0) - (a.score || 0));
+  const top = docs.slice(0, 25);
+
+  top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
+}
+
+function appendLeaderboardRow(listEl, rank, data) {
+  const eggs = data.eggs || 0;
+  const hens = data.hens || 0;
+  const prize = data.prize || 0;
+  const bonus = data.bonus || 0;
+  const score = data.score || 0;
+
+  let dateLabel = "";
+  if (data.playedAt && data.playedAt.seconds != null) {
+    const d = new Date(data.playedAt.seconds * 1000);
+    dateLabel = d.toLocaleDateString();
+  }
+
+  const li = document.createElement("li");
+  li.className = "leaderboard-item";
+  li.innerHTML = `
+    <div class="leaderboard-item-main">
+      <span>${rank}. ${data.name || "Fox"}</span>
+      <span class="leaderboard-item-loot">
+        E:${eggs} H:${hens} P:${prize} +${bonus}
+      </span>
+    </div>
+    <div class="leaderboard-item-meta">
+      <div>${score} pts</div>
+      <div class="leaderboard-item-date">${dateLabel}</div>
+    </div>
+  `;
+  listEl.appendChild(li);
+}
+
+async function loadLeaderboardsMulti() {
+  if (!roundInfo) return;
+
+  const listToday   = roundInfo.querySelector("#leaderboardToday");
+  const listMonth   = roundInfo.querySelector("#leaderboardMonth");
+  const listAllTime = roundInfo.querySelector("#leaderboardAllTime");
+
+  if (!listToday || !listMonth || !listAllTime) return;
+
+  listToday.innerHTML = "";
+  listMonth.innerHTML = "";
+  listAllTime.innerHTML = "";
+
+  try {
+    await Promise.all([
+      fillLeaderboardToday(listToday),
+      fillLeaderboardMonth(listMonth),
+      fillLeaderboardAllTime(listAllTime),
+    ]);
+  } catch (err) {
+    console.error("Fout bij laden leaderboards:", err);
+  }
+}
+
+async function fillLeaderboardAllTime(listEl) {
+  const leaderboardCol = collection(db, "leaderboard");
+  const qAll = query(leaderboardCol, orderBy("score", "desc"), limit(100));
+  const snap = await getDocs(qAll);
+
+  if (snap.empty) {
+    const li = document.createElement("li");
+    li.className = "leaderboard-empty";
+    li.textContent = "Nog geen scores.";
+    listEl.appendChild(li);
+    return;
+  }
+
+  let rank = 1;
+  snap.forEach((docSnap) => {
+    const data = docSnap.data();
+    appendLeaderboardRow(listEl, rank++, data);
+  });
+}
+
+async function fillLeaderboardToday(listEl) {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  const leaderboardCol = collection(db, "leaderboard");
+  const qToday = query(
+    leaderboardCol,
+    where("playedAt", ">=", todayStart),
+    orderBy("playedAt", "desc"),
+    limit(200)
+  );
+
+  const snap = await getDocs(qToday);
+
+  if (snap.empty) {
+    const li = document.createElement("li");
+    li.className = "leaderboard-empty";
+    li.textContent = "Nog geen scores voor vandaag.";
+    listEl.appendChild(li);
+    return;
+  }
+
+  const docs = [];
+  snap.forEach((docSnap) => docs.push(docSnap.data()));
+
+  // sorteer lokaal op score
+  docs.sort((a, b) => (b.score || 0) - (a.score || 0));
+  const top = docs.slice(0, 10);
+
+  top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
+}
+
+async function fillLeaderboardMonth(listEl) {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const leaderboardCol = collection(db, "leaderboard");
+  const qMonth = query(
+    leaderboardCol,
+    where("playedAt", ">=", monthStart),
+    orderBy("playedAt", "desc"),
+    limit(500)
+  );
+
+  const snap = await getDocs(qMonth);
+
+  if (snap.empty) {
+    const li = document.createElement("li");
+    li.className = "leaderboard-empty";
+    li.textContent = "Nog geen scores voor deze maand.";
+    listEl.appendChild(li);
+    return;
+  }
+
+  const docs = [];
+  snap.forEach((docSnap) => docs.push(docSnap.data()));
+
+  docs.sort((a, b) => (b.score || 0) - (a.score || 0));
+  const top = docs.slice(0, 25);
+
+  top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
+}
 
 // ==== INIT RAID (eerste keer) ====
 
