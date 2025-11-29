@@ -3,6 +3,8 @@ import {
   getEventById,
   getActionDefByName,
   getLootImageForType,
+  getPlayerProfileById,
+  getActivityById,
 } from "./cards.js";
 
 // Kaartframes voor spelers per Den-kleur
@@ -11,7 +13,7 @@ const PLAYER_CARD_IMAGES = {
   BLUE: "./assets/card_player2.png",
   GREEN: "./assets/card_player3.png",
   YELLOW: "./assets/card_player4.png",
-  LEAD: "./assets/card_player5.png", // speciale frame voor Lead Fox
+  LEAD: "./assets/card_player5.png", // speciale frame voor Lead Fox (optioneel)
 };
 
 /**
@@ -31,9 +33,11 @@ function applySafeBackground(cardElem, imageUrl) {
 }
 
 /**
- * Basiskaart: gedeelde layout voor alle kaarttypen (event, action, loot, player).
- * - variant: "event" | "action" | "loot" | "player" | etc.
+ * Basiskaart: gedeelde layout voor alle kaarttypen (event, action, loot, player, activity).
+ * - variant: "event" | "action" | "loot" | "player" | "activity" | etc.
  * - size: "small" | "medium" | "large"
+ * - extraClasses: extra CSS-klassen, bv. ["vj-card--lead"]
+ * - noOverlay: als true → geen tekst-overlay (alleen full-art image + rand)
  */
 function createBaseCard({
   imageUrl,
@@ -43,6 +47,7 @@ function createBaseCard({
   variant = "",
   size = "medium",
   extraClasses = [],
+  noOverlay = false,
 }) {
   const card = document.createElement("div");
   card.className = `vj-card vj-card--${variant} vj-card--${size}`;
@@ -50,35 +55,38 @@ function createBaseCard({
   // veilige background met fallback
   applySafeBackground(card, imageUrl);
 
-  const overlay = document.createElement("div");
-  overlay.className = "vj-card__overlay";
+  // Tekst-overlay alleen als noOverlay === false
+  if (!noOverlay) {
+    const overlay = document.createElement("div");
+    overlay.className = "vj-card__overlay";
 
-  const top = document.createElement("div");
-  const t = document.createElement("div");
-  t.className = "vj-card__title";
-  t.textContent = title || "";
-  top.appendChild(t);
+    const top = document.createElement("div");
+    const t = document.createElement("div");
+    t.className = "vj-card__title";
+    t.textContent = title || "";
+    top.appendChild(t);
 
-  if (subtitle) {
-    const s = document.createElement("div");
-    s.className = "vj-card__subtitle";
-    s.textContent = subtitle;
-    top.appendChild(s);
+    if (subtitle) {
+      const s = document.createElement("div");
+      s.className = "vj-card__subtitle";
+      s.textContent = subtitle;
+      top.appendChild(s);
+    }
+
+    const bottom = document.createElement("div");
+    if (footer) {
+      const f = document.createElement("div");
+      f.className = "vj-card__footer";
+      f.textContent = footer;
+      bottom.appendChild(f);
+    }
+
+    overlay.appendChild(top);
+    overlay.appendChild(bottom);
+    card.appendChild(overlay);
   }
 
-  const bottom = document.createElement("div");
-  if (footer) {
-    const f = document.createElement("div");
-    f.className = "vj-card__footer";
-    f.textContent = footer;
-    bottom.appendChild(f);
-  }
-
-  overlay.appendChild(top);
-  overlay.appendChild(bottom);
-  card.appendChild(overlay);
-
-  // optionele extra klassen (bv. neon rand voor Lead Fox)
+  // optionele extra klassen (bv. neon rand voor Lead Fox / Den-kleur)
   extraClasses.forEach((cls) => {
     if (cls) card.classList.add(cls);
   });
@@ -90,6 +98,10 @@ function createBaseCard({
 // EVENT CARDS
 // =========================
 
+/**
+ * Render een Event Card op basis van eventId (DEN_RED, ROOSTER_CROW, etc.).
+ * Gebruikt de data uit EVENT_DEFS (cards.js).
+ */
 export function renderEventCard(eventId, opts = {}) {
   const ev = getEventById(eventId);
   if (!ev) return null;
@@ -111,9 +123,11 @@ export function renderEventCard(eventId, opts = {}) {
 // ACTION CARDS (hand)
 // =========================
 
+/**
+ * Render een Action Card uit de hand.
+ * actionCard = { id, name, ... } (bijv. uit Firestore)
+ */
 export function renderActionCard(actionCard, opts = {}) {
-  if (!actionCard) return null;
-
   const key = actionCard.name || actionCard.id;
   const def = getActionDefByName(key);
 
@@ -140,9 +154,11 @@ export function renderActionCard(actionCard, opts = {}) {
 // LOOT CARDS
 // =========================
 
+/**
+ * Render een Loot Card.
+ * lootCard = { t: "Egg"|"Hen"|"Prize Hen", v: 1|3|5 }
+ */
 export function renderLootCard(lootCard, opts = {}) {
-  if (!lootCard) return null;
-
   const img = getLootImageForType(lootCard.t);
   const title = lootCard.t || "Loot";
   const value = lootCard.v ?? "?";
@@ -164,38 +180,105 @@ export function renderLootCard(lootCard, opts = {}) {
 
 /**
  * Render een spelerkaart voor het scoreboard / community board.
- * player = { name, color, ... }
+ * player = Firestore player-doc (met .color / .denColor / .den)
+ * - Geen tekst-overlay
+ * - Glow rand in Den-kleur
+ * - 🦊 icoon rechtsboven als Lead Fox
  */
 export function renderPlayerSlotCard(player, opts = {}) {
   if (!player) return null;
 
-  // Firestore gebruikt "color" (RED/BLUE/GREEN/YELLOW)
-  const denColorRaw = player.denColor || player.den || player.color || "";
-  const denColor = denColorRaw.toUpperCase();
-  const isLead = Boolean(player.isLead || opts.isLead);
-
-  // Kies frame op basis van Den-kleur en Lead-status
-  let imageUrl = PLAYER_CARD_IMAGES[denColor] || CARD_BACK;
-  if (isLead && PLAYER_CARD_IMAGES.LEAD) {
-    imageUrl = PLAYER_CARD_IMAGES.LEAD;
+  // Den-kleur bepalen: eerst .color (uit game), anders .denColor / .den
+  let denColor = "";
+  if (player.color) {
+    denColor = String(player.color).toUpperCase();
+  } else if (player.denColor) {
+    denColor = String(player.denColor).toUpperCase();
+  } else if (player.den) {
+    denColor = String(player.den).toUpperCase();
   }
 
-  const title = player.name || "Fox";
-  const subtitle =
-    opts.subtitle ||
-    (denColor ? `Den: ${denColor}` : "");
-  const footer = isLead ? (opts.footer || "Lead Fox") : (opts.footer || "Player");
+  const isLead = Boolean(player.isLead || opts.isLead);
+
+  // Kies frame op basis van Den-kleur
+  let imageUrl = CARD_BACK;
+  if (denColor && PLAYER_CARD_IMAGES[denColor]) {
+    imageUrl = PLAYER_CARD_IMAGES[denColor];
+  }
 
   const extraClasses = [];
-  if (isLead) extraClasses.push("vj-card--lead");
+  if (denColor) {
+    extraClasses.push("vj-card--den-" + denColor.toLowerCase());
+  }
+  if (isLead) {
+    extraClasses.push("vj-card--lead");
+  }
 
+  // Geen tekst-overlay meer: alleen full-art kaart + glow/icoontje
   return createBaseCard({
     imageUrl,
-    title,
-    subtitle,
-    footer,
+    title: "",
+    subtitle: "",
+    footer: "",
     variant: "player",
     size: opts.size || "medium",
     extraClasses,
+    noOverlay: true,
+  });
+}
+
+// =========================
+// PLAYER PROFILE CARDS
+// =========================
+
+/**
+ * Render een Player Profile Card (lange-termijn rol/ability).
+ * profileId = "SCOUT" | "MUSCLE" | "TRICKSTER" | ...
+ */
+export function renderPlayerProfileCard(profileId, opts = {}) {
+  const profile = getPlayerProfileById(profileId);
+  if (!profile) return null;
+
+  const size = opts.size || "medium";
+  const footer = opts.footer || "Player Profile";
+
+  return createBaseCard({
+    imageUrl: profile.imageFront || CARD_BACK,
+    title: profile.title,
+    subtitle: profile.text,
+    footer,
+    variant: "player",
+    size,
+  });
+}
+
+// =========================
+// ACTIVITY CARDS
+// =========================
+
+/**
+ * Render een Special Activity Card.
+ * activityId = "CAMPFIRE_STORY" | "TRAINING_DRILL" | "NIGHT_RECON" | ...
+ */
+export function renderActivityCard(activityId, opts = {}) {
+  const activity = getActivityById(activityId);
+  if (!activity) return null;
+
+  const size = opts.size || "medium";
+  const footer =
+    opts.footer ||
+    (activity.phase === "pre_raid"
+      ? "Pre-Raid Activity"
+      : activity.phase === "post_raid"
+      ? "Post-Raid Activity"
+      : "Activity");
+
+  return createBaseCard({
+    imageUrl: activity.imageFront || CARD_BACK,
+    title: activity.title,
+    subtitle: activity.text,
+    footer,
+    variant: "activity",
+    size,
   });
 }
