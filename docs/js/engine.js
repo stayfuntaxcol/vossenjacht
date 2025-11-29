@@ -2,10 +2,13 @@ import {
   getFirestore,
   doc,
   getDoc,
+  updateDoc,
   collection,
   getDocs,
-  updateDoc,
+  addDoc,
+  serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
+
 
 import { getEventById } from "./cards.js";
 import { addLog } from "./log.js";
@@ -113,6 +116,8 @@ async function scoreRaidAndFinish(
     lootDeck,
     sack,
   });
+
+  await saveLeaderboardForGame(gameId);
 }
 
 async function endRaidByRooster(
@@ -725,4 +730,65 @@ export async function resolveAfterReveal(gameId) {
     movedPlayerIds: [],
     leadIndex: newLeadIndex,
   });
+}
+export async function saveLeaderboardForGame(gameId) {
+  try {
+    const gameRef = doc(db, "games", gameId);
+    const gameSnap = await getDoc(gameRef);
+    if (!gameSnap.exists()) return;
+
+    const game = gameSnap.data();
+
+    // voorkom dubbele writes
+    if (game.leaderboardWritten) {
+      return;
+    }
+
+    // alleen schrijven als het spel écht klaar is
+    if (game.status !== "finished" && !game.raidEndedByRooster) {
+      return;
+    }
+
+    const playersSnap = await getDocs(
+      collection(db, "games", gameId, "players")
+    );
+
+    const leaderboardEntries = [];
+
+    playersSnap.forEach((pDoc) => {
+      const p = pDoc.data();
+
+      const eggs = p.eggs || 0;
+      const hens = p.hens || 0;
+      const prize = p.prize || 0;
+
+      const baseScore = eggs + hens * 2 + prize * 3;
+      const storedScore =
+        typeof p.score === "number" ? p.score : baseScore;
+      const bonus = Math.max(0, storedScore - baseScore);
+
+      // Als iedereen 0 heeft, kun je dit weglaten; maar laten we 0 ook toestaan.
+      leaderboardEntries.push({
+        name: p.name || "Fox",
+        score: storedScore,
+        eggs,
+        hens,
+        prize,
+        bonus,
+        gameId,
+        gameCode: game.code || "",
+        playedAt: serverTimestamp(), // belangrijk voor dag/maand filters
+      });
+    });
+
+    // schrijf elke entry naar de globale "leaderboard" collectie
+    for (const entry of leaderboardEntries) {
+      await addDoc(collection(db, "leaderboard"), entry);
+    }
+
+    // flag op het game-document zodat we niet nog een keer schrijven
+    await updateDoc(gameRef, { leaderboardWritten: true });
+  } catch (err) {
+    console.error("Fout bij saveLeaderboardForGame:", err);
+  }
 }
