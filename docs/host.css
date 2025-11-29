@@ -743,4 +743,166 @@ body.fullscreen-board #board {
   flex: 0 0 auto;
 }
 
+/* ==========================================
+   SCOREBOARD + LEADERBOARD
+   ========================================== */
+
+.scoreboard-section {
+  background: radial-gradient(circle at top, #020617, #020617 40%, #020617);
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.9);
+  padding: 0.9rem 1rem 1rem;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+/* Titel + intro bovenaan */
+.scoreboard-section h2 {
+  margin: 0 0 0.2rem;
+  font-size: 1rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #facc15;
+}
+
+.scoreboard-intro {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #e5e7eb;
+}
+
+.scoreboard-winners {
+  margin: 0.15rem 0 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #bbf7d0;
+}
+
+/* TABEL BASIS */
+
+.scoreboard-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  background: rgba(15, 23, 42, 0.9);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.scoreboard-table thead {
+  background: linear-gradient(to right, #0ea5e9, #22c55e);
+}
+
+.scoreboard-table th,
+.scoreboard-table td {
+  padding: 0.35rem 0.55rem;
+  text-align: center;
+  border-bottom: 1px solid rgba(30, 64, 175, 0.4);
+}
+
+.scoreboard-table th {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: #020617;
+}
+
+.scoreboard-table td:nth-child(2) {
+  text-align: left;
+}
+
+/* Alternating rows */
+
+.scoreboard-table tbody tr:nth-child(odd) {
+  background: rgba(15, 23, 42, 0.85);
+}
+
+.scoreboard-table tbody tr:nth-child(even) {
+  background: rgba(15, 23, 42, 0.7);
+}
+
+/* Winnaars extra highlight */
+
+.scoreboard-row-winner {
+  position: relative;
+  background: linear-gradient(
+    90deg,
+    rgba(34, 197, 94, 0.18),
+    rgba(56, 189, 248, 0.12)
+  ) !important;
+  box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.8),
+              0 0 24px rgba(56, 189, 248, 0.4);
+}
+
+.scoreboard-row-winner td:first-child {
+  font-weight: 700;
+}
+
+/* Totaal-rij onderaan */
+
+.scoreboard-table tfoot tr {
+  background: rgba(15, 23, 42, 0.95);
+  font-weight: 600;
+}
+
+/* LEADERBOARD BLOK */
+
+.leaderboard-title {
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #f97316;
+}
+
+.leaderboard-list {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.leaderboard-item,
+.leaderboard-empty {
+  padding: 0.25rem 0.3rem;
+  border-bottom: 1px dashed rgba(55, 65, 81, 0.7);
+  font-size: 0.78rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.leaderboard-item-main {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.leaderboard-item-loot {
+  font-size: 0.7rem;
+  color: #e5e7eb;
+  opacity: 0.85;
+}
+
+.leaderboard-item-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: #9ca3af;
+}
+
+.leaderboard-item-date {
+  opacity: 0.7;
+}
+
+/* Overlay content iets lucht geven */
+
+#scoreOverlayContent {
+  margin-top: 0.8rem;
+}
+
 
