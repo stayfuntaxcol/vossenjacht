@@ -629,15 +629,17 @@ body.fullscreen-board #board {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.7);
-  display: flex;
+  display: none;              /* standaard onzichtbaar */
   align-items: center;
   justify-content: center;
   z-index: 999;
 }
 
-.qr-overlay.hidden {
-  display: none;
+/* zichtbaar zodra JS deze class toevoegt */
+.qr-overlay.is-open {
+  display: flex;
 }
+
 
 .qr-box {
   background: #111;
