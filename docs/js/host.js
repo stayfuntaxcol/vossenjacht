@@ -22,6 +22,10 @@ const db = getFirestore();
 const params = new URLSearchParams(window.location.search);
 const gameId = params.get("game");
 
+// ========================
+// DOM REFERENTIES
+// ========================
+
 // Basis host UI
 const gameInfo      = document.getElementById("gameInfo");
 const roundInfo     = document.getElementById("roundInfo");
@@ -62,39 +66,51 @@ const qrJoinContainer = document.getElementById("qrJoin");
 const qrJoinToggleBtn = document.getElementById("qrJoinToggleBtn");
 const qrJoinCloseBtn  = document.getElementById("qrJoinCloseBtn");
 
-let qrInstance = null;
+// Scoreboard overlay / controls
+const showScoreboardBtn    = document.getElementById("showScoreboardBtn");
+const scoreOverlay         = document.getElementById("scoreOverlay");
+const scoreOverlayCloseBtn = document.getElementById("scoreOverlayCloseBtn");
+const scoreOverlayContent  = document.getElementById("scoreOverlayContent");
 
-// Verberg oude test-knop (endBtn)
+// Verberg oude test-knop
 if (endBtn) {
   endBtn.style.display = "none";
 }
+
+// ========================
+// STATE
+// ========================
 
 let currentRoundNumber     = 0;
 let currentRoundForActions = 0;
 let currentPhase           = "MOVE";
 let unsubActions           = null;
 
-let latestPlayers          = [];
-let latestGame             = null;
+let latestPlayers = [];
+let latestGame    = null;
 
 // Voor Lead Fox highlight & kaart
-let currentLeadFoxId       = null;
-let currentLeadFoxName     = "";
+let currentLeadFoxId   = null;
+let currentLeadFoxName = "";
 
 // Kleur-cycling voor Dens
 const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
 
+// QR Join: basepad naar index.html op GitHub Pages
+const JOIN_PAGE_PATH = "/vossenjacht";
+let qrInstance = null;
+
 let latestPlayersCacheForScoreboard = [];
 
-// ==== QR: URL maken richting lobby (index.html) ====
+// ========================
+// QR JOIN HELPERS
+// ========================
 
 function getJoinUrl(game) {
   if (!game || !game.code) return null;
-
-  // Zorgt voor: https://.../vossenjacht/index.html?code=ABCD
-  const url = new URL("index.html", window.location.href);
-  url.searchParams.set("code", game.code);
-  return url.toString();
+  const origin = window.location.origin || "";
+  const code   = game.code || "";
+  return `${origin}${JOIN_PAGE_PATH}?code=${encodeURIComponent(code)}`;
 }
 
 function renderJoinQr(game) {
@@ -120,21 +136,33 @@ function renderJoinQr(game) {
   }
 }
 
-// QR overlay show/hide – extra robuust (ook inline style)
+// QR overlay show/hide
 if (qrJoinToggleBtn && qrJoinOverlay) {
   qrJoinToggleBtn.addEventListener("click", () => {
-    qrJoinOverlay.style.display = "flex";
     qrJoinOverlay.classList.remove("hidden");
   });
 }
 if (qrJoinCloseBtn && qrJoinOverlay) {
   qrJoinCloseBtn.addEventListener("click", () => {
-    qrJoinOverlay.style.display = "none";
     qrJoinOverlay.classList.add("hidden");
   });
 }
 
-// ==== Helpers: decks, event track ====
+// Scoreboard overlay show/hide
+if (showScoreboardBtn && scoreOverlay) {
+  showScoreboardBtn.addEventListener("click", () => {
+    scoreOverlay.classList.remove("hidden");
+  });
+}
+if (scoreOverlayCloseBtn && scoreOverlay) {
+  scoreOverlayCloseBtn.addEventListener("click", () => {
+    scoreOverlay.classList.add("hidden");
+  });
+}
+
+// ========================
+// HELPERS: decks, event track
+// ========================
 
 function shuffleArray(array) {
   const arr = [...array];
@@ -145,8 +173,7 @@ function shuffleArray(array) {
   return arr;
 }
 
-// Event track: precies 12 kaarten, met DOG_CHARGE altijd in de eerste helft
-// en SECOND_CHARGE altijd in de tweede helft.
+// Event track: 12 kaarten, met DOG_CHARGE in eerste helft en SECOND_CHARGE in tweede helft
 function buildEventTrack() {
   const others = [
     "DEN_RED",
@@ -218,7 +245,9 @@ function buildLootDeck() {
   return shuffleArray(deck);
 }
 
-// ==== Rendering – Event Track & Status Cards ====
+// ========================
+// RENDERING – EVENT TRACK & STATUS
+// ========================
 
 function renderEventTrack(game) {
   if (!eventTrackDiv) return;
@@ -255,7 +284,7 @@ function renderEventTrack(game) {
     const slot = document.createElement("div");
     slot.classList.add("event-slot", `event-state-${state}`);
 
-    // Oud: ev.type, nieuw: ev.category
+    // Oud: ev.type, Nieuw: ev.category → beide ondersteunen
     if (ev && ev.type) {
       slot.classList.add("event-type-" + ev.type.toLowerCase());
     }
@@ -297,7 +326,7 @@ function renderStatusCards(game) {
     `;
   }
 
-  // Lead Fox
+  // Lead Fox – gebruik huidige global naam
   if (leadFoxCard) {
     const name = currentLeadFoxName || "–";
     leadFoxCard.innerHTML = `
@@ -391,7 +420,9 @@ function renderStatusCards(game) {
   }
 }
 
-// ==== EINDSCORE / SCOREBOARD ====
+// ========================
+// EINDSCORE / SCOREBOARD
+// ========================
 
 function renderFinalScoreboard(game) {
   if (!roundInfo) return;
@@ -401,17 +432,21 @@ function renderFinalScoreboard(game) {
 
   if (!players.length) {
     roundInfo.textContent = "Geen spelers gevonden voor het scorebord.";
+    if (scoreOverlayContent) {
+      scoreOverlayContent.textContent =
+        "Geen spelers gevonden voor het scorebord.";
+    }
     return;
   }
 
   const enriched = players.map((p) => {
-    const eggs = p.eggs || 0;
-    const hens = p.hens || 0;
+    const eggs  = p.eggs  || 0;
+    const hens  = p.hens  || 0;
     const prize = p.prize || 0;
 
-    const baseScore = eggs + hens * 2 + prize * 3;
+    const baseScore   = eggs + hens * 2 + prize * 3;
     const storedScore = typeof p.score === "number" ? p.score : baseScore;
-    const bonus = Math.max(0, storedScore - baseScore);
+    const bonus       = Math.max(0, storedScore - baseScore);
 
     return {
       ...p,
@@ -427,10 +462,8 @@ function renderFinalScoreboard(game) {
   enriched.sort((a, b) => b.totalScore - a.totalScore);
 
   const bestScore = enriched.length ? enriched[0].totalScore : 0;
-  const winners = enriched.filter((p) => p.totalScore === bestScore);
+  const winners   = enriched.filter((p) => p.totalScore === bestScore);
   const winnerIds = new Set(winners.map((w) => w.id));
-
-  roundInfo.innerHTML = "";
 
   const section = document.createElement("div");
   section.className = "scoreboard-section";
@@ -484,8 +517,8 @@ function renderFinalScoreboard(game) {
       tr.classList.add("scoreboard-row-winner");
     }
 
-    sumEggs += p.eggs;
-    sumHens += p.hens;
+    sumEggs  += p.eggs;
+    sumHens  += p.hens;
     sumPrize += p.prize;
     sumBonus += p.bonus;
     sumTotal += p.totalScore;
@@ -517,6 +550,7 @@ function renderFinalScoreboard(game) {
 
   section.appendChild(table);
 
+  // Container voor Top 10 leaderboard
   const leaderboardSection = document.createElement("div");
   leaderboardSection.innerHTML = `
     <div class="leaderboard-title">Top 10 – hoogste scores ooit</div>
@@ -524,18 +558,37 @@ function renderFinalScoreboard(game) {
   `;
   section.appendChild(leaderboardSection);
 
+  // In rechterpaneel
+  roundInfo.innerHTML = "";
   roundInfo.appendChild(section);
+
+  // Ook in overlay (clone)
+  if (scoreOverlayContent) {
+    scoreOverlayContent.innerHTML = "";
+    const clone = section.cloneNode(true);
+    scoreOverlayContent.appendChild(clone);
+  }
 
   loadLeaderboardTop10();
 }
 
 async function loadLeaderboardTop10() {
-  if (!roundInfo) return;
+  // Vind alle leaderboard ULs (rechterpaneel + overlay)
+  const listTargets = [];
+  if (roundInfo) {
+    const el1 = roundInfo.querySelector("#leaderboardList");
+    if (el1) listTargets.push(el1);
+  }
+  if (scoreOverlayContent) {
+    const el2 = scoreOverlayContent.querySelector("#leaderboardList");
+    if (el2) listTargets.push(el2);
+  }
 
-  const listEl = roundInfo.querySelector("#leaderboardList");
-  if (!listEl) return;
+  if (!listTargets.length) return;
 
-  listEl.innerHTML = "";
+  listTargets.forEach((el) => {
+    el.innerHTML = "";
+  });
 
   try {
     const leaderboardCol = collection(db, "leaderboard");
@@ -543,18 +596,20 @@ async function loadLeaderboardTop10() {
     const snap = await getDocs(q);
 
     if (snap.empty) {
-      const empty = document.createElement("li");
-      empty.className = "leaderboard-empty";
-      empty.textContent = "Nog geen data in het leaderboard.";
-      listEl.appendChild(empty);
+      listTargets.forEach((el) => {
+        const empty = document.createElement("li");
+        empty.className = "leaderboard-empty";
+        empty.textContent = "Nog geen data in het leaderboard.";
+        el.appendChild(empty);
+      });
       return;
     }
 
     let rank = 1;
     snap.forEach((docSnap) => {
-      const data = docSnap.data();
-      const eggs = data.eggs || 0;
-      const hens = data.hens || 0;
+      const data  = docSnap.data();
+      const eggs  = data.eggs  || 0;
+      const hens  = data.hens  || 0;
       const prize = data.prize || 0;
       const bonus = data.bonus || 0;
       const score = data.score || 0;
@@ -565,31 +620,38 @@ async function loadLeaderboardTop10() {
         dateLabel = d.toLocaleDateString();
       }
 
-      const li = document.createElement("li");
-      li.className = "leaderboard-item";
-      li.innerHTML = `
-        <div class="leaderboard-item-main">
-          <span>${rank}. ${data.name || "Fox"}</span>
-          <span class="leaderboard-item-loot">E:${eggs} H:${hens} P:${prize} +${bonus}</span>
-        </div>
-        <div class="leaderboard-item-meta">
-          <div>${score} pts</div>
-          <div class="leaderboard-item-date">${dateLabel}</div>
-        </div>
-      `;
-      listEl.appendChild(li);
+      listTargets.forEach((el) => {
+        const li = document.createElement("li");
+        li.className = "leaderboard-item";
+        li.innerHTML = `
+          <div class="leaderboard-item-main">
+            <span>${rank}. ${data.name || "Fox"}</span>
+            <span class="leaderboard-item-loot">E:${eggs} H:${hens} P:${prize} +${bonus}</span>
+          </div>
+          <div class="leaderboard-item-meta">
+            <div>${score} pts</div>
+            <div class="leaderboard-item-date">${dateLabel}</div>
+          </div>
+        `;
+        el.appendChild(li);
+      });
+
       rank += 1;
     });
   } catch (err) {
     console.error("Fout bij laden leaderboard:", err);
-    const li = document.createElement("li");
-    li.className = "leaderboard-empty";
-    li.textContent = "Leaderboard kon niet geladen worden.";
-    listEl.appendChild(li);
+    listTargets.forEach((el) => {
+      const li = document.createElement("li");
+      li.className = "leaderboard-empty";
+      li.textContent = "Leaderboard kon niet geladen worden.";
+      el.appendChild(li);
+    });
   }
 }
 
-// ==== INIT RAID (eerste keer) ====
+// ========================
+// INIT RAID (eerste keer)
+// ========================
 
 function isInYardForEvents(p) {
   return p.inYard !== false && !p.dashed;
@@ -717,7 +779,9 @@ if (!gameId && gameInfo) {
   gameInfo.textContent = "Geen gameId in de URL";
 }
 
-// ==== MAIN INIT ====
+// ========================
+// MAIN INIT
+// ========================
 
 initAuth(async (authUser) => {
   if (!gameId) return;
@@ -725,7 +789,7 @@ initAuth(async (authUser) => {
   const gameRef       = doc(db, "games", gameId);
   const playersColRef = collection(db, "games", gameId, "players");
 
-  // ==== GAME SNAPSHOT ====
+  // ---- GAME SNAPSHOT ----
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
       if (gameInfo) gameInfo.textContent = "Spel niet gevonden";
@@ -783,6 +847,7 @@ initAuth(async (authUser) => {
       return;
     }
 
+    // Nog geen actieve ronde
     if (game.status !== "round" && game.status !== "raid") {
       if (roundInfo) {
         roundInfo.textContent = "Nog geen actieve ronde.";
@@ -794,6 +859,7 @@ initAuth(async (authUser) => {
       return;
     }
 
+    // Zelfde ronde, actions-listener al actief
     if (currentRoundForActions === currentRoundNumber && unsubActions) {
       return;
     }
@@ -806,7 +872,11 @@ initAuth(async (authUser) => {
       where("round", "==", currentRoundForActions)
     );
 
-    if (unsubActions) unsubActions();
+    if (unsubActions) {
+      unsubActions();
+      unsubActions = null;
+    }
+
     unsubActions = onSnapshot(actionsQuery, (snapActions) => {
       if (!roundInfo) return;
       roundInfo.innerHTML = "";
@@ -848,7 +918,7 @@ initAuth(async (authUser) => {
     });
   });
 
-  // ==== PLAYERS SNAPSHOT → YARD / CAUGHT / DASH ZONES ====
+  // ---- PLAYERS SNAPSHOT → YARD / CAUGHT / DASH ZONES ----
   onSnapshot(playersColRef, (snapshot) => {
     const players = [];
     snapshot.forEach((pDoc) => {
@@ -858,14 +928,16 @@ initAuth(async (authUser) => {
 
     if (!yardZone || !caughtZone || !dashZone) return;
 
-    // Labels in CAUGHT en DASH bewaren
+    // Bewaar de bestaande labels in CAUGHT en DASH
     const caughtLabel = caughtZone.querySelector(".player-zone-label");
     const dashLabel   = dashZone.querySelector(".player-zone-label");
 
+    // Zones leegmaken
     yardZone.innerHTML   = "";
     caughtZone.innerHTML = "";
     dashZone.innerHTML   = "";
 
+    // Labels terugplaatsen
     if (caughtLabel) caughtZone.appendChild(caughtLabel);
     if (dashLabel)   dashZone.appendChild(dashLabel);
 
@@ -873,6 +945,7 @@ initAuth(async (authUser) => {
       return;
     }
 
+    // Volgorde op basis van joinOrder
     const ordered = [...players].sort((a, b) => {
       const ao =
         typeof a.joinOrder === "number"
@@ -909,6 +982,7 @@ initAuth(async (authUser) => {
       }
     }
 
+    // Update Lead Fox kaart ook meteen
     if (latestGame) {
       renderStatusCards(latestGame);
     }
@@ -951,6 +1025,7 @@ initAuth(async (authUser) => {
       }
     });
 
+    // Als het spel al finished is, ook hier nogmaals scoreboard renderen met up-to-date spelers
     if (
       latestGame &&
       (latestGame.status === "finished" || latestGame.phase === "END")
@@ -959,7 +1034,7 @@ initAuth(async (authUser) => {
     }
   });
 
-  // ==== LOGPANEL ====
+  // ---- LOGPANEL ----
   const logCol   = collection(db, "games", gameId, "log");
   const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
 
@@ -985,7 +1060,7 @@ initAuth(async (authUser) => {
     logPanel.appendChild(inner);
   });
 
-  // ==== START ROUND (met Lead Fox rotatie) ====
+  // ---- START ROUND (met Lead Fox rotatie) ----
   if (startBtn) {
     startBtn.addEventListener("click", async () => {
       const game = await initRaidIfNeeded(gameRef);
@@ -1027,9 +1102,11 @@ initAuth(async (authUser) => {
         typeof game.leadIndex === "number" ? game.leadIndex : 0;
 
       if (baseList.length) {
+        // normaliseer
         leadIndex =
           ((leadIndex % baseList.length) + baseList.length) % baseList.length;
 
+        // Vanaf ronde 2 schuiven we de Lead Fox door
         if (previousRound >= 1) {
           leadIndex = (leadIndex + 1) % baseList.length;
         }
@@ -1076,7 +1153,7 @@ initAuth(async (authUser) => {
     });
   }
 
-  // ==== PHASE SWITCHER ====
+  // ---- PHASE SWITCHER ----
   if (nextPhaseBtn) {
     nextPhaseBtn.addEventListener("click", async () => {
       const snap = await getDoc(gameRef);
@@ -1274,6 +1351,7 @@ initAuth(async (authUser) => {
       if (current === "REVEAL") {
         const latest = (await getDoc(gameRef)).data();
         if (latest && (latest.status === "finished" || latest.phase === "END")) {
+          // engine.js heeft het spel al afgesloten
           return;
         }
 
@@ -1292,16 +1370,16 @@ initAuth(async (authUser) => {
     });
   }
 
-  // ==== Host eigen player view openen ====
+  // ---- Host eigen player view openen ----
   if (playAsHostBtn) {
     playAsHostBtn.addEventListener("click", async () => {
-      const q = query(
+      const qHost = query(
         playersColRef,
         where("uid", "==", authUser.uid),
         where("isHost", "==", true)
       );
 
-      const snap = await getDocs(q);
+      const snap = await getDocs(qHost);
       if (snap.empty) {
         alert(
           "Geen host-speler gevonden. Start het spel opnieuw of join met de code."
