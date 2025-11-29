@@ -635,6 +635,10 @@ body.fullscreen-board #board {
   z-index: 999;
 }
 
+.qr-overlay.hidden {
+  display: none;
+}
+
 .qr-box {
   background: #111;
   padding: 2rem;
