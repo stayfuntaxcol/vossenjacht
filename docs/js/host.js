@@ -147,18 +147,9 @@ if (qrJoinCloseBtn && qrJoinOverlay) {
 function openScoreOverlay() {
   if (!scoreOverlay) return;
 
-  // Alleen tonen als het spel klaar is
-  if (
-    !latestGame ||
-    (latestGame.status !== "finished" && latestGame.phase !== "END")
-  ) {
-    alert("Scoreboard is pas beschikbaar als het spel is afgelopen.");
-    return;
-  }
-
-  // Als overlay nog leeg is, kopieer de inhoud van roundInfo (waar het scoreboard al staat)
-  if (scoreOverlayContent && roundInfo && !scoreOverlayContent.innerHTML.trim()) {
-    scoreOverlayContent.innerHTML = roundInfo.innerHTML;
+  // Als er nog geen scoreboard is opgebouwd: doe het nu
+  if (latestGame) {
+    renderFinalScoreboard(latestGame);
   }
 
   scoreOverlay.classList.remove("hidden");
