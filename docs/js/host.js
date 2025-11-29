@@ -62,6 +62,8 @@ const qrJoinContainer = document.getElementById("qrJoin");
 const qrJoinToggleBtn = document.getElementById("qrJoinToggleBtn");
 const qrJoinCloseBtn  = document.getElementById("qrJoinCloseBtn");
 
+let qrInstance = null;
+
 // Verberg oude test-knop (endBtn)
 if (endBtn) {
   endBtn.style.display = "none";
@@ -82,15 +84,17 @@ let currentLeadFoxName     = "";
 // Kleur-cycling voor Dens
 const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
 
-// QR Join: join.html pad en QR instance
-const JOIN_PAGE_PATH = "/vossenjacht"; // pas aan als jouw join-pagina anders heet
-let qrInstance = null;
+let latestPlayersCacheForScoreboard = [];
+
+// ==== QR: URL maken richting lobby (index.html) ====
 
 function getJoinUrl(game) {
   if (!game || !game.code) return null;
-  const origin = window.location.origin || "";
-  const code   = game.code || "";
-  return `${origin}${JOIN_PAGE_PATH}?code=${encodeURIComponent(code)}`;
+
+  // Zorgt voor: https://.../vossenjacht/index.html?code=ABCD
+  const url = new URL("index.html", window.location.href);
+  url.searchParams.set("code", game.code);
+  return url.toString();
 }
 
 function renderJoinQr(game) {
@@ -116,19 +120,19 @@ function renderJoinQr(game) {
   }
 }
 
-// QR overlay show/hide
+// QR overlay show/hide – extra robuust (ook inline style)
 if (qrJoinToggleBtn && qrJoinOverlay) {
   qrJoinToggleBtn.addEventListener("click", () => {
+    qrJoinOverlay.style.display = "flex";
     qrJoinOverlay.classList.remove("hidden");
   });
 }
 if (qrJoinCloseBtn && qrJoinOverlay) {
   qrJoinCloseBtn.addEventListener("click", () => {
+    qrJoinOverlay.style.display = "none";
     qrJoinOverlay.classList.add("hidden");
   });
 }
-
-let latestPlayersCacheForScoreboard = [];
 
 // ==== Helpers: decks, event track ====
 
@@ -251,7 +255,7 @@ function renderEventTrack(game) {
     const slot = document.createElement("div");
     slot.classList.add("event-slot", `event-state-${state}`);
 
-    // Oud: ev.type, Nieuw: ev.category → beide ondersteunen
+    // Oud: ev.type, nieuw: ev.category
     if (ev && ev.type) {
       slot.classList.add("event-type-" + ev.type.toLowerCase());
     }
@@ -293,7 +297,7 @@ function renderStatusCards(game) {
     `;
   }
 
-  // Lead Fox – gebruik huidige global naam
+  // Lead Fox
   if (leadFoxCard) {
     const name = currentLeadFoxName || "–";
     leadFoxCard.innerHTML = `
@@ -314,9 +318,7 @@ function renderStatusCards(game) {
     for (let i = 0; i < totalRoosters; i++) {
       const filled = i < roosterSeen;
       dots.push(
-        `<span class="rooster-dot ${
-          filled ? "rooster-dot-on" : ""
-        }"></span>`
+        `<span class="rooster-dot ${filled ? "rooster-dot-on" : ""}"></span>`
       );
     }
 
@@ -787,7 +789,7 @@ initAuth(async (authUser) => {
       }
       if (unsubActions) {
         unsubActions();
-        null;
+        unsubActions = null;
       }
       return;
     }
@@ -856,16 +858,14 @@ initAuth(async (authUser) => {
 
     if (!yardZone || !caughtZone || !dashZone) return;
 
-    // Bewaar de bestaande labels in CAUGHT en DASH
+    // Labels in CAUGHT en DASH bewaren
     const caughtLabel = caughtZone.querySelector(".player-zone-label");
     const dashLabel   = dashZone.querySelector(".player-zone-label");
 
-    // Zones leegmaken
     yardZone.innerHTML   = "";
     caughtZone.innerHTML = "";
     dashZone.innerHTML   = "";
 
-    // Labels terugplaatsen
     if (caughtLabel) caughtZone.appendChild(caughtLabel);
     if (dashLabel)   dashZone.appendChild(dashLabel);
 
@@ -909,7 +909,6 @@ initAuth(async (authUser) => {
       }
     }
 
-    // Update Lead Fox kaart ook meteen
     if (latestGame) {
       renderStatusCards(latestGame);
     }
@@ -1271,11 +1270,10 @@ initAuth(async (authUser) => {
         return;
       }
 
-      // REVEAL -> MOVE (volgende ronde) – alleen als spel nog niet klaar is
+      // REVEAL -> MOVE (volgende ronde)
       if (current === "REVEAL") {
         const latest = (await getDoc(gameRef)).data();
         if (latest && (latest.status === "finished" || latest.phase === "END")) {
-          // engine.js heeft het spel al afgesloten
           return;
         }
 
