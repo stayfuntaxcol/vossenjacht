@@ -3,8 +3,6 @@ import {
   getEventById,
   getActionDefByName,
   getLootImageForType,
-  getPlayerProfileById,
-  getActivityById,
 } from "./cards.js";
 
 // Kaartframes voor spelers per Den-kleur
@@ -33,10 +31,9 @@ function applySafeBackground(cardElem, imageUrl) {
 }
 
 /**
- * Basiskaart: gedeelde layout voor alle kaarttypen (event, action, loot, player, activity).
- * - variant: "event" | "action" | "loot" | "player" | "activity" | etc.
+ * Basiskaart: gedeelde layout voor alle kaarttypen (event, action, loot, player).
+ * - variant: "event" | "action" | "loot" | "player" | etc.
  * - size: "small" | "medium" | "large"
- * - extraClasses: extra CSS-klassen, bv. ["vj-card--lead"]
  */
 function createBaseCard({
   imageUrl,
@@ -93,10 +90,6 @@ function createBaseCard({
 // EVENT CARDS
 // =========================
 
-/**
- * Render een Event Card op basis van eventId (DEN_RED, ROOSTER_CROW, etc.).
- * Gebruikt de data uit EVENT_DEFS (cards.js).
- */
 export function renderEventCard(eventId, opts = {}) {
   const ev = getEventById(eventId);
   if (!ev) return null;
@@ -118,11 +111,9 @@ export function renderEventCard(eventId, opts = {}) {
 // ACTION CARDS (hand)
 // =========================
 
-/**
- * Render een Action Card uit de hand.
- * actionCard = { id, name, ... } (bijv. uit Firestore)
- */
 export function renderActionCard(actionCard, opts = {}) {
+  if (!actionCard) return null;
+
   const key = actionCard.name || actionCard.id;
   const def = getActionDefByName(key);
 
@@ -149,11 +140,9 @@ export function renderActionCard(actionCard, opts = {}) {
 // LOOT CARDS
 // =========================
 
-/**
- * Render een Loot Card.
- * lootCard = { t: "Egg"|"Hen"|"Prize Hen", v: 1|3|5 }
- */
 export function renderLootCard(lootCard, opts = {}) {
+  if (!lootCard) return null;
+
   const img = getLootImageForType(lootCard.t);
   const title = lootCard.t || "Loot";
   const value = lootCard.v ?? "?";
@@ -175,12 +164,13 @@ export function renderLootCard(lootCard, opts = {}) {
 
 /**
  * Render een spelerkaart voor het scoreboard / community board.
- * player = { name, denColor, isLead, ... }
+ * player = { name, color, ... }
  */
 export function renderPlayerSlotCard(player, opts = {}) {
   if (!player) return null;
 
-  const denColorRaw = player.denColor || player.den || "";
+  // Firestore gebruikt "color" (RED/BLUE/GREEN/YELLOW)
+  const denColorRaw = player.denColor || player.den || player.color || "";
   const denColor = denColorRaw.toUpperCase();
   const isLead = Boolean(player.isLead || opts.isLead);
 
@@ -194,7 +184,7 @@ export function renderPlayerSlotCard(player, opts = {}) {
   const subtitle =
     opts.subtitle ||
     (denColor ? `Den: ${denColor}` : "");
-  const footer = isLead ? "Lead Fox" : (opts.footer || "Player");
+  const footer = isLead ? (opts.footer || "Lead Fox") : (opts.footer || "Player");
 
   const extraClasses = [];
   if (isLead) extraClasses.push("vj-card--lead");
@@ -207,61 +197,5 @@ export function renderPlayerSlotCard(player, opts = {}) {
     variant: "player",
     size: opts.size || "medium",
     extraClasses,
-  });
-}
-
-// =========================
-// PLAYER PROFILE CARDS
-// =========================
-
-/**
- * Render een Player Profile Card (lange-termijn rol/ability).
- * profileId = "SCOUT" | "MUSCLE" | "TRICKSTER" | ...
- */
-export function renderPlayerProfileCard(profileId, opts = {}) {
-  const profile = getPlayerProfileById(profileId);
-  if (!profile) return null;
-
-  const size = opts.size || "medium";
-  const footer = opts.footer || "Player Profile";
-
-  return createBaseCard({
-    imageUrl: profile.imageFront || CARD_BACK,
-    title: profile.title,
-    subtitle: profile.text,
-    footer,
-    variant: "player",
-    size,
-  });
-}
-
-// =========================
-// ACTIVITY CARDS
-// =========================
-
-/**
- * Render een Special Activity Card.
- * activityId = "CAMPFIRE_STORY" | "TRAINING_DRILL" | "NIGHT_RECON" | ...
- */
-export function renderActivityCard(activityId, opts = {}) {
-  const activity = getActivityById(activityId);
-  if (!activity) return null;
-
-  const size = opts.size || "medium";
-  const footer =
-    opts.footer ||
-    (activity.phase === "pre_raid"
-      ? "Pre-Raid Activity"
-      : activity.phase === "post_raid"
-      ? "Post-Raid Activity"
-      : "Activity");
-
-  return createBaseCard({
-    imageUrl: activity.imageFront || CARD_BACK,
-    title: activity.title,
-    subtitle: activity.text,
-    footer,
-    variant: "activity",
-    size,
   });
 }
