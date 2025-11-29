@@ -917,7 +917,7 @@ body.fullscreen-board #board {
   align-items: flex-start;
   flex-wrap: nowrap;
   gap: 0;
-  padding-top: 40px; /* ruimte voor label "CAUGHT" / "DASH" */
+  padding-top: 80px; /* ruimte voor label "CAUGHT" / "DASH" */
   overflow: hidden;  /* voorkomt dat de zone eindeloos groeit */
 }
 
