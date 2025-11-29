@@ -905,4 +905,45 @@ body.fullscreen-board #board {
   margin-top: 0.8rem;
 }
 
+/* ==========================================
+   STACKED PLAYER CARDS IN CAUGHT / DASH
+   ========================================== */
+
+/* Zones zelf: geen wrap, verticale stapel */
+.player-zone-caught,
+.player-zone-dash {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+  gap: 0;
+  padding-top: 28px; /* ruimte voor label "CAUGHT" / "DASH" */
+  overflow: hidden;  /* voorkomt dat de zone eindeloos groeit */
+}
+
+/* Zorg dat kaarten binnen deze zones dezelfde 2:3 maat houden */
+.player-zone-caught .vj-card,
+.player-zone-dash .vj-card,
+.player-zone-caught .card-player,
+.player-zone-dash .card-player {
+  width: var(--card-w);
+  height: var(--card-h);
+}
+
+/* Eerste kaart volledig zichtbaar */
+.player-zone-caught .vj-card:first-of-type,
+.player-zone-dash .vj-card:first-of-type,
+.player-zone-caught .card-player:first-of-type,
+.player-zone-dash .card-player:first-of-type {
+  margin-top: 0;
+}
+
+/* Alle volgende kaarten schuiven er onder met overlap:
+   alleen de bovenste strook (met naam) blijft zichtbaar */
+.player-zone-caught .vj-card:not(:first-of-type),
+.player-zone-dash .vj-card:not(:first-of-type),
+.player-zone-caught .card-player:not(:first-of-type),
+.player-zone-dash .card-player:not(:first-of-type) {
+  margin-top: calc(var(--card-h) * -0.7); /* aanpassen voor meer/minder overlap */
+}
 
