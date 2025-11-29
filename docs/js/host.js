@@ -64,6 +64,12 @@ const qrJoinCloseBtn  = document.getElementById("qrJoinCloseBtn");
 
 let qrInstance = null;
 
+// Scoreboard overlay / controls
+const scoreOverlay        = document.getElementById("scoreOverlay");
+const scoreOverlayContent = document.getElementById("scoreOverlayContent");
+const showScoreboardBtn   = document.getElementById("showScoreboardBtn");
+const scoreOverlayCloseBtn= document.getElementById("scoreOverlayCloseBtn");
+
 // Verberg oude test-knop (endBtn)
 if (endBtn) {
   endBtn.style.display = "none";
@@ -136,6 +142,38 @@ if (qrJoinToggleBtn && qrJoinOverlay) {
 }
 if (qrJoinCloseBtn && qrJoinOverlay) {
   qrJoinCloseBtn.addEventListener("click", closeQrOverlay);
+}
+// SCOREBOARD overlay show/hide
+function openScoreOverlay() {
+  if (!scoreOverlay) return;
+
+  // Alleen tonen als het spel klaar is
+  if (
+    !latestGame ||
+    (latestGame.status !== "finished" && latestGame.phase !== "END")
+  ) {
+    alert("Scoreboard is pas beschikbaar als het spel is afgelopen.");
+    return;
+  }
+
+  // Als overlay nog leeg is, kopieer de inhoud van roundInfo (waar het scoreboard al staat)
+  if (scoreOverlayContent && roundInfo && !scoreOverlayContent.innerHTML.trim()) {
+    scoreOverlayContent.innerHTML = roundInfo.innerHTML;
+  }
+
+  scoreOverlay.classList.remove("hidden");
+}
+
+function closeScoreOverlay() {
+  if (!scoreOverlay) return;
+  scoreOverlay.classList.add("hidden");
+}
+
+if (showScoreboardBtn && scoreOverlay) {
+  showScoreboardBtn.addEventListener("click", openScoreOverlay);
+}
+if (scoreOverlayCloseBtn && scoreOverlay) {
+  scoreOverlayCloseBtn.addEventListener("click", closeScoreOverlay);
 }
 
 // ==== Helpers: decks, event track ====
@@ -519,7 +557,7 @@ function renderFinalScoreboard(game) {
   tfoot.appendChild(trTotal);
   table.appendChild(tfoot);
 
-  section.appendChild(table);
+   section.appendChild(table);
 
   const leaderboardSection = document.createElement("div");
   leaderboardSection.innerHTML = `
@@ -528,7 +566,14 @@ function renderFinalScoreboard(game) {
   `;
   section.appendChild(leaderboardSection);
 
+  // 1) Normaal scoreboard rechts in de log-kolom
   roundInfo.appendChild(section);
+
+  // 2) Kopieer dezelfde inhoud naar de overlay (full-screen scoreboard)
+  if (scoreOverlayContent) {
+    scoreOverlayContent.innerHTML = "";
+    scoreOverlayContent.appendChild(section.cloneNode(true));
+  }
 
   loadLeaderboardTop10();
 }
@@ -592,6 +637,16 @@ async function loadLeaderboardTop10() {
     listEl.appendChild(li);
   }
 }
+  // Synchroniseer leaderboard naar overlay, als die er is
+  if (scoreOverlayContent && roundInfo) {
+    const src = roundInfo.querySelector("#leaderboardList");
+    const dst = scoreOverlayContent.querySelector("#leaderboardList");
+    if (src && dst) {
+      dst.innerHTML = src.innerHTML;
+    }
+  }
+}
+
 
 // ==== INIT RAID (eerste keer) ====
 
