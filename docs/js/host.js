@@ -120,27 +120,23 @@ function renderJoinQr(game) {
   }
 }
 
+function openQrOverlay() {
+  if (!qrJoinOverlay) return;
+  qrJoinOverlay.classList.add("is-open");
+}
+
+function closeQrOverlay() {
+  if (!qrJoinOverlay) return;
+  qrJoinOverlay.classList.remove("is-open");
+}
+
 // QR overlay show/hide
 if (qrJoinToggleBtn && qrJoinOverlay) {
-  qrJoinToggleBtn.addEventListener("click", () => {
-    qrJoinOverlay.classList.remove("hidden");
-  });
+  qrJoinToggleBtn.addEventListener("click", openQrOverlay);
 }
-
-// sluit bij klik op donkere achtergrond of op de sluit-knop
-if (qrJoinOverlay) {
-  qrJoinOverlay.addEventListener("click", (ev) => {
-    const target = ev.target;
-    if (
-      target === qrJoinOverlay ||                    // klik op de zwarte achtergrond
-      target.id === "qrJoinCloseBtn" ||              // direct op de knop
-      target.closest && target.closest("#qrJoinCloseBtn") // element ín de knop
-    ) {
-      qrJoinOverlay.classList.add("hidden");
-    }
-  });
+if (qrJoinCloseBtn && qrJoinOverlay) {
+  qrJoinCloseBtn.addEventListener("click", closeQrOverlay);
 }
-
 
 // ==== Helpers: decks, event track ====
 
