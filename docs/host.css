@@ -944,6 +944,6 @@ body.fullscreen-board #board {
 .player-zone-dash .vj-card:not(:first-of-type),
 .player-zone-caught .card-player:not(:first-of-type),
 .player-zone-dash .card-player:not(:first-of-type) {
-  margin-top: calc(var(--card-h) * -0.7); /* aanpassen voor meer/minder overlap */
+  margin-top: calc(var(--card-h) * -0.8); /* aanpassen voor meer/minder overlap */
 }
 
