@@ -645,8 +645,6 @@ async function loadLeaderboardTop10() {
       dst.innerHTML = src.innerHTML;
     }
   }
-}
-
 
 // ==== INIT RAID (eerste keer) ====
 
