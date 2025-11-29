@@ -433,7 +433,11 @@ function renderFinalScoreboard(game) {
   latestPlayersCacheForScoreboard = players;
 
   if (!players.length) {
-    roundInfo.textContent = "Geen spelers gevonden voor het scorebord.";
+    const msg = "Geen spelers gevonden voor het scorebord.";
+    roundInfo.textContent = msg;
+    if (scoreOverlayContent) {
+      scoreOverlayContent.textContent = msg;
+    }
     return;
   }
 
@@ -548,7 +552,7 @@ function renderFinalScoreboard(game) {
   tfoot.appendChild(trTotal);
   table.appendChild(tfoot);
 
-   section.appendChild(table);
+  section.appendChild(table);
 
   const leaderboardSection = document.createElement("div");
   leaderboardSection.innerHTML = `
@@ -557,13 +561,16 @@ function renderFinalScoreboard(game) {
   `;
   section.appendChild(leaderboardSection);
 
-  // 1) Normaal scoreboard rechts in de log-kolom
+  // rechts in de log-kolom
   roundInfo.appendChild(section);
 
-  // 2) Kopieer dezelfde inhoud naar de overlay (full-screen scoreboard)
+  // kopie in de overlay, maar zonder tweede H2
   if (scoreOverlayContent) {
+    const clone = section.cloneNode(true);
+    const innerTitle = clone.querySelector("h2");
+    if (innerTitle) innerTitle.remove(); // voorkomt dubbele "Eindscore – Fox Raid"
     scoreOverlayContent.innerHTML = "";
-    scoreOverlayContent.appendChild(section.cloneNode(true));
+    scoreOverlayContent.appendChild(clone);
   }
 
   loadLeaderboardTop10();
