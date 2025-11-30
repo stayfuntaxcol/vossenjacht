@@ -1007,3 +1007,91 @@ body.fullscreen-board #board {
   text-shadow: 0 0 6px rgba(251, 191, 36, 0.9);
 }
 
+/* ==========================================
+   BEACON & SCATTER – echte kaart-assets
+   ========================================== */
+
+/* Zorg dat ze gewoon de standaard kaartmaat gebruiken */
+#beaconCard,
+#scatterCard {
+  width: var(--card-w);
+  height: var(--card-h);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* Koppel aan jouw bestaande assets */
+#beaconCard {
+  background-image: url("./assets/card_beacon.png");
+}
+
+#scatterCard {
+  background-image: url("./assets/card_scatter.png");
+}
+
+/* Eventuele overlay van .board-card weghalen zodat de art goed zichtbaar blijft */
+#beaconCard.board-card::before,
+#scatterCard.board-card::before {
+  content: "";
+  opacity: 0;
+}
+/* ==========================================
+   ROOSTER CROW STATUS CARD
+   ========================================== */
+
+#roosterCard {
+  width: var(--card-w);
+  height: var(--card-h);
+  background-image: url("./assets/card_event_rooster_crow.png"); /* bestaande event asset */
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  position: relative;
+  overflow: hidden;
+}
+
+/* overlay van board-card uitzetten zodat art zichtbaar blijft */
+#roosterCard.board-card::before {
+  content: "";
+  opacity: 0;
+}
+
+/* eigen overlay voor tekst (onderaan de kaart) */
+#roosterCard .card-title,
+#roosterCard .card-value,
+#roosterCard .card-sub,
+#roosterCard .rooster-track {
+  position: relative;
+  z-index: 1;
+}
+
+/* donkere gradient onderaan voor leesbare tekst */
+#roosterCard::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 45%;
+  background: linear-gradient(to top, rgba(15, 23, 42, 0.9), transparent);
+  z-index: 0;
+}
+
+/* Rooster dots een beetje meer “status lampjes” maken */
+.rooster-track {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.rooster-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(248, 250, 252, 0.7);
+  background: rgba(15, 23, 42, 0.5);
+}
+
+.rooster-dot-on {
+  background: #fbbf24;
+  box-shadow: 0 0 6px rgba(251, 191, 36, 0.9);
+}
