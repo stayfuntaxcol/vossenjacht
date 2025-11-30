@@ -426,14 +426,18 @@ function renderStatusCards(game) {
 
 // ==== EINDSCORE / SCOREBOARD ====
 
-function renderFinalScoreboard(game) {
+async function renderFinalScoreboard(game) {
   if (!roundInfo) return;
 
   const players = [...latestPlayers];
   latestPlayersCacheForScoreboard = players;
 
   if (!players.length) {
-    roundInfo.textContent = "Geen spelers gevonden voor het scorebord.";
+    const msg = "Geen spelers gevonden voor het scorebord.";
+    roundInfo.textContent = msg;
+    if (scoreOverlayContent) {
+      scoreOverlayContent.textContent = msg;
+    }
     return;
   }
 
@@ -463,6 +467,7 @@ function renderFinalScoreboard(game) {
   const winners    = enriched.filter((p) => p.totalScore === bestScore);
   const winnerIds  = new Set(winners.map((w) => w.id));
 
+  // eerst alles in roundInfo opbouwen
   roundInfo.innerHTML = "";
 
   const section = document.createElement("div");
@@ -550,8 +555,15 @@ function renderFinalScoreboard(game) {
 
   roundInfo.appendChild(section);
 
-  // laad de drie leaderboards
-  loadLeaderboardsMulti();
+  // leaderboards vullen in roundInfo
+  await loadLeaderboardsMulti();
+
+  // daarna zelfde inhoud in de popup zetten
+  if (scoreOverlayContent) {
+    const scoreboardClone = section.cloneNode(true);
+    scoreOverlayContent.innerHTML = "";
+    scoreOverlayContent.appendChild(scoreboardClone);
+  }
 }
 
 function appendLeaderboardRow(listEl, rank, data) {
