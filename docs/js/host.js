@@ -438,13 +438,13 @@ function renderFinalScoreboard(game) {
   }
 
   const enriched = players.map((p) => {
-    const eggs = p.eggs || 0;
-    const hens = p.hens || 0;
+    const eggs  = p.eggs  || 0;
+    const hens  = p.hens  || 0;
     const prize = p.prize || 0;
 
-    const baseScore = eggs + hens * 2 + prize * 3;
+    const baseScore   = eggs + hens * 2 + prize * 3;
     const storedScore = typeof p.score === "number" ? p.score : baseScore;
-    const bonus = Math.max(0, storedScore - baseScore);
+    const bonus       = Math.max(0, storedScore - baseScore);
 
     return {
       ...p,
@@ -459,9 +459,9 @@ function renderFinalScoreboard(game) {
 
   enriched.sort((a, b) => b.totalScore - a.totalScore);
 
-  const bestScore = enriched.length ? enriched[0].totalScore : 0;
-  const winners = enriched.filter((p) => p.totalScore === bestScore);
-  const winnerIds = new Set(winners.map((w) => w.id));
+  const bestScore  = enriched.length ? enriched[0].totalScore : 0;
+  const winners    = enriched.filter((p) => p.totalScore === bestScore);
+  const winnerIds  = new Set(winners.map((w) => w.id));
 
   roundInfo.innerHTML = "";
 
@@ -486,7 +486,7 @@ function renderFinalScoreboard(game) {
     section.appendChild(pWin);
   }
 
-  // Tabel met de eindstand van dit spel
+  // Tabel met de eindstand van DIT spel
   const table = document.createElement("table");
   table.className = "scoreboard-table";
   table.innerHTML = `
@@ -526,7 +526,7 @@ function renderFinalScoreboard(game) {
 
   section.appendChild(table);
 
-  // ===== nieuwe multi-leaderboards =====
+  // ===== multi-leaderboards =====
   const leaderboardSection = document.createElement("div");
   leaderboardSection.className = "leaderboard-section-multi";
   leaderboardSection.innerHTML = `
@@ -555,8 +555,8 @@ function renderFinalScoreboard(game) {
 }
 
 function appendLeaderboardRow(listEl, rank, data) {
-  const eggs = data.eggs || 0;
-  const hens = data.hens || 0;
+  const eggs  = data.eggs  || 0;
+  const hens  = data.hens  || 0;
   const prize = data.prize || 0;
   const bonus = data.bonus || 0;
   const score = data.score || 0;
@@ -593,8 +593,8 @@ async function loadLeaderboardsMulti() {
 
   if (!listToday || !listMonth || !listAllTime) return;
 
-  listToday.innerHTML = "";
-  listMonth.innerHTML = "";
+  listToday.innerHTML   = "";
+  listMonth.innerHTML   = "";
   listAllTime.innerHTML = "";
 
   try {
@@ -629,7 +629,7 @@ async function fillLeaderboardAllTime(listEl) {
 }
 
 async function fillLeaderboardToday(listEl) {
-  const now = new Date();
+  const now        = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
   const leaderboardCol = collection(db, "leaderboard");
@@ -653,7 +653,6 @@ async function fillLeaderboardToday(listEl) {
   const docs = [];
   snap.forEach((docSnap) => docs.push(docSnap.data()));
 
-  // sorteer lokaal op score
   docs.sort((a, b) => (b.score || 0) - (a.score || 0));
   const top = docs.slice(0, 10);
 
@@ -661,144 +660,7 @@ async function fillLeaderboardToday(listEl) {
 }
 
 async function fillLeaderboardMonth(listEl) {
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-
-  const leaderboardCol = collection(db, "leaderboard");
-  const qMonth = query(
-    leaderboardCol,
-    where("playedAt", ">=", monthStart),
-    orderBy("playedAt", "desc"),
-    limit(500)
-  );
-
-  const snap = await getDocs(qMonth);
-
-  if (snap.empty) {
-    const li = document.createElement("li");
-    li.className = "leaderboard-empty";
-    li.textContent = "Nog geen scores voor deze maand.";
-    listEl.appendChild(li);
-    return;
-  }
-
-  const docs = [];
-  snap.forEach((docSnap) => docs.push(docSnap.data()));
-
-  docs.sort((a, b) => (b.score || 0) - (a.score || 0));
-  const top = docs.slice(0, 25);
-
-  top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
-}
-
-function appendLeaderboardRow(listEl, rank, data) {
-  const eggs = data.eggs || 0;
-  const hens = data.hens || 0;
-  const prize = data.prize || 0;
-  const bonus = data.bonus || 0;
-  const score = data.score || 0;
-
-  let dateLabel = "";
-  if (data.playedAt && data.playedAt.seconds != null) {
-    const d = new Date(data.playedAt.seconds * 1000);
-    dateLabel = d.toLocaleDateString();
-  }
-
-  const li = document.createElement("li");
-  li.className = "leaderboard-item";
-  li.innerHTML = `
-    <div class="leaderboard-item-main">
-      <span>${rank}. ${data.name || "Fox"}</span>
-      <span class="leaderboard-item-loot">
-        E:${eggs} H:${hens} P:${prize} +${bonus}
-      </span>
-    </div>
-    <div class="leaderboard-item-meta">
-      <div>${score} pts</div>
-      <div class="leaderboard-item-date">${dateLabel}</div>
-    </div>
-  `;
-  listEl.appendChild(li);
-}
-
-async function loadLeaderboardsMulti() {
-  if (!roundInfo) return;
-
-  const listToday   = roundInfo.querySelector("#leaderboardToday");
-  const listMonth   = roundInfo.querySelector("#leaderboardMonth");
-  const listAllTime = roundInfo.querySelector("#leaderboardAllTime");
-
-  if (!listToday || !listMonth || !listAllTime) return;
-
-  listToday.innerHTML = "";
-  listMonth.innerHTML = "";
-  listAllTime.innerHTML = "";
-
-  try {
-    await Promise.all([
-      fillLeaderboardToday(listToday),
-      fillLeaderboardMonth(listMonth),
-      fillLeaderboardAllTime(listAllTime),
-    ]);
-  } catch (err) {
-    console.error("Fout bij laden leaderboards:", err);
-  }
-}
-
-async function fillLeaderboardAllTime(listEl) {
-  const leaderboardCol = collection(db, "leaderboard");
-  const qAll = query(leaderboardCol, orderBy("score", "desc"), limit(100));
-  const snap = await getDocs(qAll);
-
-  if (snap.empty) {
-    const li = document.createElement("li");
-    li.className = "leaderboard-empty";
-    li.textContent = "Nog geen scores.";
-    listEl.appendChild(li);
-    return;
-  }
-
-  let rank = 1;
-  snap.forEach((docSnap) => {
-    const data = docSnap.data();
-    appendLeaderboardRow(listEl, rank++, data);
-  });
-}
-
-async function fillLeaderboardToday(listEl) {
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-  const leaderboardCol = collection(db, "leaderboard");
-  const qToday = query(
-    leaderboardCol,
-    where("playedAt", ">=", todayStart),
-    orderBy("playedAt", "desc"),
-    limit(200)
-  );
-
-  const snap = await getDocs(qToday);
-
-  if (snap.empty) {
-    const li = document.createElement("li");
-    li.className = "leaderboard-empty";
-    li.textContent = "Nog geen scores voor vandaag.";
-    listEl.appendChild(li);
-    return;
-  }
-
-  const docs = [];
-  snap.forEach((docSnap) => docs.push(docSnap.data()));
-
-  // sorteer lokaal op score
-  docs.sort((a, b) => (b.score || 0) - (a.score || 0));
-  const top = docs.slice(0, 10);
-
-  top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
-}
-
-async function fillLeaderboardMonth(listEl) {
-  const now = new Date();
+  const now        = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const leaderboardCol = collection(db, "leaderboard");
