@@ -843,6 +843,9 @@ initAuth(async (authUser) => {
       game.currentEventId && game.phase === "REVEAL"
         ? getEventById(game.currentEventId)
         : null;
+    
+    // game-state veranderd → zones opnieuw tekenen (Lead Fox kan wisselen)
+renderPlayerZones();
 
     // Start-knop blokkeren als spel al klaar is
     if (startBtn) {
@@ -949,116 +952,130 @@ initAuth(async (authUser) => {
     });
   });
 
-  // ==== PLAYERS SNAPSHOT → YARD / CAUGHT / DASH ZONES ====
-  onSnapshot(playersColRef, (snapshot) => {
-    const players = [];
-    snapshot.forEach((pDoc) => {
-      players.push({ id: pDoc.id, ...pDoc.data() });
-    });
-    latestPlayers = players;
+// ==== HELPER: SPELERS ZONES RENDEREN ====
+function renderPlayerZones() {
+  if (!yardZone || !caughtZone || !dashZone) return;
 
-    if (!yardZone || !caughtZone || !dashZone) return;
+  const players = [...latestPlayers];
 
-    // Labels in CAUGHT en DASH bewaren
-    const caughtLabel = caughtZone.querySelector(".player-zone-label");
-    const dashLabel   = dashZone.querySelector(".player-zone-label");
+  // Labels bewaren
+  const caughtLabel = caughtZone.querySelector(".player-zone-label");
+  const dashLabel   = dashZone.querySelector(".player-zone-label");
 
-    yardZone.innerHTML   = "";
-    caughtZone.innerHTML = "";
-    dashZone.innerHTML   = "";
+  // Zones leegmaken
+  yardZone.innerHTML   = "";
+  caughtZone.innerHTML = "";
+  dashZone.innerHTML   = "";
 
-    if (caughtLabel) caughtZone.appendChild(caughtLabel);
-    if (dashLabel)   dashZone.appendChild(dashLabel);
+  // Labels terugzetten
+  if (caughtLabel) caughtZone.appendChild(caughtLabel);
+  if (dashLabel)   dashZone.appendChild(dashLabel);
 
-    if (!players.length) {
-      return;
+  if (!players.length) return;
+
+  // volgorde op joinOrder
+  const ordered = [...players].sort((a, b) => {
+    const ao =
+      typeof a.joinOrder === "number"
+        ? a.joinOrder
+        : Number.MAX_SAFE_INTEGER;
+    const bo =
+      typeof b.joinOrder === "number"
+        ? b.joinOrder
+        : Number.MAX_SAFE_INTEGER;
+    return ao - bo;
+  });
+
+  const activeOrdered = ordered.filter(isInYardLocal);
+  const baseList = activeOrdered.length ? activeOrdered : [];
+
+  // LeadIndex uit latestGame
+  let leadIdx =
+    latestGame && typeof latestGame.leadIndex === "number"
+      ? latestGame.leadIndex
+      : 0;
+
+  if (leadIdx < 0) leadIdx = 0;
+  if (baseList.length) {
+    leadIdx = leadIdx % baseList.length;
+  }
+
+  // bepaal huidige Lead Fox
+  currentLeadFoxId = null;
+  currentLeadFoxName = "";
+
+  if (baseList.length) {
+    const lf = baseList[leadIdx];
+    if (lf) {
+      currentLeadFoxId = lf.id;
+      currentLeadFoxName = lf.name || "";
+    }
+  }
+
+  // statuskaarten bijwerken (Lead Fox naam)
+  if (latestGame) {
+    renderStatusCards(latestGame);
+  }
+
+  // kaarten in zones plaatsen
+  ordered.forEach((p) => {
+    let zoneType = "yard";
+
+    if (latestGame && latestGame.raidEndedByRooster) {
+      if (p.dashed) zoneType = "dash";
+      else zoneType = "caught";
+    } else {
+      if (p.dashed) zoneType = "dash";
+      else if (p.inYard === false) zoneType = "caught";
+      else zoneType = "yard";
     }
 
-    const ordered = [...players].sort((a, b) => {
-      const ao =
-        typeof a.joinOrder === "number"
-          ? a.joinOrder
-          : Number.MAX_SAFE_INTEGER;
-      const bo =
-        typeof b.joinOrder === "number"
-          ? b.joinOrder
-          : Number.MAX_SAFE_INTEGER;
-      return ao - bo;
-    });
+    const isLead = currentLeadFoxId && p.id === currentLeadFoxId;
 
-    const activeOrdered = ordered.filter(isInYardLocal);
-    const baseList = activeOrdered.length ? activeOrdered : [];
+    const footerBase =
+      zoneType === "yard"
+        ? "IN YARD"
+        : zoneType === "dash"
+        ? "DASHED"
+        : "CAUGHT";
 
-    let leadIdx =
-      latestGame && typeof latestGame.leadIndex === "number"
-        ? latestGame.leadIndex
-        : 0;
-
-    if (leadIdx < 0) leadIdx = 0;
-    if (baseList.length) {
-      leadIdx = leadIdx % baseList.length;
-    }
-
-    currentLeadFoxId = null;
-    currentLeadFoxName = "";
-
-    if (baseList.length) {
-      const lf = baseList[leadIdx];
-      if (lf) {
-        currentLeadFoxId = lf.id;
-        currentLeadFoxName = lf.name || "";
-      }
-    }
-
-    if (latestGame) {
-      renderStatusCards(latestGame);
-    }
-
-    ordered.forEach((p) => {
-      let zoneType = "yard";
-
-      if (latestGame && latestGame.raidEndedByRooster) {
-        if (p.dashed) zoneType = "dash";
-        else zoneType = "caught";
-      } else {
-        if (p.dashed) zoneType = "dash";
-        else if (p.inYard === false) zoneType = "caught";
-        else zoneType = "yard";
-      }
-
-      const isLead = currentLeadFoxId && p.id === currentLeadFoxId;
-
-      const footerBase =
-        zoneType === "yard"
-          ? "IN YARD"
-          : zoneType === "dash"
-          ? "DASHED"
-          : "CAUGHT";
-
-      const card = renderPlayerSlotCard(p, {
-        size: "medium",
-        footer: footerBase,
-        isLead,
-      });
-
-      if (!card) return;
-
-      if (zoneType === "yard") {
-        yardZone.appendChild(card);
-      } else if (zoneType === "dash") {
-        dashZone.appendChild(card);
-      } else {
-        caughtZone.appendChild(card);
-      }
+    const card = renderPlayerSlotCard(p, {
+      size: "medium",
+      footer: footerBase,
+      isLead,
     });
 
-    if (
-      latestGame &&
-      (latestGame.status === "finished" || latestGame.phase === "END")
-    ) {
-      renderFinalScoreboard(latestGame);
+    if (!card) return;
+
+    if (zoneType === "yard") {
+      yardZone.appendChild(card);
+    } else if (zoneType === "dash") {
+      dashZone.appendChild(card);
+    } else {
+      caughtZone.appendChild(card);
     }
   });
+
+  // Als spel klaar is → eindscore tonen
+  if (
+    latestGame &&
+    (latestGame.status === "finished" || latestGame.phase === "END")
+  ) {
+    renderFinalScoreboard(latestGame);
+  }
+}
+
+// ==== PLAYERS SNAPSHOT → alleen data, daarna renderPlayerZones ====
+onSnapshot(playersColRef, (snapshot) => {
+  const players = [];
+  snapshot.forEach((pDoc) => {
+    players.push({ id: pDoc.id, ...pDoc.data() });
+  });
+  latestPlayers = players;
+
+  renderPlayerZones();
+});
+
 
   // ==== LOGPANEL ====
   const logCol   = collection(db, "games", gameId, "log");
