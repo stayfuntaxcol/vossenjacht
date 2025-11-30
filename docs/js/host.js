@@ -334,45 +334,27 @@ function renderStatusCards(game) {
     `;
   }
 
-  // Rooster
+  // Rooster – alleen statuskaart, geen tekst / dots
   if (roosterCard) {
-    const track         = game.eventTrack || [];
-    const roosterSeen   = game.roosterSeen || 0;
-    const totalRoosters =
-      track.filter((id) => id === "ROOSTER_CROW").length || 3;
+    // roosterSeen telt hoeveel ROOSTER_CROW events er al zijn geweest
+    const roosterSeenRaw = game.roosterSeen || 0;
 
-    // Kies de juiste achtergrond op basis van status
-    let roosterBg = "./assets/card_rooster_sleeping.png";
-    if (roosterSeen === 1) {
-      roosterBg = "./assets/card_rooster_crow1.png";
-    } else if (roosterSeen === 2) {
-      roosterBg = "./assets/card_rooster_crow2.png";
-    } else if (roosterSeen >= 3) {
-      roosterBg = "./assets/card_rooster_crow3.png";
-    }
+    // clamp tussen 0 en 3 (we hebben 4 kaarten)
+    const stateIndex = Math.max(0, Math.min(roosterSeenRaw, 3));
 
-    roosterCard.style.backgroundImage = `url("${roosterBg}")`;
-    roosterCard.style.backgroundSize = "cover";
-    roosterCard.style.backgroundPosition = "center";
-    roosterCard.style.backgroundRepeat = "no-repeat";
+    // maak de kaart leeg (geen HTML overlay)
+    roosterCard.innerHTML = "";
 
-    // kleine overlay-info blijft gewoon
-    const dots = [];
-    for (let i = 0; i < totalRoosters; i++) {
-      const filled = i < roosterSeen;
-      dots.push(
-        `<span class="rooster-dot ${
-          filled ? "rooster-dot-on" : ""
-        }"></span>`
-      );
-    }
+    // oude rooster-state klassen weghalen
+    roosterCard.classList.remove(
+      "rooster-state-0",
+      "rooster-state-1",
+      "rooster-state-2",
+      "rooster-state-3"
+    );
 
-    roosterCard.innerHTML = `
-      <div class="card-title">Rooster Status</div>
-      <div class="card-value">${roosterSeen} / ${totalRoosters}</div>
-      <div class="card-sub">Rooster Crow events gezien</div>
-      <div class="rooster-track">${dots.join("")}</div>
-    `;
+    // nieuwe state toevoegen → triggert de juiste background-image in CSS
+    roosterCard.classList.add(`rooster-state-${stateIndex}`);
   }
 
   const flags = game.flagsRound || {};
