@@ -1037,61 +1037,46 @@ body.fullscreen-board #board {
   opacity: 0;
 }
 /* ==========================================
-   ROOSTER CROW STATUS CARD
+   ROOSTER STATUS CARD (4 STATES, NO TEXT)
    ========================================== */
 
 #roosterCard {
   width: var(--card-w);
   height: var(--card-h);
-  background-image: url("./assets/card_event_rooster_crow.png"); /* bestaande event asset */
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
+  border-radius: 12px;
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.7);
   position: relative;
   overflow: hidden;
 }
 
-/* overlay van board-card uitzetten zodat art zichtbaar blijft */
+/* overlay van .board-card uitschakelen zodat art schoon blijft */
 #roosterCard.board-card::before {
   content: "";
   opacity: 0;
 }
 
-/* eigen overlay voor tekst (onderaan de kaart) */
-#roosterCard .card-title,
-#roosterCard .card-value,
-#roosterCard .card-sub,
-#roosterCard .rooster-track {
-  position: relative;
-  z-index: 1;
-}
-
-/* donkere gradient onderaan voor leesbare tekst */
+/* Geen extra ::after / tekst overlay meer */
 #roosterCard::after {
   content: "";
-  position: absolute;
-  inset: auto 0 0 0;
-  height: 45%;
-  background: linear-gradient(to top, rgba(15, 23, 42, 0.9), transparent);
-  z-index: 0;
+  display: none;
 }
 
-/* Rooster dots een beetje meer “status lampjes” maken */
-.rooster-track {
-  display: flex;
-  gap: 4px;
-  margin-top: 4px;
+/* 4 status-kaarten op basis van roosterSeen (0–3) */
+#roosterCard.rooster-state-0 {
+  background-image: url("./assets/card_rooster_status0.png");
 }
 
-.rooster-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(248, 250, 252, 0.7);
-  background: rgba(15, 23, 42, 0.5);
+#roosterCard.rooster-state-1 {
+  background-image: url("./assets/card_rooster_status1.png");
 }
 
-.rooster-dot-on {
-  background: #fbbf24;
-  box-shadow: 0 0 6px rgba(251, 191, 36, 0.9);
+#roosterCard.rooster-state-2 {
+  background-image: url("./assets/card_rooster_status2.png");
+}
+
+#roosterCard.rooster-state-3 {
+  background-image: url("./assets/card_rooster_status3.png");
 }
