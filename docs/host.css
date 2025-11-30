@@ -1151,3 +1151,44 @@ body.fullscreen-board #board {
 #scatterCard.scatter-on {
   background-image: url("./assets/card_scatter_on.png");
 }
+
+/* ==========================================
+   LOOT SACK STATUS CARD (EMPTY / HALF / FULL)
+   ========================================== */
+
+#sackCard {
+  width: var(--card-w);
+  height: var(--card-h);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border-radius: 12px;
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.7);
+  position: relative;
+  overflow: hidden;
+}
+
+/* overlay van .board-card uitschakelen zodat art schoon blijft */
+#sackCard.board-card::before {
+  content: "";
+  opacity: 0;
+}
+
+/* geen extra gradient overlay */
+#sackCard::after {
+  content: "";
+  display: none;
+}
+
+/* STATES op basis van aantal kaarten in de Sack */
+#sackCard.sack-empty {
+  background-image: url("./assets/card_sack_empty.png");
+}
+
+#sackCard.sack-half {
+  background-image: url("./assets/card_sack_half.png");
+}
+
+#sackCard.sack-full {
+  background-image: url("./assets/card_sack_full.png");
+}
