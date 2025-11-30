@@ -174,7 +174,7 @@
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(to top, rgba(15, 23, 42, 0.1), rgba(255, 255, 255, 0.8));
+  background: linear-gradient(to top, rgba(15, 23, 42, 0.1), rgba(20, 20, 20, 0.8));
   opacity: 0.8;
   mix-blend-mode: screen;
   pointer-events: none;
@@ -205,6 +205,24 @@
 /* verstopte kaarten (phase/leadfox) */
 .hidden {
   display: none;
+}
+/* Groot, goed leesbaar aantal kaarten op de deck-kaarten */
+#lootDeckCard .card-value,
+#actionDeckCard .card-value {
+  font-size: 2.6rem;
+  line-height: 1;
+  color: #ffffff;
+  text-shadow: 0 0 10px rgba(0, 0, 0, 0.9);
+  margin-top: 4px;
+}
+
+/* Titel iets kleiner zodat het aantal domineert */
+#lootDeckCard .card-title,
+#actionDeckCard .card-title {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(248, 250, 252, 0.85);
 }
 
 /* ==========================================
