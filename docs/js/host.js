@@ -425,7 +425,6 @@ function renderStatusCards(game) {
     lootDeckCard.innerHTML = `
       <div class="card-title">Loot Deck</div>
       <div class="card-value">${lootDeck.length}</div>
-      <div class="card-sub">Face-down buitkaarten</div>
     `;
   }
 
@@ -437,7 +436,6 @@ function renderStatusCards(game) {
     actionDeckCard.innerHTML = `
       <div class="card-title">Action Deck</div>
       <div class="card-value">${actionDeck.length}</div>
-      <div class="card-sub">Actiekaarten stapel</div>
     `;
   }
 }
