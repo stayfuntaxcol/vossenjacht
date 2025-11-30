@@ -359,40 +359,64 @@ function renderStatusCards(game) {
 
   const flags = game.flagsRound || {};
 
-  // Beacon
+  // Beacon – alleen OFF/ON status art
   if (beaconCard) {
     const on = !!flags.lockEvents;
-    beaconCard.innerHTML = `
-      <div class="card-title">Beacon</div>
-      <div class="card-value">${on ? "ON" : "OFF"}</div>
-      <div class="card-sub">${
-        on ? "Event Track gelocked" : "Event Track vrij"
-      }</div>
-    `;
-    beaconCard.classList.toggle("card-status-on", on);
+
+    // geen tekst meer
+    beaconCard.innerHTML = "";
+
+    // oude status-klassen eraf
+    beaconCard.classList.remove(
+      "beacon-on",
+      "beacon-off",
+      "card-status-on"
+    );
+
+    // juiste state erbij
+    beaconCard.classList.add(on ? "beacon-on" : "beacon-off");
   }
 
-  // Scatter!
+   // Scatter – alleen OFF/ON status art
   if (scatterCard) {
     const on = !!flags.scatter;
-    scatterCard.innerHTML = `
-      <div class="card-title">Scatter!</div>
-      <div class="card-value">${on ? "ON" : "OFF"}</div>
-      <div class="card-sub">${
-        on ? "Niemand mag Scouten" : "Scout toegestaan"
-      }</div>
-    `;
-    scatterCard.classList.toggle("card-status-on", on);
+
+    scatterCard.innerHTML = "";
+
+    scatterCard.classList.remove(
+      "scatter-on",
+      "scatter-off",
+      "card-status-on"
+    );
+
+    scatterCard.classList.add(on ? "scatter-on" : "scatter-off");
   }
 
-  // Sack
+   // Sack – statuskaart (empty / half / full)
   if (sackCard) {
-    const sack = Array.isArray(game.sack) ? game.sack : [];
-    sackCard.innerHTML = `
-      <div class="card-title">Farm Sack</div>
-      <div class="card-value">${sack.length}</div>
-      <div class="card-sub">Loot in de zak</div>
-    `;
+    const sack  = Array.isArray(game.sack) ? game.sack : [];
+    const count = sack.length;
+
+    // geen tekst meer op de kaart
+    sackCard.innerHTML = "";
+
+    // oude state-klassen verwijderen
+    sackCard.classList.remove("sack-empty", "sack-half", "sack-full");
+
+    // simpele drempels:
+    // 0  kaarten  => empty
+    // 1–4 kaarten => half
+    // 5+ kaarten  => full
+    let stateClass = "sack-empty";
+    if (count === 0) {
+      stateClass = "sack-empty";
+    } else if (count <= 4) {
+      stateClass = "sack-half";
+    } else {
+      stateClass = "sack-full";
+    }
+
+    sackCard.classList.add(stateClass);
   }
 
   // Loot Deck
