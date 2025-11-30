@@ -643,25 +643,18 @@ export async function resolveAfterReveal(gameId) {
     });
   }
 
-  // ====== Einde-voorwaarden ======
-
+   // ====== Einde-voorwaarden ======
   const alive = players.filter(isInYardForEvents);
 
-  if (alive.length === 1 && sack.length) {
-    const lone = alive[0];
-    lone.loot = lone.loot || [];
-    while (sack.length) {
-      lone.loot.push(sack.pop());
-    }
+  // NIEUW: raid eindigt pas als er GEEN vossen meer in de Yard zijn
+  if (alive.length === 0) {
     await addLog(gameId, {
       round,
       phase: "REVEAL",
-      kind: "EVENT",
-      playerId: lone.id,
-      message: `${
-        lone.name || "Een vos"
-      } grijpt de hele Sack – alleen vos over in de Yard.`,
+      kind: "SYSTEM",
+      message: "Er zijn geen vossen meer in de Yard. De raid eindigt.",
     });
+
     await scoreRaidAndFinish(
       gameId,
       gameRef,
@@ -669,10 +662,13 @@ export async function resolveAfterReveal(gameId) {
       players,
       lootDeck,
       sack,
-      "Eén vos over in de Yard"
+      "Geen vossen meer in de Yard"
     );
     return;
   }
+
+  // Let op: GEEN speciale regel meer voor '1 vos + Sack'
+  // (oude if (alive.length === 1 && sack.length) { ... } is verwijderd)
 
   const track = game.eventTrack || [];
   if ((game.eventIndex || 0) >= track.length) {
@@ -699,7 +695,9 @@ export async function resolveAfterReveal(gameId) {
     const ao =
       typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
     const bo =
-      typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
+      typeof b.joinOrder === "number"
+        ? b.joinOrder
+        : Number.MAX_SAFE_INTEGER;
     return ao - bo;
   });
 
@@ -717,6 +715,7 @@ export async function resolveAfterReveal(gameId) {
     });
   }
 
+  // decisions resetten voor volgende ronde
   for (const p of players) {
     p.decision = null;
   }
@@ -731,6 +730,7 @@ export async function resolveAfterReveal(gameId) {
     leadIndex: newLeadIndex,
   });
 }
+
 export async function saveLeaderboardForGame(gameId) {
   try {
     const gameRef = doc(db, "games", gameId);
