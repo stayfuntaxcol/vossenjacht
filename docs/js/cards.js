@@ -123,14 +123,14 @@ export const EVENT_DEFS = {
     category: "VARIABLE",
     tags: ["reset_sack", "shuffle_loot"],
   },
-  HIDDEN_NEST: {
+   HIDDEN_NEST: {
     id: "HIDDEN_NEST",
     title: "Hidden Nest",
-    text: "Als exact één vos DASH heeft gekozen, krijgt hij 4 extra buitkaarten. Bij meer Dashers profiteert niemand.",
+    text: "Als 1 vos DASH kiest krijgt hij 3 buitkaarten; bij 2 dashers krijgen beide 2 buitkaarten; bij 3 dashers krijgen alle drie 1 buitkaart. Bij 4 of meer dashers krijgt niemand extra buit.",
     imageFront: "./assets/card_event_hidden_nest.png",
     imageBack: CARD_BACK,
     category: "VARIABLE",
-    tags: ["dash_reward", "single_dasher_bonus"],
+    tags: ["dash_reward", "multi_dasher_bonus"],
   },
   GATE_TOLL: {
     id: "GATE_TOLL",
