@@ -9,11 +9,14 @@ import {
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
-
 import { getEventById } from "./cards.js";
 import { addLog } from "./log.js";
 
 const db = getFirestore();
+
+// =======================================
+// Helpers
+// =======================================
 
 function shuffleArray(array) {
   const arr = [...array];
@@ -59,6 +62,63 @@ async function writePlayers(gameId, players) {
   }
   await Promise.all(updates);
 }
+
+// =======================================
+// Hidden Nest helper
+// =======================================
+//
+// - 1 dasher  => 3 lootkaarten
+// - 2 dashers => ieder 2 lootkaarten
+// - 3 dashers => ieder 1 lootkaart
+// - 4+        => niemand krijgt iets
+//
+// Loot komt uit lootDeck. Als er te weinig kaarten zijn,
+// delen we eerlijk in rondes.
+
+function applyHiddenNestEvent(players, lootDeck) {
+  const dashers = players.filter(
+    (p) => isInYardForEvents(p) && p.decision === "DASH"
+  );
+  const n = dashers.length;
+
+  let targetEach = 0;
+  if (n === 1) targetEach = 3;
+  else if (n === 2) targetEach = 2;
+  else if (n === 3) targetEach = 1;
+  else targetEach = 0;
+
+  if (!targetEach || !dashers.length || !lootDeck.length) {
+    return null;
+  }
+
+  const grantedMap = new Map();
+  dashers.forEach((p) => grantedMap.set(p.id, 0));
+
+  for (let round = 0; round < targetEach && lootDeck.length > 0; round++) {
+    for (const fox of dashers) {
+      if (!lootDeck.length) break;
+      const current = grantedMap.get(fox.id) || 0;
+      if (current >= targetEach) continue;
+
+      if (!Array.isArray(fox.loot)) fox.loot = [];
+      fox.loot.push(lootDeck.pop());
+      grantedMap.set(fox.id, current + 1);
+    }
+  }
+
+  const results = [];
+  for (const fox of dashers) {
+    const c = grantedMap.get(fox.id) || 0;
+    if (c > 0) {
+      results.push({ player: fox, count: c });
+    }
+  }
+  return results.length ? results : null;
+}
+
+// =======================================
+// Scoring & einde raid
+// =======================================
 
 async function scoreRaidAndFinish(
   gameId,
@@ -120,6 +180,7 @@ async function scoreRaidAndFinish(
   await saveLeaderboardForGame(gameId);
 }
 
+// Rooster-limiet: 3e Rooster Crow
 async function endRaidByRooster(
   gameId,
   gameRef,
@@ -192,6 +253,10 @@ async function endRaidByRooster(
   );
 }
 
+// =======================================
+// resolveAfterReveal
+// =======================================
+
 export async function resolveAfterReveal(gameId) {
   const gameRef = doc(db, "games", gameId);
   const snap = await getDoc(gameRef);
@@ -227,7 +292,7 @@ export async function resolveAfterReveal(gameId) {
     ...(game.flagsRound || {}),
   };
 
-  // ====== Rooster: limiet-check ======
+  // ====== Rooster: limiet-check (3e crow) ======
   if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
     await endRaidByRooster(
       gameId,
@@ -297,7 +362,9 @@ export async function resolveAfterReveal(gameId) {
     }
   }
 
-  // ====== Event-specifieke logica ======
+  // =======================================
+  // Event-specifieke logica
+  // =======================================
 
   if (eventId.startsWith("DEN_")) {
     const color = eventId.substring(4); // RED / BLUE / GREEN / YELLOW
@@ -459,7 +526,6 @@ export async function resolveAfterReveal(gameId) {
       }
 
       if (p.decision === "DASH") {
-        // Dashers rennen net op tijd weg
         continue;
       }
 
@@ -476,34 +542,28 @@ export async function resolveAfterReveal(gameId) {
       });
     }
   } else if (eventId === "HIDDEN_NEST") {
-    const dashers = players.filter(
-      (p) => isInYardForEvents(p) && p.decision === "DASH"
-    );
+    // Nieuwe, vereenvoudigde Hidden Nest logica
+    const results = applyHiddenNestEvent(players, lootDeck);
 
-    if (dashers.length === 1) {
-      const fox = dashers[0];
-      fox.loot = fox.loot || [];
-      let gained = 0;
-      for (let i = 0; i < 4; i++) {
-        if (!lootDeck.length) break;
-        fox.loot.push(lootDeck.pop());
-        gained++;
-      }
+    if (results && results.length) {
+      const parts = results.map((r) => {
+        return `${r.player.name || "Vos"} (+${r.count})`;
+      });
       await addLog(gameId, {
         round,
         phase: "REVEAL",
         kind: "EVENT",
-        playerId: fox.id,
-        message: `${
-          fox.name || "Vos"
-        } ontdekt het Verborgen Nest en krijgt ${gained} extra buit.`,
+        cardId: eventId,
+        message: `Hidden Nest: ${parts.join(", ")}.`,
       });
     } else {
       await addLog(gameId, {
         round,
         phase: "REVEAL",
         kind: "EVENT",
-        message: "Te veel dashers bij Hidden Nest – niemand profiteert.",
+        cardId: eventId,
+        message:
+          "Hidden Nest had geen effect – het aantal dashers was niet 1, 2 of 3 (of er was geen loot meer).",
       });
     }
   } else if (eventId === "GATE_TOLL") {
@@ -602,11 +662,12 @@ export async function resolveAfterReveal(gameId) {
       });
     }
   } else if (eventId === "ROOSTER_CROW") {
-    // roosterSeen teller wordt in host.js bijgehouden;
-    // hier alleen flavour/log als nodig.
+    // roosterSeen teller wordt in host.js bijgehouden
   }
 
-  // ====== Na event: dashers markeren, flags resetten, extra loot ======
+  // =======================================
+  // Na event: dashers markeren + flags resetten
+  // =======================================
 
   for (const p of players) {
     if (isInYardForEvents(p) && p.decision === "DASH") {
@@ -643,17 +704,73 @@ export async function resolveAfterReveal(gameId) {
     });
   }
 
-   // ====== Einde-voorwaarden ======
+  // =======================================
+  // Einde-voorwaarden
+  // =======================================
+
   const alive = players.filter(isInYardForEvents);
 
-  // NIEUW: raid eindigt pas als er GEEN vossen meer in de Yard zijn
   if (alive.length === 0) {
-    await addLog(gameId, {
-      round,
-      phase: "REVEAL",
-      kind: "SYSTEM",
-      message: "Er zijn geen vossen meer in de Yard. De raid eindigt.",
-    });
+    // geen vossen meer in de Yard: dashers die niet gepakt zijn verdelen de Sack
+    const dashersSurviving = players.filter(
+      (p) => p.dashed && p.inYard !== false
+    );
+
+    if (dashersSurviving.length && sack.length) {
+      // randomize Sack
+      sack = shuffleArray(sack);
+
+      const orderedAll = [...players].sort((a, b) => {
+        const ao =
+          typeof a.joinOrder === "number"
+            ? a.joinOrder
+            : Number.MAX_SAFE_INTEGER;
+        const bo =
+          typeof b.joinOrder === "number"
+            ? b.joinOrder
+            : Number.MAX_SAFE_INTEGER;
+        return ao - bo;
+      });
+
+      const survivorIds = new Set(dashersSurviving.map((p) => p.id));
+      const survivorsOrdered = orderedAll.filter((p) =>
+        survivorIds.has(p.id)
+      );
+
+      let startIdx = 0;
+      if (typeof game.leadIndex === "number") {
+        const leadCandidate = orderedAll[game.leadIndex] || null;
+        if (leadCandidate && survivorIds.has(leadCandidate.id)) {
+          const idxInSurvivors = survivorsOrdered.findIndex(
+            (p) => p.id === leadCandidate.id
+          );
+          if (idxInSurvivors >= 0) startIdx = idxInSurvivors;
+        }
+      }
+
+      let idx = startIdx;
+      while (sack.length) {
+        const fox = survivorsOrdered[idx];
+        fox.loot = fox.loot || [];
+        fox.loot.push(sack.pop());
+        idx = (idx + 1) % survivorsOrdered.length;
+      }
+
+      await addLog(gameId, {
+        round,
+        phase: "REVEAL",
+        kind: "EVENT",
+        message:
+          "De laatste vos is uit de Yard – de overgebleven dashers verdelen de Sack.",
+      });
+    } else {
+      await addLog(gameId, {
+        round,
+        phase: "REVEAL",
+        kind: "SYSTEM",
+        message: "Er zijn geen vossen meer in de Yard. De raid eindigt.",
+      });
+    }
 
     await scoreRaidAndFinish(
       gameId,
@@ -666,9 +783,6 @@ export async function resolveAfterReveal(gameId) {
     );
     return;
   }
-
-  // Let op: GEEN speciale regel meer voor '1 vos + Sack'
-  // (oude if (alive.length === 1 && sack.length) { ... } is verwijderd)
 
   const track = game.eventTrack || [];
   if ((game.eventIndex || 0) >= track.length) {
@@ -731,6 +845,10 @@ export async function resolveAfterReveal(gameId) {
   });
 }
 
+// =======================================
+// Leaderboard opslag
+// =======================================
+
 export async function saveLeaderboardForGame(gameId) {
   try {
     const gameRef = doc(db, "games", gameId);
@@ -767,7 +885,6 @@ export async function saveLeaderboardForGame(gameId) {
         typeof p.score === "number" ? p.score : baseScore;
       const bonus = Math.max(0, storedScore - baseScore);
 
-      // Als iedereen 0 heeft, kun je dit weglaten; maar laten we 0 ook toestaan.
       leaderboardEntries.push({
         name: p.name || "Fox",
         score: storedScore,
@@ -781,12 +898,10 @@ export async function saveLeaderboardForGame(gameId) {
       });
     });
 
-    // schrijf elke entry naar de globale "leaderboard" collectie
     for (const entry of leaderboardEntries) {
       await addDoc(collection(db, "leaderboard"), entry);
     }
 
-    // flag op het game-document zodat we niet nog een keer schrijven
     await updateDoc(gameRef, { leaderboardWritten: true });
   } catch (err) {
     console.error("Fout bij saveLeaderboardForGame:", err);
