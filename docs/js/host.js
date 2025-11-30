@@ -341,16 +341,34 @@ function renderStatusCards(game) {
     const totalRoosters =
       track.filter((id) => id === "ROOSTER_CROW").length || 3;
 
+    // Kies de juiste achtergrond op basis van status
+    let roosterBg = "./assets/card_rooster_sleeping.png";
+    if (roosterSeen === 1) {
+      roosterBg = "./assets/card_rooster_crow1.png";
+    } else if (roosterSeen === 2) {
+      roosterBg = "./assets/card_rooster_crow2.png";
+    } else if (roosterSeen >= 3) {
+      roosterBg = "./assets/card_rooster_crow3.png";
+    }
+
+    roosterCard.style.backgroundImage = `url("${roosterBg}")`;
+    roosterCard.style.backgroundSize = "cover";
+    roosterCard.style.backgroundPosition = "center";
+    roosterCard.style.backgroundRepeat = "no-repeat";
+
+    // kleine overlay-info blijft gewoon
     const dots = [];
     for (let i = 0; i < totalRoosters; i++) {
       const filled = i < roosterSeen;
       dots.push(
-        `<span class="rooster-dot ${filled ? "rooster-dot-on" : ""}"></span>`
+        `<span class="rooster-dot ${
+          filled ? "rooster-dot-on" : ""
+        }"></span>`
       );
     }
 
     roosterCard.innerHTML = `
-      <div class="card-title">Rooster</div>
+      <div class="card-title">Rooster Status</div>
       <div class="card-value">${roosterSeen} / ${totalRoosters}</div>
       <div class="card-sub">Rooster Crow events gezien</div>
       <div class="rooster-track">${dots.join("")}</div>
