@@ -1370,26 +1370,53 @@ initAuth(async (authUser) => {
         await resolveAfterReveal(gameId);
         return;
       }
+// REVEAL -> MOVE of EINDE – afhankelijk van overgebleven foxes in de Yard
+if (current === "REVEAL") {
+  const latestSnap = await getDoc(gameRef);
+  if (!latestSnap.exists()) return;
+  const latest = latestSnap.data();
 
-      // REVEAL -> MOVE (volgende ronde)
-      if (current === "REVEAL") {
-        const latest = (await getDoc(gameRef)).data();
-        if (latest && (latest.status === "finished" || latest.phase === "END")) {
-          return;
-        }
+  // Als engine.js het spel al heeft afgesloten (bv. bij 3x Rooster Crow)
+  if (latest && (latest.status === "finished" || latest.phase === "END")) {
+    return;
+  }
 
-        await updateDoc(gameRef, { phase: "MOVE" });
+  // Check: zijn er na REVEAL nog foxes in de Yard?
+  const activeAfterReveal = latestPlayers.filter(isInYardLocal);
+  // isInYardLocal(p) = p.inYard !== false && !p.dashed
 
-        await addLog(gameId, {
-          round: roundNumber,
-          phase: "MOVE",
-          kind: "SYSTEM",
-          message:
-            "REVEAL afgerond. Terug naar MOVE-fase voor de volgende ronde (of einde raid als er geen actieve vossen meer zijn).",
-        });
+  if (activeAfterReveal.length === 0) {
+    // Niemand meer in de Yard → raid is afgelopen
+    await updateDoc(gameRef, {
+      status: "finished",
+      phase: "END",
+    });
 
-        return;
-      }
+    await addLog(gameId, {
+      round: roundNumber,
+      phase: "END",
+      kind: "SYSTEM",
+      message:
+        "Geen vossen meer in de Yard na REVEAL – de raid is afgelopen.",
+    });
+
+    return;
+  }
+
+  // Er zijn nog foxes in de Yard → normaal door naar volgende ronde (MOVE)
+  await updateDoc(gameRef, { phase: "MOVE" });
+
+  await addLog(gameId, {
+    round: roundNumber,
+    phase: "MOVE",
+    kind: "SYSTEM",
+    message:
+      "REVEAL afgerond. Terug naar MOVE-fase voor de volgende ronde.",
+  });
+
+  return;
+}
+
     });
   }
 
