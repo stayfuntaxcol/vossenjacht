@@ -1080,3 +1080,74 @@ body.fullscreen-board #board {
 #roosterCard.rooster-state-3 {
   background-image: url("./assets/card_rooster_status3.png");
 }
+
+/* ==========================================
+   BEACON STATUS CARD (ON/OFF)
+   ========================================== */
+
+#beaconCard {
+  width: var(--card-w);
+  height: var(--card-h);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border-radius: 12px;
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.7);
+  position: relative;
+  overflow: hidden;
+}
+
+/* overlay van .board-card uitzetten */
+#beaconCard.board-card::before {
+  content: "";
+  opacity: 0;
+}
+
+/* geen extra ::after */
+#beaconCard::after {
+  content: "";
+  display: none;
+}
+
+/* OFF / ON states */
+#beaconCard.beacon-off {
+  background-image: url("./assets/card_beacon_off.png");
+}
+
+#beaconCard.beacon-on {
+  background-image: url("./assets/card_beacon_on.png");
+}
+
+/* ==========================================
+   SCATTER STATUS CARD (ON/OFF)
+   ========================================== */
+
+#scatterCard {
+  width: var(--card-w);
+  height: var(--card-h);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  border-radius: 12px;
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.7);
+  position: relative;
+  overflow: hidden;
+}
+
+#scatterCard.board-card::before {
+  content: "";
+  opacity: 0;
+}
+
+#scatterCard::after {
+  content: "";
+  display: none;
+}
+
+#scatterCard.scatter-off {
+  background-image: url("./assets/card_scatter_off.png");
+}
+
+#scatterCard.scatter-on {
+  background-image: url("./assets/card_scatter_on.png");
+}
