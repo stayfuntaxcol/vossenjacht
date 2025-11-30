@@ -1,5 +1,5 @@
 import { initAuth } from "./firebase.js";
-import { getEventById } from "./cards.js";
+import { getEventById, CARD_BACK } from "./cards.js";
 import { addLog } from "./log.js";
 import { resolveAfterReveal } from "./engine.js";
 import { renderPlayerSlotCard } from "./cardRenderer.js";
@@ -288,31 +288,25 @@ function renderEventTrack(game) {
     const slot = document.createElement("div");
     slot.classList.add("event-slot", `event-state-${state}`);
 
-    // Oud: ev.type, nieuw: ev.category
-    if (ev && ev.type) {
-      slot.classList.add("event-type-" + ev.type.toLowerCase());
-    }
-    if (ev && ev.category) {
-      slot.classList.add("event-cat-" + ev.category.toLowerCase());
+    // Kies de juiste afbeelding:
+    // - FUTURE  => achterkant (CARD_BACK)
+    // - REVEALED => ev.imageFront of fallback naar CARD_BACK
+    let imgUrl = CARD_BACK;
+    if (isRevealed && ev && ev.imageFront) {
+      imgUrl = ev.imageFront;
     }
 
+    // Volledige achtergrond vervangen door de echte kaart
+    slot.style.background = `url(${imgUrl}) center / cover no-repeat`;
+
+    // Klein index-labeltje bovenop (1 t/m 12)
     const idx = document.createElement("div");
     idx.className = "event-slot-index";
     idx.textContent = i + 1;
     slot.appendChild(idx);
 
-    const title = document.createElement("div");
-    title.className = "event-slot-title";
+    // GEEN titel/tekst meer – artwork doet het werk
 
-    if (!isRevealed) {
-      title.textContent = "EVENT";
-    } else if (ev) {
-      title.textContent = ev.title;
-    } else {
-      title.textContent = eventId;
-    }
-
-    slot.appendChild(title);
     grid.appendChild(slot);
   });
 
