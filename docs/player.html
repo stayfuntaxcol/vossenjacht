@@ -4,11 +4,14 @@
   <meta charset="UTF-8" />
   <title>Vossenjacht – Spelerscherm</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Globale stijl (incl. cards, kleuren, etc.) -->
   <link rel="stylesheet" href="./css/style.css" />
-  
-<script type="module" src="./js/cardRenderer.js"></script>
-  
-  <!-- Extra styles voor tabs, profiel, log en popup -->
+
+  <!-- Card renderer (voor later: echte kaarten voor hand/loot) -->
+  <script type="module" src="./js/cardRenderer.js"></script>
+
+  <!-- Extra styles voor tabs, profiel, log, popup en nieuwe Fox-dashboard layout -->
   <style>
     /* Algemeen */
     body.player-screen {
@@ -19,7 +22,14 @@
       display: none !important;
     }
 
-    /* Tabs basis */
+    main {
+      padding-bottom: 0.75rem;
+    }
+
+    /* ==============================
+       TABS
+       ============================== */
+
     .vj-tab-panel {
       display: none;
     }
@@ -80,11 +90,279 @@
       transform: translateY(-1px);
     }
 
-    main {
-      padding-bottom: 0.75rem;
+    /* ==============================
+       FOX DASHBOARD – SPELVERLOOP TAB
+       ============================== */
+
+    .player-dashboard {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
     }
 
-    /* Profiel tab */
+    .player-top {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    @media (min-width: 720px) {
+      .player-top {
+        flex-direction: row;
+        align-items: stretch;
+      }
+    }
+
+    .player-top-left,
+    .player-top-right {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .player-header-card {
+      border-radius: 0.9rem;
+      padding: 0.75rem 0.9rem;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(148, 163, 184, 0.6);
+    }
+
+    .player-header-title {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #9ca3af;
+      margin-bottom: 0.25rem;
+    }
+
+    #playerInfo > div:first-child {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 0.1rem;
+    }
+
+    #playerInfo > div:nth-child(2) {
+      font-size: 0.8rem;
+      opacity: 0.85;
+      margin-bottom: 0.1rem;
+    }
+
+    #playerInfo > div:nth-child(3) {
+      font-size: 0.85rem;
+      margin-top: 0.15rem;
+    }
+
+    .player-status-bar {
+      border-radius: 0.9rem;
+      padding: 0.75rem 0.9rem;
+      background: radial-gradient(circle at top, #0f172a, #020617);
+      border: 1px solid rgba(148, 163, 184, 0.6);
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      font-size: 0.85rem;
+    }
+
+    .player-status-topline {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #e5e7eb;
+    }
+
+    .player-status-phase {
+      color: #facc15;
+    }
+
+    .player-status-round {
+      color: #93c5fd;
+    }
+
+    .player-event-box {
+      margin-top: 0.35rem;
+      border-radius: 0.7rem;
+      padding: 0.55rem 0.6rem;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(55, 65, 81, 0.9);
+      font-size: 0.85rem;
+    }
+
+    .player-event-label {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #9ca3af;
+      margin-bottom: 0.15rem;
+    }
+
+    /* Midden: hand + knoppen + decision */
+
+    .player-middle {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    @media (min-width: 720px) {
+      .player-middle {
+        flex-direction: row;
+        align-items: flex-start;
+      }
+    }
+
+    .player-hand-area {
+      flex: 2;
+      border-radius: 0.9rem;
+      padding: 0.75rem 0.9rem;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(31, 41, 55, 0.95);
+    }
+
+    .player-hand-area h2 {
+      margin-top: 0;
+      font-size: 0.95rem;
+    }
+
+    .player-hand {
+      margin-top: 0.35rem;
+    }
+
+    .player-ops-info {
+      font-size: 0.8rem;
+      opacity: 0.85;
+      margin-top: 0.35rem;
+    }
+
+    .player-ops-buttons {
+      margin-top: 0.4rem;
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .player-ops-buttons button {
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.7);
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 0.8rem;
+      padding: 0.25rem 0.7rem;
+      cursor: pointer;
+    }
+
+    .player-move-decision {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .player-move-block,
+    .player-decision-block {
+      border-radius: 0.9rem;
+      padding: 0.7rem 0.8rem;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(31, 41, 55, 0.9);
+      font-size: 0.85rem;
+    }
+
+    .player-move-block h3,
+    .player-decision-block h3 {
+      margin: 0 0 0.25rem 0;
+      font-size: 0.9rem;
+    }
+
+    .player-move-buttons,
+    .player-decision-buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+      margin-top: 0.35rem;
+    }
+
+    .player-move-buttons button,
+    .player-decision-buttons button {
+      flex: 1 1 48%;
+      border-radius: 999px;
+      border: 1px solid rgba(51, 65, 85, 0.9);
+      background: #020617;
+      color: #e5e7eb;
+      font-size: 0.78rem;
+      padding: 0.25rem 0.5rem;
+      cursor: pointer;
+    }
+
+    #moveState,
+    #decisionState,
+    #actionFeedback {
+      font-size: 0.8rem;
+      opacity: 0.85;
+      margin-top: 0.4rem;
+    }
+
+    /* Onder: loot + mini-log (laatste actie) */
+
+    .player-bottom {
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      margin-top: 0.25rem;
+    }
+
+    @media (min-width: 720px) {
+      .player-bottom {
+        flex-direction: row;
+        align-items: stretch;
+      }
+    }
+
+    .player-loot-block {
+      flex: 2;
+      border-radius: 0.9rem;
+      padding: 0.7rem 0.8rem;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(31, 41, 55, 0.9);
+      font-size: 0.85rem;
+    }
+
+    .player-loot-block h2 {
+      margin-top: 0;
+      font-size: 0.9rem;
+    }
+
+    .player-mini-log {
+      flex: 1;
+      border-radius: 0.9rem;
+      padding: 0.7rem 0.8rem;
+      background: radial-gradient(circle at top, #1e293b, #020617);
+      border: 1px solid rgba(55, 65, 81, 0.9);
+      font-size: 0.8rem;
+      color: #e5e7eb;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 0.4rem;
+    }
+
+    .player-mini-log-title {
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #9ca3af;
+    }
+
+    .player-mini-log-body {
+      font-size: 0.8rem;
+      opacity: 0.9;
+    }
+
+    /* ==============================
+       PROFIEL TAB
+       ============================== */
+
     .vj-profile-layout {
       display: flex;
       flex-direction: column;
@@ -195,7 +473,10 @@
       opacity: 0.85;
     }
 
-    /* Community Log */
+    /* ==============================
+       COMMUNITY LOG TAB
+       ============================== */
+
     .vj-log-filters {
       display: flex;
       gap: 0.3rem;
@@ -257,7 +538,11 @@
       opacity: 0.75;
     }
 
-    /* Popup / modal voor Action Cards */
+    /* ==============================
+       POPUP / MODAL VOOR ACTION CARDS
+       (HTML staat al, JS haken we later in)
+       ============================== */
+
     .vj-modal-overlay {
       position: fixed;
       inset: 0;
@@ -384,64 +669,92 @@
       </section>
     </section>
 
-    <!-- TAB 3: SPELVERLOOP – HUIDIGE GAME UI -->
+    <!-- TAB 3: FOX DASHBOARD – SPELVERLOOP -->
     <section id="tab-game" class="vj-tab-panel">
-      <section class="panel">
-        <h2>Jij</h2>
-        <div id="playerInfo"></div>
-      </section>
+      <section class="panel player-dashboard">
+        <!-- TOP: JIJ + STATUS/EVENT -->
+        <div class="player-top">
+          <div class="player-top-left">
+            <div class="player-header-card">
+              <div class="player-header-title">Jouw vos</div>
+              <div id="playerInfo"></div>
+            </div>
+          </div>
 
-      <section class="panel">
-        <h2>Huidige event</h2>
-        <div id="eventInfo"></div>
-      </section>
-
-      <section class="panel">
-        <h2>MOVE – één actie kiezen</h2>
-        <p id="moveHint" style="font-size:0.85rem; opacity:0.8;">
-          In de MOVE-fase mag je precies één actie doen zolang je in de Yard staat.
-        </p>
-        <div class="row">
-          <button id="btnSnatch">SNATCH – pak 1 loot van de Deck</button>
-          <button id="btnForage">FORAGE – trek 2 Action Cards</button>
+          <div class="player-top-right">
+            <div class="player-status-bar">
+              <div class="player-status-topline">
+                <span class="player-status-phase">
+                  Fase: <span id="playerPhaseLabel">volgens bovenbalk</span>
+                </span>
+                <span class="player-status-round">
+                  Ronde: <span id="playerRoundLabel">volgens bovenbalk</span>
+                </span>
+              </div>
+              <div class="player-event-box">
+                <div class="player-event-label">Event</div>
+                <div id="eventInfo"></div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="row" style="margin-top:0.4rem;">
-          <button id="btnScout">SCOUT – kijk vooruit op de Event Track</button>
-          <button id="btnShift">SHIFT – wissel 2 Events</button>
-        </div>
-        <p id="moveState" style="font-size:0.8rem; opacity:0.8; margin-top:0.5rem;"></p>
-      </section>
 
-      <section class="panel">
-        <h2>ACTIONS-fase</h2>
-        <p style="font-size:0.85rem; opacity:0.8;">
-          In de ACTIONS-fase spelen vossen om de beurt Action Cards of kiezen PASS,
-          te beginnen bij de Lead Fox. Tik op <strong>Play Next</strong> bij een kaart
-          om een pop-up te openen met <em>Spelen / Wijzigen / Overslaan</em>.
-        </p>
-        <div id="handPanel"></div>
-        <div class="row" style="margin-top:0.5rem;">
-          <button id="btnPass">PASS (geen kaart deze beurt)</button>
-        </div>
-        <p id="opsTurnInfo" style="font-size:0.8rem; opacity:0.8; margin-top:0.25rem;"></p>
-      </section>
+        <!-- MIDDLE: HAND + MOVE/DECISION -->
+        <div class="player-middle">
+          <!-- Hand + OPS -->
+          <div class="player-hand-area">
+            <h2>Action Cards</h2>
+            <div id="handPanel" class="player-hand"></div>
+            <p id="opsTurnInfo" class="player-ops-info"></p>
+            <div class="player-ops-buttons">
+              <button id="btnPass">PASS (geen kaart deze beurt)</button>
+            </div>
+          </div>
 
-      <section class="panel">
-        <h2>DECISION – Lurk / Burrow / Dash</h2>
-        <p id="decisionHint" style="font-size:0.85rem; opacity:0.8;">
-          In de DECISION-fase kies je hoe je deze event-ronde ingaat.
-        </p>
-        <div class="row">
-          <button id="btnLurk">LURK (blijven staan)</button>
-          <button id="btnBurrow">BURROW (ondergronds)</button>
-          <button id="btnDash">DASH (rennen met buit)</button>
-        </div>
-        <p id="decisionState" style="font-size:0.8rem; opacity:0.8; margin-top:0.5rem;"></p>
-      </section>
+          <!-- MOVE & DECISION -->
+          <div class="player-move-decision">
+            <div class="player-move-block">
+              <h3>MOVE – kies één actie</h3>
+              <p id="moveHint" style="font-size:0.8rem; opacity:0.8;">
+                In de MOVE-fase mag je precies één actie doen zolang je in de Yard staat.
+              </p>
+              <div class="player-move-buttons">
+                <button id="btnSnatch">SNATCH – pak 1 loot van de Deck</button>
+                <button id="btnForage">FORAGE – trek 2 Action Cards</button>
+                <button id="btnScout">SCOUT – kijk vooruit op de Event Track</button>
+                <button id="btnShift">SHIFT – wissel 2 Events</button>
+              </div>
+              <p id="moveState"></p>
+            </div>
 
-      <section class="panel">
-        <h2>Jouw loot</h2>
-        <div id="lootPanel"></div>
+            <div class="player-decision-block">
+              <h3>DECISION – Lurk / Burrow / Dash</h3>
+              <p id="decisionHint" style="font-size:0.8rem; opacity:0.8;">
+                In de DECISION-fase kies je hoe je deze event-ronde ingaat.
+              </p>
+              <div class="player-decision-buttons">
+                <button id="btnLurk">LURK (blijven staan)</button>
+                <button id="btnBurrow">BURROW (ondergronds)</button>
+                <button id="btnDash">DASH (rennen met buit)</button>
+              </div>
+              <p id="decisionState"></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- BOTTOM: LOOT + LAATSTE ACTIE -->
+        <div class="player-bottom">
+          <div class="player-loot-block">
+            <h2>Jouw loot</h2>
+            <div id="lootPanel"></div>
+          </div>
+          <div class="player-mini-log">
+            <div class="player-mini-log-title">Laatste actie</div>
+            <div id="actionFeedback" class="player-mini-log-body">
+              Acties verschijnen hier zodra je MOVE / ACTION / DECISION doet.
+            </div>
+          </div>
+        </div>
       </section>
     </section>
 
@@ -460,7 +773,7 @@
     </section>
   </main>
 
-  <!-- Popup voor Action Cards -->
+  <!-- Popup voor Action Cards (nog niet gekoppeld in JS) -->
   <div id="actionModalOverlay" class="vj-modal-overlay hidden">
     <div class="vj-modal">
       <h2 id="actionModalTitle">Action Card</h2>
