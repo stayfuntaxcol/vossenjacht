@@ -21,14 +21,18 @@ const params = new URLSearchParams(window.location.search);
 const gameId = params.get("game");
 const playerId = params.get("player");
 
-const gameStatusDiv = document.getElementById("gameStatus");
-const playerInfoDiv = document.getElementById("playerInfo");
-const eventInfoDiv  = document.getElementById("eventInfo");
-const lootPanel     = document.getElementById("lootPanel");
-const handPanel     = document.getElementById("handPanel");
-const moveState     = document.getElementById("moveState");
-const decisionState = document.getElementById("decisionState");
-const opsTurnInfo   = document.getElementById("opsTurnInfo");
+const gameStatusDiv    = document.getElementById("gameStatus");
+const playerInfoDiv    = document.getElementById("playerInfo");
+const eventInfoDiv     = document.getElementById("eventInfo");
+const lootPanel        = document.getElementById("lootPanel");
+const handPanel        = document.getElementById("handPanel");
+const moveState        = document.getElementById("moveState");
+const decisionState    = document.getElementById("decisionState");
+const opsTurnInfo      = document.getElementById("opsTurnInfo");
+
+// Nieuwe labels in de statusbalk van het spelersscherm
+const playerPhaseLabel = document.getElementById("playerPhaseLabel");
+const playerRoundLabel = document.getElementById("playerRoundLabel");
 
 const btnSnatch  = document.getElementById("btnSnatch");
 const btnForage  = document.getElementById("btnForage");
@@ -45,11 +49,20 @@ let playerRef = null;
 let currentGame = null;
 let currentPlayer = null;
 
-// Feedback onder OPS-panel
+// Feedback onderin het dashboard ("Laatste actie")
 let actionFeedbackEl = null;
 
 function ensureActionFeedbackEl() {
   if (actionFeedbackEl) return;
+
+  // In de nieuwe layout bestaat #actionFeedback al in de mini-log
+  const existing = document.getElementById("actionFeedback");
+  if (existing) {
+    actionFeedbackEl = existing;
+    return;
+  }
+
+  // Fallback: als hij om wat voor reden dan ook ontbreekt, maken we een simpele <p> onder de hand
   const parent = handPanel ? handPanel.parentElement : null;
   if (!parent) return;
 
@@ -69,6 +82,8 @@ function setActionFeedback(msg) {
   if (!actionFeedbackEl) return;
 
   if (!msg) {
+    // Als je liever de standaardtekst uit de HTML behoudt, kun je hier vroegtijdig returnen.
+    // Voor nu wissen we de tekst gewoon.
     actionFeedbackEl.textContent = "";
     return;
   }
@@ -288,9 +303,20 @@ function renderGame() {
   if (!currentGame || !gameStatusDiv || !eventInfoDiv) return;
 
   const g = currentGame;
+  const roundLabel = g.round ?? 0;
+  const phaseLabel = g.phase || "?";
 
+  // Bovenbalk (header)
   gameStatusDiv.textContent =
-    `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
+    `Code: ${g.code} – Ronde: ${roundLabel} – Fase: ${phaseLabel}`;
+
+  // Statusbalk in het dashboard
+  if (playerRoundLabel) {
+    playerRoundLabel.textContent = String(roundLabel);
+  }
+  if (playerPhaseLabel) {
+    playerPhaseLabel.textContent = phaseLabel;
+  }
 
   // Spel afgelopen? → alles uit, scorebord tonen
   if (g.status === "finished" || g.phase === "END") {
@@ -340,19 +366,20 @@ function renderGame() {
       "Nog geen Event Card onthuld (pas zichtbaar bij REVEAL of via jouw eigen SCOUT).";
     eventInfoDiv.appendChild(p);
   } else {
-    const title = document.createElement("div");
-    title.style.fontWeight = "600";
-    title.textContent = ev.title;
-    const text = document.createElement("div");
-    text.style.fontSize = "0.9rem";
-    text.style.opacity = "0.85";
-    text.textContent = ev.text || "";
-
     const sub = document.createElement("div");
     sub.style.fontSize = "0.8rem";
     sub.style.opacity = "0.7";
     sub.style.marginBottom = "0.25rem";
     sub.textContent = label;
+
+    const title = document.createElement("div");
+    title.style.fontWeight = "600";
+    title.textContent = ev.title;
+
+    const text = document.createElement("div");
+    text.style.fontSize = "0.9rem";
+    text.style.opacity = "0.85";
+    text.textContent = ev.text || "";
 
     eventInfoDiv.appendChild(sub);
     eventInfoDiv.appendChild(title);
@@ -370,17 +397,20 @@ function renderPlayer() {
   const p = currentPlayer;
   playerInfoDiv.innerHTML = "";
 
+  // 1e regel: naam
   const nameLine = document.createElement("div");
   nameLine.textContent = p.name || "(naam onbekend)";
   nameLine.style.fontWeight = "600";
   playerInfoDiv.appendChild(nameLine);
 
+  // 2e regel: Den kleur (tekstueel) – CSS gebruikt nth-child(2)
   const colorLine = document.createElement("div");
   colorLine.style.fontSize = "0.9rem";
   colorLine.style.opacity = "0.85";
   colorLine.textContent = `Den kleur: ${p.color || "nog niet toegewezen"}`;
   playerInfoDiv.appendChild(colorLine);
 
+  // 3e regel: status (YARD / DASH / CAUGHT) – CSS gebruikt nth-child(3)
   const stateLine = document.createElement("div");
   stateLine.style.fontSize = "0.9rem";
   stateLine.style.marginTop = "0.25rem";
@@ -596,6 +626,7 @@ function renderHand() {
     return;
   }
 
+  // Simpele tekstweergave per kaart met een Speel-knop
   const list = document.createElement("div");
   list.style.display = "flex";
   list.style.flexDirection = "column";
