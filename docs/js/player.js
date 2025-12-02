@@ -78,6 +78,10 @@ const lootModalOverlay = document.getElementById("lootModalOverlay");
 const lootModalClose   = document.getElementById("lootModalClose");
 const lootCardsGrid    = document.getElementById("lootCardsGrid");
 
+const btnHand = document.getElementById("btnHand");
+const btnLoot = document.getElementById("btnLoot");
+
+
 // ===== FIRESTORE REFS / STATE =====
 
 let gameRef = null;
@@ -723,6 +727,62 @@ function renderHand() {
     btnPass.disabled = !(canPlayOverall && myTurnOverall);
   }
 }
+
+// ==========================================
+// HAND MODAL – ACTION CARDS ALS KLEINE VJ-CARDS
+// ==========================================
+
+function openHandModal() {
+  if (!handModalOverlay) return;
+  renderHandModal();
+  handModalOverlay.classList.remove("hidden");
+}
+
+function closeHandModal() {
+  if (!handModalOverlay) return;
+  handModalOverlay.classList.add("hidden");
+}
+
+function renderHandModal() {
+  if (!handCardsGrid) return;
+
+  handCardsGrid.innerHTML = "";
+
+  if (!currentPlayer || !currentGame) {
+    handCardsGrid.textContent = "Speler of game niet geladen.";
+    return;
+  }
+
+  const hand = Array.isArray(currentPlayer.hand) ? currentPlayer.hand : [];
+
+  if (!hand.length) {
+    handCardsGrid.textContent = "Je hebt geen Action Cards in je hand.";
+    return;
+  }
+
+  hand.forEach((card, index) => {
+    const wrapper = document.createElement("button");
+    wrapper.type = "button";
+    wrapper.className = "vj-card hand-card";
+
+    // Klik op de hele kaart = card spelen
+    wrapper.addEventListener("click", () => {
+      // Speel de kaart (bestaande logica)
+      playActionCard(index);
+      // Modal sluiten na spelen
+      closeHandModal();
+    });
+
+    // Label onderaan met naam
+    const label = document.createElement("div");
+    label.className = "hand-card-label";
+    label.textContent = card.name || "Action Card";
+
+    wrapper.appendChild(label);
+    handCardsGrid.appendChild(wrapper);
+  });
+}
+
 
 function openHandModal() {
   if (!handModalOverlay || !handCardsGrid) return;
