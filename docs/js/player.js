@@ -791,7 +791,7 @@ function showHandCardDetail(index) {
 
   // Grote kaart
   const cardDiv = document.createElement("div");
-  cardDiv.className = "vj-card hand-card hand-card-large";
+  cardDiv.className = "vj-card hand-card";
 
   // Tekstblok
   const info = document.createElement("div");
@@ -826,8 +826,8 @@ function showHandCardDetail(index) {
 
   playBtn.disabled = !canPlay;
 
-  playBtn.addEventListener("click", () => {
-    handlePlayHandCard(index);
+  playBtn.addEventListener("click", async () => {
+    await handlePlayHandCard(index);
   });
 
   const backBtn = document.createElement("button");
@@ -877,7 +877,7 @@ function closeHandModal() {
 }
 
 // ==========================================
-// LOOT MODAL – BUITKAARTEN ALS KLEINE VJ-CARDS
+// LOOT MODAL – BUITKAARTEN (ECHTE + AGGEGEERD)
 // ==========================================
 
 function renderLootModal() {
@@ -896,10 +896,10 @@ function renderLootModal() {
 
   const p = currentPlayer;
 
-  // 1) echte loot-kaarten (als array op player)
+  // 1) Probeer echte loot-kaarten
   let loot = Array.isArray(p.loot) ? [...p.loot] : [];
 
-  // 2) als er geen losse loot-kaarten zijn, maar wel eggs/hens/prize → pseudo-kaarten
+  // 2) Geen losse kaarten? Gebruik eggs/hens/prize als pseudo-kaarten
   if (!loot.length) {
     const eggs  = p.eggs  || 0;
     const hens  = p.hens  || 0;
@@ -925,24 +925,25 @@ function renderLootModal() {
     }
   }
 
-  loot.forEach((card) => {
+  loot.forEach((card, index) => {
     const tile = document.createElement("div");
     tile.className = "loot-card-tile";
 
-    const art = document.createElement("div");
-    art.className = "vj-card loot-card";
+    const cardDiv = document.createElement("div");
+    cardDiv.className = "vj-card loot-card";
 
-    const label = document.createElement("div");
-    label.className = "loot-card-label";
+    const title = document.createElement("div");
+    title.className = "loot-card-title";
 
     const type  = card.t || card.type || "Loot";
     const val   = card.v ?? "?";
     const count = card.count || 1;
 
-    label.textContent = `${type} x${count} (waarde ${val})`;
+    // Bv: "Prize Hen x1 (waarde 3)"
+    title.textContent = `${type} x${count} (waarde ${val})`;
 
-    art.appendChild(label);
-    tile.appendChild(art);
+    tile.appendChild(cardDiv);
+    tile.appendChild(title);
     lootCardsGrid.appendChild(tile);
   });
 }
