@@ -567,6 +567,48 @@ body.player-body {
 .hidden {
   display: none !important;
 }
+/* ==========================================
+   HAND & LOOT KAARTEN IN MODALS
+   ========================================== */
+
+.modal-content {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: flex-start;
+}
+
+/* Gebruik de generieke vj-card als basis, maar dan kleiner */
+.vj-card.hand-card,
+.vj-card.loot-card {
+  width: calc(var(--card-w) * 0.8);
+  height: calc(var(--card-h) * 0.8);
+  cursor: pointer;
+  position: relative;
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+
+.vj-card.hand-card:hover,
+.vj-card.loot-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 20px rgba(0, 0, 0, 0.9);
+}
+
+/* Label onderaan de kaart */
+.hand-card-label,
+.loot-card-label {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  padding: 2px 5px;
+  border-radius: 8px;
+  font-size: 0.7rem;
+  background: rgba(15, 23, 42, 0.9);
+  color: #f9fafb;
+  text-align: center;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
 
 /* ==========================================
    RESPONSIVE TWEAKS
