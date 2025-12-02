@@ -783,6 +783,54 @@ function renderHandModal() {
   });
 }
 
+// ==========================================
+// LOOT MODAL – BUITKAARTEN ALS KLEINE VJ-CARDS
+// ==========================================
+
+function openLootModal() {
+  if (!lootModalOverlay) return;
+  renderLootModal();
+  lootModalOverlay.classList.remove("hidden");
+}
+
+function closeLootModal() {
+  if (!lootModalOverlay) return;
+  lootModalOverlay.classList.add("hidden");
+}
+
+function renderLootModal() {
+  if (!lootCardsGrid) return;
+
+  lootCardsGrid.innerHTML = "";
+
+  if (!currentPlayer) {
+    lootCardsGrid.textContent = "Speler niet geladen.";
+    return;
+  }
+
+  const loot = Array.isArray(currentPlayer.loot) ? currentPlayer.loot : [];
+
+  if (!loot.length) {
+    lootCardsGrid.textContent = "Je hebt nog geen buit verzameld.";
+    return;
+  }
+
+  loot.forEach((card, index) => {
+    const wrapper = document.createElement("div");
+    wrapper.className = "vj-card loot-card";
+
+    const label = document.createElement("div");
+    label.className = "loot-card-label";
+
+    const type = card.t || "Loot";
+    const val  = card.v ?? "?";
+
+    label.textContent = `${index + 1}. ${type} (waarde ${val})`;
+
+    wrapper.appendChild(label);
+    lootCardsGrid.appendChild(wrapper);
+  });
+}
 
 function openHandModal() {
   if (!handModalOverlay || !handCardsGrid) return;
