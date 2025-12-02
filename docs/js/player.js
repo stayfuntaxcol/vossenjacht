@@ -723,7 +723,6 @@ function renderHand() {
     btnPass.disabled = !(canPlayOverall && myTurnOverall);
   }
 }
-
 // ==========================================
 // HAND MODAL – ACTION CARDS ALS KLEINE VJ-CARDS
 // ==========================================
@@ -756,11 +755,11 @@ function renderHandModal() {
   }
 
   hand.forEach((card, index) => {
-    // tegel: kaart + knop
+    // tegel: kaart + knop eronder
     const tile = document.createElement("div");
     tile.className = "hand-card-tile";
 
-    // de kaart zelf
+    // kaart zelf
     const cardDiv = document.createElement("div");
     cardDiv.className = "vj-card hand-card";
     cardDiv.title = card.name || `Kaart #${index + 1}`;
@@ -769,7 +768,6 @@ function renderHandModal() {
     const label = document.createElement("div");
     label.className = "hand-card-label";
     label.textContent = card.name || `Kaart #${index + 1}`;
-
     cardDiv.appendChild(label);
 
     // knop onder de kaart
@@ -782,7 +780,7 @@ function renderHandModal() {
     btn.disabled = !canPlay;
 
     btn.addEventListener("click", async () => {
-      // extra check op het actuele game-state
+      // extra check op actueel game-state
       if (!canPlayActionNow(currentGame, currentPlayer) ||
           !isMyOpsTurn(currentGame)) {
         return;
@@ -828,10 +826,10 @@ function renderLootModal() {
 
   const p = currentPlayer;
 
-  // 1) Echte loot-kaarten
+  // 1) echte loot-kaarten (als array op player)
   let loot = Array.isArray(p.loot) ? [...p.loot] : [];
 
-  // 2) Als er geen losse loot is, maar wel eggs/hens/prize → pseudo-kaarten
+  // 2) als er geen losse loot-kaarten zijn, maar wel eggs/hens/prize → pseudo-kaarten
   if (!loot.length) {
     const eggs  = p.eggs  || 0;
     const hens  = p.hens  || 0;
@@ -857,7 +855,7 @@ function renderLootModal() {
     }
   }
 
-  loot.forEach((card, index) => {
+  loot.forEach((card) => {
     const tile = document.createElement("div");
     tile.className = "loot-card-tile";
 
