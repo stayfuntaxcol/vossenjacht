@@ -78,10 +78,6 @@ const lootModalOverlay = document.getElementById("lootModalOverlay");
 const lootModalClose   = document.getElementById("lootModalClose");
 const lootCardsGrid    = document.getElementById("lootCardsGrid");
 
-const btnHand = document.getElementById("btnHand");
-const btnLoot = document.getElementById("btnLoot");
-
-
 // ===== FIRESTORE REFS / STATE =====
 
 let gameRef = null;
