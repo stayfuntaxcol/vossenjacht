@@ -755,24 +755,41 @@ function renderHandModal() {
     return;
   }
 
+  const canPlayNow =
+    canPlayActionNow(currentGame, currentPlayer) &&
+    isMyOpsTurn(currentGame);
+
   hand.forEach((card, index) => {
-    // Klikbare kaart als echte vj-card
-    const wrapper = document.createElement("button");
-    wrapper.type = "button";
-    wrapper.className = "vj-card hand-card";
+    // 1 tegel per kaart: ART + knop eronder
+    const tile = document.createElement("div");
+    tile.className = "hand-card-tile";
 
-    wrapper.addEventListener("click", () => {
-      // playActionCard checkt zelf al of je mag spelen
-      playActionCard(index);
-      closeHandModal();
-    });
+    // Kaart-art
+    const art = document.createElement("div");
+    art.className = "vj-card hand-card";
 
+    // Naam van de kaart als overlay onderin
     const label = document.createElement("div");
     label.className = "hand-card-label";
     label.textContent = card.name || "Action Card";
 
-    wrapper.appendChild(label);
-    handCardsGrid.appendChild(wrapper);
+    art.appendChild(label);
+
+    // Knop onder de kaart
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "phase-btn phase-btn-primary hand-card-play-btn";
+    btn.textContent = "Speel deze kaart";
+    btn.disabled = !canPlayNow;
+
+    btn.addEventListener("click", async () => {
+      await playActionCard(index);
+      closeHandModal();
+    });
+
+    tile.appendChild(art);
+    tile.appendChild(btn);
+    handCardsGrid.appendChild(tile);
   });
 }
 
@@ -801,27 +818,54 @@ function renderLootModal() {
     return;
   }
 
-  const loot = Array.isArray(currentPlayer.loot) ? currentPlayer.loot : [];
+  const p = currentPlayer;
 
+  // 1) Probeer echte loot-kaarten op de speler
+  let loot = Array.isArray(p.loot) ? [...p.loot] : [];
+
+  // 2) Als er geen losse loot-kaarten meer zijn, maar wel
+  // eggs / hens / prize (eindscore), maak daar pseudo-kaarten van.
   if (!loot.length) {
-    lootCardsGrid.textContent = "Je hebt nog geen buit verzameld.";
-    return;
+    const eggs  = p.eggs  || 0;
+    const hens  = p.hens  || 0;
+    const prize = p.prize || 0;
+
+    if (!eggs && !hens && !prize) {
+      lootCardsGrid.textContent = "Je hebt nog geen buit verzameld.";
+      return;
+    }
+
+    if (prize > 0) {
+      loot.push({ t: "Prize Hen", v: 3, count: prize });
+    }
+    if (hens > 0) {
+      loot.push({ t: "Hen", v: 2, count: hens });
+    }
+    if (eggs > 0) {
+      loot.push({ t: "Egg", v: 1, count: eggs });
+    }
   }
 
   loot.forEach((card, index) => {
-    const wrapper = document.createElement("div");
-    wrapper.className = "vj-card loot-card";
+    const tile = document.createElement("div");
+    tile.className = "loot-card-tile";
+
+    const art = document.createElement("div");
+    art.className = "vj-card loot-card";
 
     const label = document.createElement("div");
     label.className = "loot-card-label";
 
-    const type = card.t || card.type || "Loot";
-    const val  = card.v ?? "?";
+    const type  = card.t || card.type || "Loot";
+    const val   = card.v ?? "?";
+    const count = card.count || 1;
 
-    label.textContent = `${index + 1}. ${type} (waarde ${val})`;
+    // Bv: "Prize Hen x1 (waarde 3)"
+    label.textContent = `${type} x${count} (waarde ${val})`;
 
-    wrapper.appendChild(label);
-    lootCardsGrid.appendChild(wrapper);
+    art.appendChild(label);
+    tile.appendChild(art);
+    lootCardsGrid.appendChild(tile);
   });
 }
 
