@@ -724,7 +724,7 @@ function renderHand() {
   }
 }
 // ==========================================
-// HAND MODAL – ACTION CARDS ALS KLEINE VJ-CARDS
+// HAND MODAL – ACTION CARDS (GRID + DETAIL)
 // ==========================================
 
 function renderHandModal() {
@@ -741,9 +741,7 @@ function renderHandModal() {
     return;
   }
 
-  const g = currentGame;
-  const p = currentPlayer;
-  const hand = Array.isArray(p.hand) ? p.hand : [];
+  const hand = Array.isArray(currentPlayer.hand) ? currentPlayer.hand : [];
 
   if (!hand.length) {
     const msg = document.createElement("p");
@@ -754,45 +752,117 @@ function renderHandModal() {
     return;
   }
 
+  // GRID: alle kaarten even groot, klik = detail openen
   hand.forEach((card, index) => {
-    // tegel: kaart + knop eronder
-    const tile = document.createElement("div");
+    const tile = document.createElement("button");
+    tile.type = "button";
     tile.className = "hand-card-tile";
 
-    // kaart zelf
     const cardDiv = document.createElement("div");
     cardDiv.className = "vj-card hand-card";
-    cardDiv.title = card.name || `Kaart #${index + 1}`;
 
-    // label onderin de kaart
-    const label = document.createElement("div");
-    label.className = "hand-card-label";
-    label.textContent = card.name || `Kaart #${index + 1}`;
-    cardDiv.appendChild(label);
-
-    // knop onder de kaart
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.textContent = "Speel deze kaart";
-    btn.className = "phase-btn phase-btn-primary hand-card-play-btn";
-
-    const canPlay = canPlayActionNow(g, p) && isMyOpsTurn(g);
-    btn.disabled = !canPlay;
-
-    btn.addEventListener("click", async () => {
-      // extra check op actueel game-state
-      if (!canPlayActionNow(currentGame, currentPlayer) ||
-          !isMyOpsTurn(currentGame)) {
-        return;
-      }
-      await playActionCard(index);
-      closeHandModal();
-    });
+    const title = document.createElement("div");
+    title.className = "hand-card-title";
+    title.textContent = card.name || `Kaart #${index + 1}`;
 
     tile.appendChild(cardDiv);
-    tile.appendChild(btn);
+    tile.appendChild(title);
+
+    tile.addEventListener("click", () => {
+      showHandCardDetail(index);
+    });
+
     handCardsGrid.appendChild(tile);
   });
+}
+
+// Detailweergave: grote kaart + uitleg + speel-knop
+function showHandCardDetail(index) {
+  if (!handCardsGrid || !currentGame || !currentPlayer) return;
+
+  const hand = Array.isArray(currentPlayer.hand) ? currentPlayer.hand : [];
+  const card = hand[index];
+  if (!card) return;
+
+  handCardsGrid.innerHTML = "";
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "hand-card-detail";
+
+  // Grote kaart
+  const cardDiv = document.createElement("div");
+  cardDiv.className = "vj-card hand-card hand-card-large";
+
+  // Tekstblok
+  const info = document.createElement("div");
+  info.className = "hand-card-detail-text";
+
+  const title = document.createElement("h3");
+  title.textContent = card.name || `Kaart #${index + 1}`;
+
+  const text = document.createElement("p");
+  const desc =
+    card.text ||
+    card.description ||
+    "Digitale uitleg volgt nog. Gebruik voorlopig de fysieke spelregels voor de exacte werking.";
+
+  text.textContent = desc;
+
+  info.appendChild(title);
+  info.appendChild(text);
+
+  // Actieknoppen
+  const actions = document.createElement("div");
+  actions.className = "hand-card-detail-actions";
+
+  const playBtn = document.createElement("button");
+  playBtn.type = "button";
+  playBtn.textContent = "Speel deze kaart";
+  playBtn.className = "phase-btn phase-btn-primary";
+
+  const canPlay =
+    canPlayActionNow(currentGame, currentPlayer) &&
+    isMyOpsTurn(currentGame);
+
+  playBtn.disabled = !canPlay;
+
+  playBtn.addEventListener("click", () => {
+    handlePlayHandCard(index);
+  });
+
+  const backBtn = document.createElement("button");
+  backBtn.type = "button";
+  backBtn.textContent = "Terug naar hand";
+  backBtn.className = "phase-btn phase-btn-secondary";
+
+  backBtn.addEventListener("click", () => {
+    renderHandModal();
+  });
+
+  actions.appendChild(playBtn);
+  actions.appendChild(backBtn);
+
+  wrapper.appendChild(cardDiv);
+  wrapper.appendChild(info);
+  wrapper.appendChild(actions);
+
+  handCardsGrid.appendChild(wrapper);
+}
+
+// Speel-knop vanuit detail view
+async function handlePlayHandCard(index) {
+  if (!currentGame || !currentPlayer) return;
+
+  if (
+    !canPlayActionNow(currentGame, currentPlayer) ||
+    !isMyOpsTurn(currentGame)
+  ) {
+    alert("Je kunt nu geen Action Card spelen.");
+    return;
+  }
+
+  await playActionCard(index);
+  closeHandModal();
 }
 
 function openHandModal() {
