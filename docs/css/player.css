@@ -541,73 +541,86 @@ body.player-body {
   opacity: 0.8;
 }
 
+/* Alleen scroll-container – layout doen we met de grids */
 .modal-content {
   margin-top: 0.4rem;
   flex: 1;
   overflow-y: auto;
 }
 
-/* Grid voor kaarten in modals */
-
-#handCardsGrid,
-#lootCardsGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-  gap: 0.4rem;
-}
-
-/* Stel dat cardRenderer vj-card plaatst in modals */
-#handCardsGrid .vj-card,
-#lootCardsGrid .vj-card {
-  width: 100%;
-  height: auto;
-}
-
-/* Zorg dat de overlay standaard niet zichtbaar is via JS-class .hidden */
+/* Via class .hidden verbergen we de overlay */
 .hidden {
   display: none !important;
 }
+
 /* ==========================================
-   HAND & LOOT KAARTEN IN MODALS
+   HAND & LOOT MODAL – KAARTTEGELS
    ========================================== */
 
-.modal-content {
+/* De gridcontainers in de modals */
+#handCardsGrid,
+#lootCardsGrid {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
-  justify-content: flex-start;
+  gap: 0.75rem;
+  justify-content: center;
 }
 
-/* Gebruik de generieke vj-card als basis, maar dan kleiner */
+/* Eén tegel per kaart: kaart + knop / tekst */
+.hand-card-tile,
+.loot-card-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* Kaarten zelf – 2:3 formaat, placeholder-art */
 .vj-card.hand-card,
 .vj-card.loot-card {
-  width: calc(var(--card-w) * 0.8);
-  height: calc(var(--card-h) * 0.8);
-  cursor: pointer;
+  width: var(--card-w);
+  height: var(--card-h);
+  background-image: url("./assets/card_placeholder.png");
+  background-size: cover;
+  background-position: center;
+  border-radius: 12px;
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.7);
   position: relative;
+  overflow: hidden;
+  cursor: pointer;
   transition: transform 0.08s ease, box-shadow 0.08s ease;
 }
 
 .vj-card.hand-card:hover,
 .vj-card.loot-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 12px 20px rgba(0, 0, 0, 0.9);
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.95);
 }
 
-/* Label onderaan de kaart */
+/* Naam / type onderin de kaart */
 .hand-card-label,
 .loot-card-label {
   position: absolute;
-  left: 4px;
-  right: 4px;
-  bottom: 4px;
-  padding: 2px 5px;
-  border-radius: 8px;
-  font-size: 0.7rem;
-  background: rgba(15, 23, 42, 0.9);
-  color: #f9fafb;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 500;
   text-align: center;
+  color: #f9fafb;
+  background: linear-gradient(
+    to top,
+    rgba(15, 23, 42, 0.9),
+    rgba(15, 23, 42, 0)
+  );
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+}
+
+/* Knop onder hand-kaarten (JS voegt deze class toe) */
+.hand-card-play-btn {
+  width: 100%;
+  font-size: 0.75rem;
 }
 
 /* ==========================================
