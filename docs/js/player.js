@@ -869,16 +869,6 @@ function closeLootModal() {
   lootModalOverlay.classList.add("hidden");
 }
 
-function renderLootModal() {
-  if (!lootCardsGrid) return;
-
-  lootCardsGrid.innerHTML = "";
-
-  if (!currentPlayer) {
-    lootCardsGrid.textContent = "Speler niet geladen.";
-    return;
-  }
-
   const p = currentPlayer;
 
   // 1) Probeer echte loot-kaarten op de speler
