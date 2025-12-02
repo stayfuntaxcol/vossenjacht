@@ -809,6 +809,90 @@ function closeHandModal() {
 }
 
 // ==========================================
+// HAND MODAL – ACTION CARDS ALS KLEINE VJ-CARDS
+// ==========================================
+
+function renderHandModal() {
+  if (!handCardsGrid) return;
+
+  handCardsGrid.innerHTML = "";
+
+  if (!currentGame || !currentPlayer) {
+    const msg = document.createElement("p");
+    msg.textContent = "Game of speler niet geladen.";
+    msg.style.fontSize = "0.85rem";
+    msg.style.opacity = "0.85";
+    handCardsGrid.appendChild(msg);
+    return;
+  }
+
+  const g = currentGame;
+  const p = currentPlayer;
+  const hand = Array.isArray(p.hand) ? p.hand : [];
+
+  if (!hand.length) {
+    const msg = document.createElement("p");
+    msg.textContent = "Je hebt geen Action Cards in je hand.";
+    msg.style.fontSize = "0.85rem";
+    msg.style.opacity = "0.85";
+    handCardsGrid.appendChild(msg);
+    return;
+  }
+
+  hand.forEach((card, index) => {
+    // tegel: kaart + knop
+    const tile = document.createElement("div");
+    tile.className = "hand-card-tile";
+
+    // de kaart zelf
+    const cardDiv = document.createElement("div");
+    cardDiv.className = "vj-card hand-card";
+    cardDiv.title = card.name || `Kaart #${index + 1}`;
+
+    // label onderin de kaart
+    const label = document.createElement("div");
+    label.className = "hand-card-label";
+    label.textContent = card.name || `Kaart #${index + 1}`;
+
+    cardDiv.appendChild(label);
+
+    // knop onder de kaart
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Speel deze kaart";
+    btn.className = "phase-btn phase-btn-primary hand-card-play-btn";
+
+    const canPlay = canPlayActionNow(g, p) && isMyOpsTurn(g);
+    btn.disabled = !canPlay;
+
+    btn.addEventListener("click", async () => {
+      // extra check op het actuele game-state
+      if (!canPlayActionNow(currentGame, currentPlayer) ||
+          !isMyOpsTurn(currentGame)) {
+        return;
+      }
+      await playActionCard(index);
+      closeHandModal();
+    });
+
+    tile.appendChild(cardDiv);
+    tile.appendChild(btn);
+    handCardsGrid.appendChild(tile);
+  });
+}
+
+function openHandModal() {
+  if (!handModalOverlay) return;
+  renderHandModal();
+  handModalOverlay.classList.remove("hidden");
+}
+
+function closeHandModal() {
+  if (!handModalOverlay) return;
+  handModalOverlay.classList.add("hidden");
+}
+
+// ==========================================
 // LOOT MODAL – BUITKAARTEN ALS KLEINE VJ-CARDS
 // ==========================================
 
@@ -826,63 +910,23 @@ function renderLootModal() {
     return;
   }
 
-  const loot = Array.isArray(currentPlayer.loot) ? currentPlayer.loot : [];
-
-  if (!loot.length) {
-    const msg = document.createElement("p");
-    msg.textContent = "Je hebt nog geen buitkaarten.";
-    msg.style.fontSize = "0.85rem";
-    msg.style.opacity = "0.85";
-    lootCardsGrid.appendChild(msg);
-    return;
-  }
-
-  loot.forEach((card, index) => {
-    const tile = document.createElement("div");
-    tile.className = "loot-card-tile";
-
-    const cardDiv = document.createElement("div");
-    cardDiv.className = "vj-card loot-card";
-
-    const label = document.createElement("div");
-    label.className = "loot-card-label";
-
-    const type = card.t || card.type || "Loot";
-    const val  = card.v ?? "?";
-
-    label.textContent = `${index + 1}. ${type} (waarde ${val})`;
-
-    cardDiv.appendChild(label);
-    tile.appendChild(cardDiv);
-    lootCardsGrid.appendChild(tile);
-  });
-}
-
-function openLootModal() {
-  if (!lootModalOverlay) return;
-  renderLootModal();
-  lootModalOverlay.classList.remove("hidden");
-}
-
-function closeLootModal() {
-  if (!lootModalOverlay) return;
-  lootModalOverlay.classList.add("hidden");
-}
-
   const p = currentPlayer;
 
-  // 1) Probeer echte loot-kaarten op de speler
+  // 1) Echte loot-kaarten
   let loot = Array.isArray(p.loot) ? [...p.loot] : [];
 
-  // 2) Als er geen losse loot-kaarten meer zijn, maar wel
-  // eggs / hens / prize (eindscore), maak daar pseudo-kaarten van.
+  // 2) Als er geen losse loot is, maar wel eggs/hens/prize → pseudo-kaarten
   if (!loot.length) {
     const eggs  = p.eggs  || 0;
     const hens  = p.hens  || 0;
     const prize = p.prize || 0;
 
     if (!eggs && !hens && !prize) {
-      lootCardsGrid.textContent = "Je hebt nog geen buit verzameld.";
+      const msg = document.createElement("p");
+      msg.textContent = "Je hebt nog geen buit verzameld.";
+      msg.style.fontSize = "0.85rem";
+      msg.style.opacity = "0.85";
+      lootCardsGrid.appendChild(msg);
       return;
     }
 
@@ -911,13 +955,23 @@ function closeLootModal() {
     const val   = card.v ?? "?";
     const count = card.count || 1;
 
-    // Bv: "Prize Hen x1 (waarde 3)"
     label.textContent = `${type} x${count} (waarde ${val})`;
 
     art.appendChild(label);
     tile.appendChild(art);
     lootCardsGrid.appendChild(tile);
   });
+}
+
+function openLootModal() {
+  if (!lootModalOverlay) return;
+  renderLootModal();
+  lootModalOverlay.classList.remove("hidden");
+}
+
+function closeLootModal() {
+  if (!lootModalOverlay) return;
+  lootModalOverlay.classList.add("hidden");
 }
 
 // ===== LOGGING HELPER =====
