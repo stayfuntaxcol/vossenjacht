@@ -1,4 +1,4 @@
-// VOSSENJACHT player.js – fase 2: geen Countermove, eindscorebord & SCOUT preview
+// VOSSENJACHT player.js – nieuwe UI: fase-panels + loot-meter
 import { initAuth } from "./firebase.js";
 import { addLog } from "./log.js";
 import { getEventById } from "./cards.js";
@@ -21,27 +21,64 @@ const params = new URLSearchParams(window.location.search);
 const gameId = params.get("game");
 const playerId = params.get("player");
 
+// ===== DOM ELEMENTS – nieuwe player.html =====
+
+// Header / host board
 const gameStatusDiv    = document.getElementById("gameStatus");
-const playerInfoDiv    = document.getElementById("playerInfo");
-const eventInfoDiv     = document.getElementById("eventInfo");
-const lootPanel        = document.getElementById("lootPanel");
-const handPanel        = document.getElementById("handPanel");
-const moveState        = document.getElementById("moveState");
-const decisionState    = document.getElementById("decisionState");
-const opsTurnInfo      = document.getElementById("opsTurnInfo");
+const hostStatusLine   = document.getElementById("hostStatusLine");
+const hostFeedbackLine = document.getElementById("hostFeedbackLine");
 
-// Nieuwe labels in de statusbalk van het spelersscherm
-const playerPhaseLabel = document.getElementById("playerPhaseLabel");
-const playerRoundLabel = document.getElementById("playerRoundLabel");
+// Hero / spelerkaart
+const playerNameEl      = document.getElementById("playerName");
+const playerDenColorEl  = document.getElementById("playerDenColor");
+const playerStatusEl    = document.getElementById("playerStatus");
+const playerScoreEl     = document.getElementById("playerScore");
+const lootSummaryEl     = document.getElementById("lootSummary");
+const lootMeterEl       = document.getElementById("lootMeter");
+const lootMeterFillEl   = lootMeterEl
+  ? lootMeterEl.querySelector(".loot-meter-fill")
+  : null;
 
-const btnSnatch  = document.getElementById("btnSnatch");
-const btnForage  = document.getElementById("btnForage");
-const btnScout   = document.getElementById("btnScout");
-const btnShift   = document.getElementById("btnShift");
-const btnLurk    = document.getElementById("btnLurk");
-const btnBurrow  = document.getElementById("btnBurrow");
-const btnDash    = document.getElementById("btnDash");
-const btnPass    = document.getElementById("btnPass");
+// Event + scout + flags
+const eventCurrentDiv      = document.getElementById("eventCurrent");
+const eventScoutPreviewDiv = document.getElementById("eventScoutPreview");
+const specialFlagsDiv      = document.getElementById("specialFlags");
+
+// Phase panels
+const phaseMovePanel     = document.getElementById("phaseMovePanel");
+const phaseActionsPanel  = document.getElementById("phaseActionsPanel");
+const phaseDecisionPanel = document.getElementById("phaseDecisionPanel");
+
+const moveStateText     = document.getElementById("moveStateText");
+const actionsStateText  = document.getElementById("actionsStateText");
+const decisionStateText = document.getElementById("decisionStateText");
+
+// Buttons (MOVE / DECISION / ACTIONS)
+const btnSnatch = document.getElementById("btnSnatch");
+const btnForage = document.getElementById("btnForage");
+const btnScout  = document.getElementById("btnScout");
+const btnShift  = document.getElementById("btnShift");
+
+const btnLurk   = document.getElementById("btnLurk");
+const btnBurrow = document.getElementById("btnBurrow");
+const btnDash   = document.getElementById("btnDash");
+
+const btnPass = document.getElementById("btnPass");
+const btnHand = document.getElementById("btnHand");
+const btnLead = document.getElementById("btnLead");
+const btnHint = document.getElementById("btnHint");
+const btnLoot = document.getElementById("btnLoot");
+
+// Modals (HAND / LOOT)
+const handModalOverlay = document.getElementById("handModalOverlay");
+const handModalClose   = document.getElementById("handModalClose");
+const handCardsGrid    = document.getElementById("handCardsGrid");
+
+const lootModalOverlay = document.getElementById("lootModalOverlay");
+const lootModalClose   = document.getElementById("lootModalClose");
+const lootCardsGrid    = document.getElementById("lootCardsGrid");
+
+// ===== FIRESTORE REFS / STATE =====
 
 let gameRef = null;
 let playerRef = null;
@@ -49,57 +86,8 @@ let playerRef = null;
 let currentGame = null;
 let currentPlayer = null;
 
-// Feedback onderin het dashboard ("Laatste actie")
-let actionFeedbackEl = null;
+// ===== HELPERS ROUND FLAGS / PLAYERS =====
 
-function ensureActionFeedbackEl() {
-  if (actionFeedbackEl) return;
-
-  // In de nieuwe layout bestaat #actionFeedback al in de mini-log
-  const existing = document.getElementById("actionFeedback");
-  if (existing) {
-    actionFeedbackEl = existing;
-    return;
-  }
-
-  // Fallback: als hij om wat voor reden dan ook ontbreekt, maken we een simpele <p> onder de hand
-  const parent = handPanel ? handPanel.parentElement : null;
-  if (!parent) return;
-
-  const p = document.createElement("p");
-  p.id = "actionFeedback";
-  p.className = "small-note";
-  p.style.marginTop = "0.5rem";
-  p.style.fontSize = "0.85rem";
-  p.style.opacity = "0.8";
-
-  parent.appendChild(p);
-  actionFeedbackEl = p;
-}
-
-function setActionFeedback(msg) {
-  ensureActionFeedbackEl();
-  if (!actionFeedbackEl) return;
-
-  if (!msg) {
-    // Als je liever de standaardtekst uit de HTML behoudt, kun je hier vroegtijdig returnen.
-    // Voor nu wissen we de tekst gewoon.
-    actionFeedbackEl.textContent = "";
-    return;
-  }
-
-  const time = new Date().toLocaleTimeString("nl-NL", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-
-  actionFeedbackEl.textContent = `[${time}] ${msg}`;
-}
-
-/**
- * flagsRound altijd met alle standaard velden vullen.
- */
 function mergeRoundFlags(game) {
   const base = {
     lockEvents: false,
@@ -140,9 +128,7 @@ async function chooseOtherPlayerPrompt(title) {
   }
 
   const lines = others.map((p, idx) => `${idx + 1}. ${p.name || "Vos"}`);
-  const choiceStr = prompt(
-    `${title}\n` + lines.join("\n")
-  );
+  const choiceStr = prompt(`${title}\n` + lines.join("\n"));
   if (!choiceStr) return null;
   const idx = parseInt(choiceStr, 10) - 1;
   if (Number.isNaN(idx) || idx < 0 || idx >= others.length) {
@@ -189,6 +175,8 @@ if (!gameId || !playerId) {
   }
 }
 
+// ===== PHASE & PERMISSIONS =====
+
 function canMoveNow(game, player) {
   if (!game || !player) return false;
   if (game.status !== "round") return false;
@@ -222,7 +210,7 @@ function canPlayActionNow(game, player) {
   return true;
 }
 
-// ⚠️ Belangrijk: gebruik playerId uit de URL, niet player.id
+// ⚠️ Gebruik playerId uit URL
 function isMyOpsTurn(game) {
   if (!game) return false;
   if (game.phase !== "ACTIONS") return false;
@@ -234,114 +222,212 @@ function isMyOpsTurn(game) {
   return order[idx] === playerId;
 }
 
-// === SCOREBORD speler-scherm ===
+// ===== LOOT / SCORE HELPERS + UI =====
 
-async function renderPlayerFinalScoreboard() {
-  if (!eventInfoDiv) return;
-  const g = currentGame;
-  if (!g) return;
-
-  const players = await fetchPlayersForGame();
-  if (!players.length) {
-    eventInfoDiv.textContent = "Geen scorebord beschikbaar.";
-    return;
+function calcLootStats(player) {
+  if (!player) {
+    return { eggs: 0, hens: 0, prize: 0, score: 0 };
   }
 
-  const sorted = players.sort((a, b) => (b.score || 0) - (a.score || 0));
-  const bestScore = sorted.length ? (sorted[0].score || 0) : 0;
-  const winners = sorted.filter((p) => (p.score || 0) === bestScore);
-  const winnerIds = new Set(winners.map((w) => w.id));
+  const loot = Array.isArray(player.loot) ? player.loot : [];
 
-  eventInfoDiv.innerHTML = "";
+  let eggs  = player.eggs  || 0;
+  let hens  = player.hens  || 0;
+  let prize = player.prize || 0;
 
-  const title = document.createElement("div");
-  title.style.fontWeight = "600";
-  title.textContent = "Eindscore – Fox Raid";
-  eventInfoDiv.appendChild(title);
-
-  const pIntro = document.createElement("div");
-  pIntro.style.fontSize = "0.9rem";
-  pIntro.style.opacity = "0.85";
-  pIntro.textContent = "Het spel is afgelopen. Dit is de ranglijst:";
-  eventInfoDiv.appendChild(pIntro);
-
-  if (winners.length && bestScore >= 0) {
-    const pWin = document.createElement("div");
-    const names = winners.map((w) => w.name || "Vos").join(", ");
-    pWin.style.marginTop = "0.25rem";
-    pWin.textContent = `🏆 Winnaar(s): ${names} met ${bestScore} punten.`;
-    eventInfoDiv.appendChild(pWin);
-  }
-
-  const list = document.createElement("ol");
-  list.className = "scoreboard-list";
-  list.style.marginTop = "0.5rem";
-
-  sorted.forEach((pl) => {
-    const li = document.createElement("li");
-    const eggs  = pl.eggs  || 0;
-    const hens  = pl.hens  || 0;
-    const prize = pl.prize || 0;
-    const score = pl.score || 0;
-    const meTag = pl.id === playerId ? " (jij)" : "";
-    const isWinner = winnerIds.has(pl.id);
-    const prefix = isWinner ? "🏆 " : "";
-
-    li.textContent = `${prefix}${pl.name || "Vos"} – ${score} punten (P:${prize} H:${hens} E:${eggs})${meTag}`;
-    if (isWinner) {
-      li.classList.add("scoreboard-winner");
+  loot.forEach((card) => {
+    const tRaw = card.t || card.type || "";
+    const t = String(tRaw).toUpperCase();
+    if (t.includes("EGG")) {
+      eggs += 1;
+    } else if (t.includes("HEN") && !t.includes("PRIZE")) {
+      hens += 1;
+    } else if (t.includes("PRIZE")) {
+      prize += 1;
     }
-    list.appendChild(li);
   });
 
-  eventInfoDiv.appendChild(list);
+  const pointsFromCounts = eggs + hens * 2 + prize * 3;
+
+  let otherPoints = 0;
+  loot.forEach((card) => {
+    const v = typeof card.v === "number" ? card.v : 0;
+    const tRaw = card.t || card.type || "";
+    const t = String(tRaw).toUpperCase();
+    if (["EGG", "HEN", "PRIZE", "PRIZE HEN", "PRIZE_HEN"].includes(t)) return;
+    otherPoints += v;
+  });
+
+  const recordedScore = typeof player.score === "number" ? player.score : 0;
+  const score = Math.max(recordedScore, pointsFromCounts + otherPoints);
+
+  return { eggs, hens, prize, score };
 }
 
-// === RENDERING ===
+function updateLootUi(player) {
+  if (!lootSummaryEl || !lootMeterFillEl) return;
+  const { eggs, hens, prize, score } = calcLootStats(player || {});
 
-function renderGame() {
-  if (!currentGame || !gameStatusDiv || !eventInfoDiv) return;
-
-  const g = currentGame;
-  const roundLabel = g.round ?? 0;
-  const phaseLabel = g.phase || "?";
-
-  // Bovenbalk (header)
-  gameStatusDiv.textContent =
-    `Code: ${g.code} – Ronde: ${roundLabel} – Fase: ${phaseLabel}`;
-
-  // Statusbalk in het dashboard
-  if (playerRoundLabel) {
-    playerRoundLabel.textContent = String(roundLabel);
-  }
-  if (playerPhaseLabel) {
-    playerPhaseLabel.textContent = phaseLabel;
+  if (eggs === 0 && hens === 0 && prize === 0 && score === 0) {
+    lootSummaryEl.textContent = "Nog geen buit verzameld.";
+  } else {
+    lootSummaryEl.textContent = `P:${prize} H:${hens} E:${eggs} – totaal ~${score} punten.`;
   }
 
-  // Spel afgelopen? → alles uit, scorebord tonen
-  if (g.status === "finished" || g.phase === "END") {
-    setActionFeedback("");
-    if (opsTurnInfo) {
-      opsTurnInfo.textContent =
-        "Het spel is afgelopen – het scorebord is zichtbaar op het Community Board en hieronder.";
-    }
-    if (btnPass) btnPass.disabled = true;
-    renderPlayerFinalScoreboard();
-    updateMoveButtonsState();
-    updateDecisionButtonsState();
+  // Totaal 12+ punten ~ volle zak (mag je later tweaken)
+  const baseMax = 12;
+  const rawPct = baseMax > 0 ? (score / baseMax) * 100 : 0;
+  const meterPct = Math.max(5, Math.min(100, Math.round(rawPct)));
+  lootMeterFillEl.style.width = `${meterPct}%`;
+
+  if (playerScoreEl) {
+    playerScoreEl.textContent = `Score: ${score} (P:${prize} H:${hens} E:${eggs})`;
+  }
+}
+
+// ===== HOST FEEDBACK =====
+
+function setActionFeedback(msg) {
+  if (!hostFeedbackLine) return;
+
+  if (!msg) {
+    hostFeedbackLine.textContent = "";
     return;
   }
 
-  // OPS-feedback wissen zodra we uit ACTIONS gaan
+  const time = new Date().toLocaleTimeString("nl-NL", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
+  hostFeedbackLine.textContent = `[${time}] ${msg}`;
+}
+
+// ===== UI: PHASE PANELS + GAME / EVENT RENDERING =====
+
+function updatePhasePanels(game, player) {
+  if (!phaseMovePanel || !phaseActionsPanel || !phaseDecisionPanel) return;
+
+  phaseMovePanel.classList.remove("active");
+  phaseActionsPanel.classList.remove("active");
+  phaseDecisionPanel.classList.remove("active");
+
+  if (!game) {
+    if (hostStatusLine) {
+      hostStatusLine.textContent = "Wachten op game-data…";
+    }
+    return;
+  }
+
+  const phase = game.phase || "";
+  const status = game.status || "";
+
+  if (status === "finished" || phase === "END") {
+    if (hostStatusLine) {
+      hostStatusLine.textContent =
+        "Raid is afgelopen – er worden geen keuzes meer gevraagd.";
+    }
+    updateMoveButtonsState();
+    updateDecisionButtonsState();
+    renderHand();
+    return;
+  }
+
+  if (phase === "MOVE") {
+    phaseMovePanel.classList.add("active");
+    if (hostStatusLine) {
+      if (player && canMoveNow(game, player)) {
+        hostStatusLine.textContent =
+          "MOVE-fase – kies één actie: SNATCH / FORAGE / SCOUT / SHIFT.";
+      } else {
+        hostStatusLine.textContent =
+          "MOVE-fase – je kunt nu geen MOVE doen (al bewogen, niet in de Yard of al DASHED).";
+      }
+    }
+  } else if (phase === "ACTIONS") {
+    phaseActionsPanel.classList.add("active");
+    if (hostStatusLine) {
+      if (player && canPlayActionNow(game, player)) {
+        if (isMyOpsTurn(game)) {
+          hostStatusLine.textContent =
+            "ACTIONS-fase – jij bent aan de beurt. Speel een kaart via HAND of kies PASS.";
+        } else {
+          hostStatusLine.textContent =
+            "ACTIONS-fase – wacht tot je weer aan de beurt bent.";
+        }
+      } else {
+        hostStatusLine.textContent =
+          "ACTIONS-fase – je doet niet (meer) mee in deze ronde (niet in de Yard of al DASHED).";
+      }
+    }
+  } else if (phase === "DECISION") {
+    phaseDecisionPanel.classList.add("active");
+    if (hostStatusLine) {
+      if (player && canDecideNow(game, player)) {
+        hostStatusLine.textContent =
+          "DECISION-fase – kies LURK (blijven), HIDE (Burrow) of DASH (wegrennen).";
+      } else if (player && player.decision) {
+        hostStatusLine.textContent = `DECISION-fase – jouw keuze staat al vast: ${player.decision}.`;
+      } else {
+        hostStatusLine.textContent =
+          "DECISION-fase – je doet niet mee (niet in de Yard of al DASHED).";
+      }
+    }
+  } else if (phase === "REVEAL") {
+    if (hostStatusLine) {
+      hostStatusLine.textContent =
+        "REVEAL – Event wordt toegepast. Kijk mee op het grote scherm.";
+    }
+  } else {
+    if (hostStatusLine) {
+      hostStatusLine.textContent =
+        "Wacht op de volgende ronde of een nieuwe raid.";
+    }
+  }
+
+  updateMoveButtonsState();
+  updateDecisionButtonsState();
+  renderHand();
+}
+
+function renderGame() {
+  if (!currentGame || !gameStatusDiv) return;
+
+  const g = currentGame;
+
+  gameStatusDiv.textContent =
+    `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
+
+  // Spel afgelopen
+  if (g.status === "finished" || g.phase === "END") {
+    setActionFeedback(
+      "Het spel is afgelopen – het scorebord staat op het Community Board."
+    );
+    if (eventCurrentDiv) {
+      eventCurrentDiv.textContent =
+        "Spel afgelopen. Bekijk het scorebord op het grote scherm.";
+    }
+    if (eventScoutPreviewDiv) eventScoutPreviewDiv.textContent = "";
+    if (specialFlagsDiv) specialFlagsDiv.innerHTML = "";
+    updatePhasePanels(g, currentPlayer);
+    return;
+  }
+
+  // Buiten ACTIONS: feedback resetten
   if (g.phase !== "ACTIONS") {
     setActionFeedback("");
   }
 
-  // Event info (SCOUT preview of REVEAL)
-  eventInfoDiv.innerHTML = "";
+  // EVENT + SCOUT
+  if (eventCurrentDiv) eventCurrentDiv.innerHTML = "";
+  if (eventScoutPreviewDiv) eventScoutPreviewDiv.textContent = "";
+  if (specialFlagsDiv) specialFlagsDiv.innerHTML = "";
+
   let ev = null;
   let label = "";
 
+  // REVEAL → actueel event
   if (g.phase === "REVEAL" && g.currentEventId) {
     ev = getEventById(g.currentEventId);
     label = "Actueel Event (REVEAL)";
@@ -356,107 +442,118 @@ function renderGame() {
     const idx = peek.index;
     if (idx >= 0 && idx < track.length && track[idx] === peek.eventId) {
       ev = getEventById(peek.eventId);
-      label = "SCOUT preview (alleen zichtbaar voor jou)";
+      label = `SCOUT preview – positie ${idx + 1}`;
     }
   }
 
-  if (!ev) {
-    const p = document.createElement("p");
-    p.textContent =
-      "Nog geen Event Card onthuld (pas zichtbaar bij REVEAL of via jouw eigen SCOUT).";
-    eventInfoDiv.appendChild(p);
-  } else {
-    const sub = document.createElement("div");
-    sub.style.fontSize = "0.8rem";
-    sub.style.opacity = "0.7";
-    sub.style.marginBottom = "0.25rem";
-    sub.textContent = label;
+  if (ev && eventCurrentDiv) {
+    const labelDiv = document.createElement("div");
+    labelDiv.style.fontSize = "0.78rem";
+    labelDiv.style.opacity = "0.75";
+    labelDiv.style.marginBottom = "0.2rem";
+    labelDiv.textContent = label || "Event";
 
-    const title = document.createElement("div");
-    title.style.fontWeight = "600";
-    title.textContent = ev.title;
+    const titleDiv = document.createElement("div");
+    titleDiv.style.fontWeight = "600";
+    titleDiv.textContent = ev.title || "Event";
 
-    const text = document.createElement("div");
-    text.style.fontSize = "0.9rem";
-    text.style.opacity = "0.85";
-    text.textContent = ev.text || "";
+    const textDiv = document.createElement("div");
+    textDiv.style.fontSize = "0.85rem";
+    textDiv.style.opacity = "0.9";
+    textDiv.textContent = ev.text || "";
 
-    eventInfoDiv.appendChild(sub);
-    eventInfoDiv.appendChild(title);
-    eventInfoDiv.appendChild(text);
+    eventCurrentDiv.appendChild(labelDiv);
+    eventCurrentDiv.appendChild(titleDiv);
+    eventCurrentDiv.appendChild(textDiv);
+  } else if (eventCurrentDiv) {
+    eventCurrentDiv.textContent =
+      "Nog geen Event Card onthuld (pas zichtbaar bij REVEAL of via SCOUT).";
   }
 
-  updateMoveButtonsState();
-  updateDecisionButtonsState();
-  renderHand();
+  // Extra SCOUT preview tekst (alleen voor jou)
+  if (eventScoutPreviewDiv && currentPlayer && currentPlayer.scoutPeek) {
+    const peek = currentPlayer.scoutPeek;
+    if (peek.round === (g.round || 0)) {
+      const evPeek = getEventById(peek.eventId);
+      if (evPeek) {
+        eventScoutPreviewDiv.textContent =
+          `SCOUT preview (alleen voor jou): positie ${peek.index + 1} – ${evPeek.title}`;
+      }
+    }
+  }
+
+  // Flags tonen als chips
+  if (specialFlagsDiv) {
+    const flags = mergeRoundFlags(g);
+
+    if (flags.scatter) {
+      const chip = document.createElement("span");
+      chip.className = "event-flag-chip event-flag-chip--danger";
+      chip.textContent = "Scatter! – niemand mag Scouten deze ronde";
+      specialFlagsDiv.appendChild(chip);
+    }
+    if (flags.lockEvents) {
+      const chip = document.createElement("span");
+      chip.className = "event-flag-chip event-flag-chip--safe";
+      chip.textContent = "Burrow Beacon – Event Track gelocked";
+      specialFlagsDiv.appendChild(chip);
+    }
+  }
+
+  updatePhasePanels(g, currentPlayer);
 }
 
 function renderPlayer() {
-  if (!currentPlayer || !playerInfoDiv) return;
+  if (!currentPlayer) return;
 
   const p = currentPlayer;
-  playerInfoDiv.innerHTML = "";
 
-  // 1e regel: naam
-  const nameLine = document.createElement("div");
-  nameLine.textContent = p.name || "(naam onbekend)";
-  nameLine.style.fontWeight = "600";
-  playerInfoDiv.appendChild(nameLine);
-
-  // 2e regel: Den kleur (tekstueel) – CSS gebruikt nth-child(2)
-  const colorLine = document.createElement("div");
-  colorLine.style.fontSize = "0.9rem";
-  colorLine.style.opacity = "0.85";
-  colorLine.textContent = `Den kleur: ${p.color || "nog niet toegewezen"}`;
-  playerInfoDiv.appendChild(colorLine);
-
-  // 3e regel: status (YARD / DASH / CAUGHT) – CSS gebruikt nth-child(3)
-  const stateLine = document.createElement("div");
-  stateLine.style.fontSize = "0.9rem";
-  stateLine.style.marginTop = "0.25rem";
-
-  if (p.dashed) {
-    stateLine.textContent =
-      "Status: DASHED (je hebt de Yard verlaten met buit).";
-  } else if (p.inYard === false) {
-    stateLine.textContent = "Status: gevangen (niet meer in de Yard).";
-  } else {
-    stateLine.textContent = "Status: in de Yard.";
-  }
-  playerInfoDiv.appendChild(stateLine);
-
-  // Loot tonen
-  lootPanel.innerHTML = "";
-  const loot = p.loot || [];
-  if (!loot.length) {
-    lootPanel.textContent = "Nog geen buit verzameld.";
-  } else {
-    const list = document.createElement("div");
-    list.style.fontSize = "0.9rem";
-    loot.forEach((card, idx) => {
-      const label = card.t || "Loot";
-      const val = card.v || 0;
-      const line = document.createElement("div");
-      line.textContent = `${idx + 1}. ${label} (waarde ${val})`;
-      list.appendChild(line);
-    });
-    lootPanel.appendChild(list);
+  if (playerNameEl) {
+    playerNameEl.textContent = p.name || "Onbekende vos";
   }
 
-  updateMoveButtonsState();
-  updateDecisionButtonsState();
-  renderHand();
+  if (playerDenColorEl) {
+    const color = (p.color || "").toUpperCase();
+    let label = "Den: onbekend";
+    if (color === "RED") label = "Den: RED";
+    else if (color === "BLUE") label = "Den: BLUE";
+    else if (color === "GREEN") label = "Den: GREEN";
+    else if (color === "YELLOW") label = "Den: YELLOW";
+    playerDenColorEl.textContent = label;
+  }
+
+  if (playerStatusEl) {
+    let statusText;
+    if (p.dashed) {
+      statusText =
+        "Status: DASHED – je hebt de Yard verlaten met je buit.";
+    } else if (p.inYard === false) {
+      statusText = "Status: CAUGHT – je bent gevangen.";
+    } else {
+      statusText = "Status: in de Yard.";
+    }
+    if (p.decision) {
+      statusText += ` (Decision deze ronde: ${p.decision})`;
+    }
+    playerStatusEl.textContent = statusText;
+  }
+
+  updateLootUi(p);
+  updatePhasePanels(currentGame, p);
 }
 
+// ===== MOVE / DECISION BUTTON STATE =====
+
 function updateMoveButtonsState() {
-  if (!btnSnatch || !btnForage || !btnScout || !btnShift || !moveState) return;
+  if (!btnSnatch || !btnForage || !btnScout || !btnShift || !moveStateText)
+    return;
 
   if (!currentGame || !currentPlayer) {
     btnSnatch.disabled = true;
     btnForage.disabled = true;
     btnScout.disabled  = true;
     btnShift.disabled  = true;
-    moveState.textContent = "Geen game of speler geladen.";
+    moveStateText.textContent = "Geen game of speler geladen.";
     return;
   }
 
@@ -468,7 +565,7 @@ function updateMoveButtonsState() {
     btnForage.disabled = true;
     btnScout.disabled  = true;
     btnShift.disabled  = true;
-    moveState.textContent =
+    moveStateText.textContent =
       "Het spel is afgelopen – je kunt geen MOVE meer doen.";
     return;
   }
@@ -483,33 +580,33 @@ function updateMoveButtonsState() {
 
   if (!canMove) {
     if (g.phase !== "MOVE") {
-      moveState.textContent = `Je kunt nu geen MOVE doen (fase: ${g.phase}).`;
+      moveStateText.textContent = `Je kunt nu geen MOVE doen (fase: ${g.phase}).`;
     } else if (p.inYard === false) {
-      moveState.textContent = "Je bent niet meer in de Yard.";
+      moveStateText.textContent = "Je bent niet meer in de Yard.";
     } else if (p.dashed) {
-      moveState.textContent =
+      moveStateText.textContent =
         "Je hebt al DASH gekozen in een eerdere ronde.";
     } else if (moved.includes(playerId)) {
-      moveState.textContent = "Je hebt jouw MOVE voor deze ronde al gedaan.";
+      moveStateText.textContent = "Je hebt jouw MOVE voor deze ronde al gedaan.";
     } else if (g.status !== "round") {
-      moveState.textContent = "Er is nog geen actieve ronde.";
+      moveStateText.textContent = "Er is nog geen actieve ronde.";
     } else {
-      moveState.textContent = "Je kunt nu geen MOVE doen.";
+      moveStateText.textContent = "Je kunt nu geen MOVE doen.";
     }
   } else {
-    moveState.textContent =
-      "Je kunt één MOVE doen: Snatch, Forage, Scout of Shift.";
+    moveStateText.textContent =
+      "Je kunt één MOVE doen: SNATCH, FORAGE, SCOUT of SHIFT.";
   }
 }
 
 function updateDecisionButtonsState() {
-  if (!btnLurk || !btnBurrow || !btnDash || !decisionState) return;
+  if (!btnLurk || !btnBurrow || !btnDash || !decisionStateText) return;
 
   if (!currentGame || !currentPlayer) {
     btnLurk.disabled = true;
     btnBurrow.disabled = true;
     btnDash.disabled = true;
-    decisionState.textContent = "Geen game of speler geladen.";
+    decisionStateText.textContent = "Geen game of speler geladen.";
     return;
   }
 
@@ -520,7 +617,7 @@ function updateDecisionButtonsState() {
     btnLurk.disabled = true;
     btnBurrow.disabled = true;
     btnDash.disabled = true;
-    decisionState.textContent =
+    decisionStateText.textContent =
       "Het spel is afgelopen – geen DECISION meer nodig.";
     return;
   }
@@ -529,7 +626,7 @@ function updateDecisionButtonsState() {
     btnLurk.disabled = true;
     btnBurrow.disabled = true;
     btnDash.disabled = true;
-    decisionState.textContent = "DECISION is nog niet aan de beurt.";
+    decisionStateText.textContent = "DECISION is nog niet aan de beurt.";
     return;
   }
 
@@ -537,7 +634,7 @@ function updateDecisionButtonsState() {
     btnLurk.disabled = true;
     btnBurrow.disabled = true;
     btnDash.disabled = true;
-    decisionState.textContent =
+    decisionStateText.textContent =
       "Je zit niet meer in de Yard en doet niet mee aan deze DECISION.";
     return;
   }
@@ -546,7 +643,7 @@ function updateDecisionButtonsState() {
     btnLurk.disabled = true;
     btnBurrow.disabled = true;
     btnDash.disabled = true;
-    decisionState.textContent =
+    decisionStateText.textContent =
       "Je hebt al eerder DASH gekozen en doet niet meer mee in de Yard.";
     return;
   }
@@ -555,7 +652,7 @@ function updateDecisionButtonsState() {
     btnLurk.disabled = true;
     btnBurrow.disabled = true;
     btnDash.disabled = true;
-    decisionState.textContent = `Je DECISION voor deze ronde is: ${p.decision}.`;
+    decisionStateText.textContent = `Je DECISION voor deze ronde is: ${p.decision}.`;
     return;
   }
 
@@ -565,118 +662,183 @@ function updateDecisionButtonsState() {
   btnDash.disabled = !can;
 
   if (can) {
-    decisionState.textContent =
-      "Kies jouw DECISION: LURK, BURROW of DASH.";
+    decisionStateText.textContent =
+      "Kies jouw DECISION: LURK, HIDE (Burrow) of DASH.";
   } else {
-    decisionState.textContent =
+    decisionStateText.textContent =
       "Je kunt nu geen DECISION kiezen.";
   }
 }
 
-function renderHand() {
-  if (!handPanel) return;
+// ===== HAND UI (ACTIONS) =====
 
-  handPanel.innerHTML = "";
+function renderHand() {
+  if (!actionsStateText) return;
 
   if (!currentPlayer || !currentGame) {
-    handPanel.textContent = "Geen hand geladen.";
-    if (opsTurnInfo) opsTurnInfo.textContent = "";
+    actionsStateText.textContent = "Geen hand geladen.";
+    if (btnHand) btnHand.disabled = true;
+    if (btnPass) btnPass.disabled = true;
     return;
   }
 
   const g = currentGame;
   const p = currentPlayer;
-
-  if (g.status === "finished" || g.phase === "END") {
-    handPanel.textContent =
-      "Het spel is afgelopen – je kunt geen Action Cards meer spelen.";
-    if (opsTurnInfo) {
-      opsTurnInfo.textContent = "Het spel is afgelopen.";
-    }
-    if (btnPass) btnPass.disabled = true;
-    ensureActionFeedbackEl();
-    return;
-  }
-
-  const hand = p.hand || [];
+  const hand = Array.isArray(p.hand) ? p.hand : [];
 
   const canPlayOverall = canPlayActionNow(g, p);
   const myTurnOverall  = isMyOpsTurn(g);
 
   if (!hand.length) {
-    handPanel.textContent = "Je hebt geen Actiekaarten in je hand.";
-    if (opsTurnInfo) {
-      if (g.phase !== "ACTIONS") {
-        opsTurnInfo.textContent = "OPS-fase is nu niet actief.";
-      } else if (!canPlayOverall) {
-        opsTurnInfo.textContent =
-          "Je kunt nu geen Action Cards spelen (niet in de Yard of al gedashed).";
-      } else if (!myTurnOverall) {
-        opsTurnInfo.textContent =
-          "Niet jouw beurt in OPS – wacht tot je weer aan de beurt bent. Je kunt wel PASS kiezen als je aan de beurt bent.";
-      } else {
-        opsTurnInfo.textContent =
-          "Jij bent nu aan de beurt in OPS – je hebt geen kaarten, je kunt alleen PASS kiezen.";
-      }
+    if (g.status === "finished" || g.phase === "END") {
+      actionsStateText.textContent =
+        "Het spel is afgelopen – je kunt geen Action Cards meer spelen.";
+    } else {
+      actionsStateText.textContent = "Je hebt geen Action Cards in je hand.";
     }
-    if (btnPass) {
-      btnPass.disabled = !(canPlayOverall && myTurnOverall);
-    }
-    ensureActionFeedbackEl();
+    if (btnHand) btnHand.disabled = true;
+    if (btnPass) btnPass.disabled = !(canPlayOverall && myTurnOverall);
     return;
   }
 
-  // Simpele tekstweergave per kaart met een Speel-knop
-  const list = document.createElement("div");
-  list.style.display = "flex";
-  list.style.flexDirection = "column";
-  list.style.gap = "0.25rem";
+  if (btnHand) {
+    btnHand.disabled = !canPlayOverall;
+  }
 
-  hand.forEach((card, index) => {
-    const row = document.createElement("div");
-    row.style.display = "flex";
-    row.style.justifyContent = "space-between";
-    row.style.alignItems = "center";
-
-    const label = document.createElement("div");
-    label.textContent = `${index + 1}. ${card.name}`;
-    label.style.fontSize = "0.9rem";
-
-    const btn = document.createElement("button");
-    btn.textContent = "Speel";
-    btn.disabled = !(canPlayOverall && myTurnOverall);
-    btn.addEventListener("click", () => playActionCard(index));
-
-    row.appendChild(label);
-    row.appendChild(btn);
-    list.appendChild(row);
-  });
-
-  handPanel.appendChild(list);
-
-  if (opsTurnInfo) {
-    if (g.phase !== "ACTIONS") {
-      opsTurnInfo.textContent = "OPS-fase is nu niet actief.";
-    } else if (!canPlayOverall) {
-      opsTurnInfo.textContent =
-        "Je kunt nu geen Action Cards spelen (niet in de Yard of al gedashed).";
-    } else if (!myTurnOverall) {
-      opsTurnInfo.textContent =
-        "Niet jouw beurt in OPS – wacht tot je weer aan de beurt bent.";
-    } else {
-      opsTurnInfo.textContent =
-        "Jij bent nu aan de beurt in OPS – speel één kaart of kies PASS.";
-    }
+  if (g.phase !== "ACTIONS") {
+    actionsStateText.textContent =
+      `ACTIONS-fase is nu niet actief. Je hebt ${hand.length} kaart(en) klaarstaan.`;
+  } else if (!canPlayOverall) {
+    actionsStateText.textContent =
+      "Je kunt nu geen Action Cards spelen (niet in de Yard of al DASHED).";
+  } else if (!myTurnOverall) {
+    actionsStateText.textContent =
+      `Je hebt ${hand.length} kaart(en), maar het is nu niet jouw beurt.`;
+  } else {
+    actionsStateText.textContent =
+      `Jij bent aan de beurt – kies een kaart via HAND of kies PASS. Je hebt ${hand.length} kaart(en).`;
   }
 
   if (btnPass) {
     btnPass.disabled = !(canPlayOverall && myTurnOverall);
   }
-
-  ensureActionFeedbackEl();
 }
 
-// === Log helper ===
+function openHandModal() {
+  if (!handModalOverlay || !handCardsGrid) return;
+  if (!currentGame || !currentPlayer) return;
+
+  const g = currentGame;
+  const p = currentPlayer;
+  const hand = Array.isArray(p.hand) ? p.hand : [];
+
+  handCardsGrid.innerHTML = "";
+
+  if (!hand.length) {
+    const msg = document.createElement("p");
+    msg.textContent = "Je hebt geen Action Cards in je hand.";
+    msg.style.fontSize = "0.85rem";
+    msg.style.opacity = "0.85";
+    handCardsGrid.appendChild(msg);
+  } else {
+    hand.forEach((card, idx) => {
+      const wrap = document.createElement("div");
+      wrap.style.display = "flex";
+      wrap.style.flexDirection = "column";
+      wrap.style.gap = "0.25rem";
+      wrap.style.padding = "0.35rem 0.4rem";
+      wrap.style.borderRadius = "0.75rem";
+      wrap.style.background = "rgba(15,23,42,0.9)";
+      wrap.style.border = "1px solid rgba(55,65,81,0.9)";
+
+      const title = document.createElement("div");
+      title.textContent = card.name || `Kaart #${idx + 1}`;
+      title.style.fontSize = "0.85rem";
+      title.style.fontWeight = "500";
+
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "Speel deze kaart";
+      btn.className = "phase-btn phase-btn-primary";
+      btn.style.fontSize = "0.75rem";
+
+      btn.disabled = !(canPlayActionNow(g, p) && isMyOpsTurn(g));
+
+      btn.addEventListener("click", async () => {
+        await playActionCard(idx);
+        closeHandModal();
+      });
+
+      wrap.appendChild(title);
+      wrap.appendChild(btn);
+      handCardsGrid.appendChild(wrap);
+    });
+  }
+
+  handModalOverlay.classList.remove("hidden");
+}
+
+function closeHandModal() {
+  if (!handModalOverlay) return;
+  handModalOverlay.classList.add("hidden");
+}
+
+// ===== LOOT MODAL =====
+
+function openLootModal() {
+  if (!lootModalOverlay || !lootCardsGrid) return;
+  if (!currentPlayer) return;
+
+  const p = currentPlayer;
+  const loot = Array.isArray(p.loot) ? p.loot : [];
+
+  lootCardsGrid.innerHTML = "";
+
+  if (!loot.length) {
+    const msg = document.createElement("p");
+    msg.textContent = "Je hebt nog geen buitkaarten.";
+    msg.style.fontSize = "0.85rem";
+    msg.style.opacity = "0.85";
+    lootCardsGrid.appendChild(msg);
+  } else {
+    loot.forEach((card, idx) => {
+      const wrap = document.createElement("div");
+      wrap.style.display = "flex";
+      wrap.style.flexDirection = "column";
+      wrap.style.gap = "0.2rem";
+      wrap.style.padding = "0.35rem 0.4rem";
+      wrap.style.borderRadius = "0.75rem";
+      wrap.style.background = "rgba(15,23,42,0.9)";
+      wrap.style.border = "1px solid rgba(55,65,81,0.9)";
+
+      const t = card.t || card.type || "Loot";
+      const v = card.v ?? "?";
+
+      const title = document.createElement("div");
+      title.textContent = `${idx + 1}. ${t}`;
+      title.style.fontSize = "0.85rem";
+      title.style.fontWeight = "500";
+
+      const meta = document.createElement("div");
+      meta.textContent = `Waarde: ${v}`;
+      meta.style.fontSize = "0.8rem";
+      meta.style.opacity = "0.85";
+
+      wrap.appendChild(title);
+      wrap.appendChild(meta);
+      lootCardsGrid.appendChild(wrap);
+    });
+  }
+
+  lootModalOverlay.classList.remove("hidden");
+}
+
+function closeLootModal() {
+  if (!lootModalOverlay) return;
+  lootModalOverlay.classList.add("hidden");
+}
+
+// ===== LOGGING HELPER =====
 
 async function logMoveAction(
   game,
@@ -709,7 +871,7 @@ async function logMoveAction(
   });
 }
 
-// Kleine helper voor OPS-doorrotatie
+// OPS-doorrotatie
 function computeNextOpsIndex(game) {
   const order = game.opsTurnOrder || [];
   if (!order.length) return 0;
@@ -718,9 +880,8 @@ function computeNextOpsIndex(game) {
   return (idx + 1) % order.length;
 }
 
-// === MOVE acties ===
+// ===== MOVE-ACTIES =====
 
-// SNATCH: trek uit buitstapel (lootDeck), NIET uit de Sack
 async function performSnatch() {
   if (!gameRef || !playerRef) return;
 
@@ -743,7 +904,7 @@ async function performSnatch() {
     return;
   }
 
-  const card = lootDeck.pop(); // bovenste kaart
+  const card = lootDeck.pop();
   const loot = Array.isArray(player.loot) ? [...player.loot] : [];
   loot.push(card);
 
@@ -858,7 +1019,6 @@ async function performScout() {
     `Je scout Event #${pos}: ` + (ev ? ev.title : eventId || "Onbekend event")
   );
 
-  // Voor deze ronde een persoonlijke preview bijhouden
   await updateDoc(playerRef, {
     scoutPeek: {
       round: game.round || 0,
@@ -942,7 +1102,7 @@ async function performShift() {
   await logMoveAction(game, player, `MOVE_SHIFT_${pos1}<->${pos2}`, "MOVE");
 }
 
-// === DECISION acties ===
+// ===== DECISION ACTIES =====
 
 async function selectDecision(kind) {
   if (!gameRef || !playerRef) return;
@@ -954,7 +1114,6 @@ async function selectDecision(kind) {
   const game = gameSnap.data();
   const player = playerSnap.data();
 
-  // Eerst Scent Check info tonen, als die er is
   await maybeShowScentCheckInfo(game);
 
   const flags = mergeRoundFlags(game);
@@ -1006,7 +1165,7 @@ async function selectDecision(kind) {
   await logMoveAction(game, player, `DECISION_${kind}`, "DECISION");
 }
 
-// === OPS / Action kaarten ===
+// ===== ACTION CARDS / OPS =====
 
 async function playActionCard(index) {
   if (!gameRef || !playerRef) return;
@@ -1034,7 +1193,6 @@ async function playActionCard(index) {
   const card = hand[index];
   const cardName = card.name;
 
-  // Hold Still: opsLocked = true → niemand mag nog actiekaarten spelen
   const flagsBefore = mergeRoundFlags(game);
   if (flagsBefore.opsLocked) {
     alert(
@@ -1046,7 +1204,6 @@ async function playActionCard(index) {
     return;
   }
 
-  // Probeer het effect eerst uit te voeren; alleen bij succes verdwijnt de kaart uit je hand
   let executed = false;
 
   switch (cardName) {
@@ -1104,7 +1261,6 @@ async function playActionCard(index) {
     return;
   }
 
-  // kaart uit de hand halen, loggen en beurt doorgeven
   hand.splice(index, 1);
   await updateDoc(playerRef, { hand });
 
@@ -1156,7 +1312,9 @@ async function passAction() {
   );
 }
 
-// Scatter! – niemand mag Scouten deze ronde
+// ===== CONCRETE ACTION CARD EFFECTS =====
+// (ongewijzigde logica, alleen feedback via setActionFeedback)
+
 async function playScatter(game, player) {
   const flags = mergeRoundFlags(game);
   flags.scatter = true;
@@ -1173,14 +1331,11 @@ async function playScatter(game, player) {
     message: `${player.name || "Speler"} speelt Scatter! – niemand mag Scouten deze ronde.`,
   });
 
-  setActionFeedback(
-    "Scatter! is actief – niemand mag Scouten deze ronde."
-  );
+  setActionFeedback("Scatter! is actief – niemand mag Scouten deze ronde.");
 
   return true;
 }
 
-// Den Signal – 1 Den kleur immuun
 async function playDenSignal(game, player) {
   const colorInput = prompt(
     "Den Signal – welke Den kleur wil je beschermen? (RED / BLUE / GREEN / YELLOW)"
@@ -1216,7 +1371,6 @@ async function playDenSignal(game, player) {
   return true;
 }
 
-// No-Go Zone – blokkeer 1 eventpositie voor Scout
 async function playNoGoZone(game, player) {
   const track = game.eventTrack || [];
   if (!track.length) {
@@ -1258,7 +1412,6 @@ async function playNoGoZone(game, player) {
   return true;
 }
 
-// Kick Up Dust – twee events random wisselen
 async function playKickUpDust(game, player) {
   const flags = mergeRoundFlags(game);
   if (flags.lockEvents) {
@@ -1303,7 +1456,6 @@ async function playKickUpDust(game, player) {
   return true;
 }
 
-// Burrow Beacon – Event Track kan niet meer veranderen
 async function playBurrowBeacon(game, player) {
   const flags = mergeRoundFlags(game);
   flags.lockEvents = true;
@@ -1327,7 +1479,6 @@ async function playBurrowBeacon(game, player) {
   return true;
 }
 
-// Molting Mask – nieuwe Den kleur (simpele digitale variant)
 async function playMoltingMask(game, player) {
   const colors = ["RED", "BLUE", "GREEN", "YELLOW"];
   const current = (player.color || "").toUpperCase();
@@ -1347,14 +1498,11 @@ async function playMoltingMask(game, player) {
     message: `${player.name || "Speler"} speelt Molting Mask – nieuwe Den kleur: ${newColor}.`,
   });
 
-  setActionFeedback(
-    `Molting Mask: je Den kleur is nu ${newColor}.`
-  );
+  setActionFeedback(`Molting Mask: je Den kleur is nu ${newColor}.`);
 
   return true;
 }
 
-// Hold Still – lockt OPS: geen Action Cards meer, alleen PASS
 async function playHoldStill(game, player) {
   const flags = mergeRoundFlags(game);
   flags.opsLocked = true;
@@ -1379,7 +1527,6 @@ async function playHoldStill(game, player) {
   return true;
 }
 
-// Nose for Trouble – voorspel het volgende Event (alfabetische lijst)
 async function playNoseForTrouble(game, player) {
   const track = game.eventTrack || [];
   if (!track.length) {
@@ -1387,7 +1534,6 @@ async function playNoseForTrouble(game, player) {
     return false;
   }
 
-  // Unieke events + titel ophalen en alfabetisch sorteren
   const map = new Map();
   for (const id of track) {
     if (!map.has(id)) {
@@ -1452,14 +1598,12 @@ async function playNoseForTrouble(game, player) {
   return true;
 }
 
-// Scent Check – kijk naar DECISION van 1 speler en koppel voor deze ronde
 async function playScentCheck(game, player) {
   const target = await chooseOtherPlayerPrompt(
     "Scent Check – kies een vos om te besnuffelen"
   );
   if (!target) return false;
 
-  // Directe peek, als er al een DECISION is
   try {
     const pref = doc(db, "games", gameId, "players", target.id);
     const snap = await getDoc(pref);
@@ -1505,7 +1649,6 @@ async function playScentCheck(game, player) {
   return true;
 }
 
-// Follow the Tail – jouw DECISION volgt die van een andere speler
 async function playFollowTail(game, player) {
   const target = await chooseOtherPlayerPrompt(
     "Follow the Tail – kies een vos om te volgen"
@@ -1538,7 +1681,6 @@ async function playFollowTail(game, player) {
   return true;
 }
 
-// Alpha Call – kies een nieuwe Lead Fox
 async function playAlphaCall(game, player) {
   const players = await fetchPlayersForGame();
   const ordered = sortPlayersByJoinOrder(players);
@@ -1582,7 +1724,6 @@ async function playAlphaCall(game, player) {
   return true;
 }
 
-// Pack Tinker – wissel 2 Event-posities naar keuze
 async function playPackTinker(game, player) {
   const flags = mergeRoundFlags(game);
   if (flags.lockEvents) {
@@ -1645,7 +1786,6 @@ async function playPackTinker(game, player) {
   return true;
 }
 
-// Mask Swap – shuffle alle Den-kleuren van vossen in de Yard
 async function playMaskSwap(game, player) {
   const players = await fetchPlayersForGame();
   const inYard = players.filter(isInYardLocal);
@@ -1683,7 +1823,7 @@ async function playMaskSwap(game, player) {
   return true;
 }
 
-// === INIT ===
+// ===== INIT / LISTENERS =====
 
 initAuth(async () => {
   if (!gameId || !playerId) return;
@@ -1702,21 +1842,77 @@ initAuth(async () => {
 
   onSnapshot(playerRef, (snap) => {
     if (!snap.exists()) {
-      if (playerInfoDiv) playerInfoDiv.textContent = "Speler niet gevonden.";
+      if (playerNameEl) playerNameEl.textContent = "Speler niet gevonden.";
       return;
     }
     currentPlayer = { id: snap.id, ...snap.data() };
     renderPlayer();
   });
 
+  // MOVE
   if (btnSnatch) btnSnatch.addEventListener("click", performSnatch);
   if (btnForage) btnForage.addEventListener("click", performForage);
   if (btnScout)  btnScout.addEventListener("click", performScout);
   if (btnShift)  btnShift.addEventListener("click", performShift);
 
-  if (btnLurk)   btnLurk.addEventListener("click", () => selectDecision("LURK"));
-  if (btnBurrow) btnBurrow.addEventListener("click", () => selectDecision("BURROW"));
-  if (btnDash)   btnDash.addEventListener("click", () => selectDecision("DASH"));
+  // DECISION
+  if (btnLurk)
+    btnLurk.addEventListener("click", () => selectDecision("LURK"));
+  if (btnBurrow)
+    btnBurrow.addEventListener("click", () => selectDecision("BURROW"));
+  if (btnDash)
+    btnDash.addEventListener("click", () => selectDecision("DASH"));
 
-  if (btnPass)   btnPass.addEventListener("click", passAction);
+  // ACTIONS
+  if (btnPass) btnPass.addEventListener("click", passAction);
+  if (btnHand) btnHand.addEventListener("click", openHandModal);
+  if (btnLoot) btnLoot.addEventListener("click", openLootModal);
+
+  if (btnLead) {
+    btnLead.addEventListener("click", async () => {
+      if (!currentGame) {
+        alert("Geen game geladen.");
+        return;
+      }
+      const players = await fetchPlayersForGame();
+      const ordered = sortPlayersByJoinOrder(players);
+      const idx =
+        typeof currentGame.leadIndex === "number"
+          ? currentGame.leadIndex
+          : 0;
+      const lead = ordered[idx];
+      if (!lead) {
+        alert("Er is nog geen Lead Fox aangewezen.");
+        return;
+      }
+      alert(`Lead Fox is: ${lead.name || "Vos"} (Den ${lead.color || "?"})`);
+    });
+  }
+
+  if (btnHint) {
+    btnHint.addEventListener("click", () => {
+      alert(
+        "Hint-bot volgt later. Voor nu: probeer jouw buit te maximaliseren zonder te lang in de Yard te blijven…"
+      );
+    });
+  }
+
+  // Modals sluiten
+  if (handModalClose) {
+    handModalClose.addEventListener("click", closeHandModal);
+  }
+  if (handModalOverlay) {
+    handModalOverlay.addEventListener("click", (e) => {
+      if (e.target === handModalOverlay) closeHandModal();
+    });
+  }
+
+  if (lootModalClose) {
+    lootModalClose.addEventListener("click", closeLootModal);
+  }
+  if (lootModalOverlay) {
+    lootModalOverlay.addEventListener("click", (e) => {
+      if (e.target === lootModalOverlay) closeLootModal();
+    });
+  }
 });
