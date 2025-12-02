@@ -723,7 +723,6 @@ function renderHand() {
     btnPass.disabled = !(canPlayOverall && myTurnOverall);
   }
 }
-
 // ==========================================
 // HAND MODAL – ACTION CARDS ALS KLEINE VJ-CARDS
 // ==========================================
@@ -757,19 +756,17 @@ function renderHandModal() {
   }
 
   hand.forEach((card, index) => {
+    // Klikbare kaart als echte vj-card
     const wrapper = document.createElement("button");
     wrapper.type = "button";
     wrapper.className = "vj-card hand-card";
 
-    // Klik op de hele kaart = card spelen
     wrapper.addEventListener("click", () => {
-      // Speel de kaart (bestaande logica)
+      // playActionCard checkt zelf al of je mag spelen
       playActionCard(index);
-      // Modal sluiten na spelen
       closeHandModal();
     });
 
-    // Label onderaan met naam
     const label = document.createElement("div");
     label.className = "hand-card-label";
     label.textContent = card.name || "Action Card";
@@ -818,7 +815,7 @@ function renderLootModal() {
     const label = document.createElement("div");
     label.className = "loot-card-label";
 
-    const type = card.t || "Loot";
+    const type = card.t || card.type || "Loot";
     const val  = card.v ?? "?";
 
     label.textContent = `${index + 1}. ${type} (waarde ${val})`;
@@ -826,120 +823,6 @@ function renderLootModal() {
     wrapper.appendChild(label);
     lootCardsGrid.appendChild(wrapper);
   });
-}
-
-function openHandModal() {
-  if (!handModalOverlay || !handCardsGrid) return;
-  if (!currentGame || !currentPlayer) return;
-
-  const g = currentGame;
-  const p = currentPlayer;
-  const hand = Array.isArray(p.hand) ? p.hand : [];
-
-  handCardsGrid.innerHTML = "";
-
-  if (!hand.length) {
-    const msg = document.createElement("p");
-    msg.textContent = "Je hebt geen Action Cards in je hand.";
-    msg.style.fontSize = "0.85rem";
-    msg.style.opacity = "0.85";
-    handCardsGrid.appendChild(msg);
-  } else {
-    hand.forEach((card, idx) => {
-      const wrap = document.createElement("div");
-      wrap.style.display = "flex";
-      wrap.style.flexDirection = "column";
-      wrap.style.gap = "0.25rem";
-      wrap.style.padding = "0.35rem 0.4rem";
-      wrap.style.borderRadius = "0.75rem";
-      wrap.style.background = "rgba(15,23,42,0.9)";
-      wrap.style.border = "1px solid rgba(55,65,81,0.9)";
-
-      const title = document.createElement("div");
-      title.textContent = card.name || `Kaart #${idx + 1}`;
-      title.style.fontSize = "0.85rem";
-      title.style.fontWeight = "500";
-
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.textContent = "Speel deze kaart";
-      btn.className = "phase-btn phase-btn-primary";
-      btn.style.fontSize = "0.75rem";
-
-      btn.disabled = !(canPlayActionNow(g, p) && isMyOpsTurn(g));
-
-      btn.addEventListener("click", async () => {
-        await playActionCard(idx);
-        closeHandModal();
-      });
-
-      wrap.appendChild(title);
-      wrap.appendChild(btn);
-      handCardsGrid.appendChild(wrap);
-    });
-  }
-
-  handModalOverlay.classList.remove("hidden");
-}
-
-function closeHandModal() {
-  if (!handModalOverlay) return;
-  handModalOverlay.classList.add("hidden");
-}
-
-// ===== LOOT MODAL =====
-
-function openLootModal() {
-  if (!lootModalOverlay || !lootCardsGrid) return;
-  if (!currentPlayer) return;
-
-  const p = currentPlayer;
-  const loot = Array.isArray(p.loot) ? p.loot : [];
-
-  lootCardsGrid.innerHTML = "";
-
-  if (!loot.length) {
-    const msg = document.createElement("p");
-    msg.textContent = "Je hebt nog geen buitkaarten.";
-    msg.style.fontSize = "0.85rem";
-    msg.style.opacity = "0.85";
-    lootCardsGrid.appendChild(msg);
-  } else {
-    loot.forEach((card, idx) => {
-      const wrap = document.createElement("div");
-      wrap.style.display = "flex";
-      wrap.style.flexDirection = "column";
-      wrap.style.gap = "0.2rem";
-      wrap.style.padding = "0.35rem 0.4rem";
-      wrap.style.borderRadius = "0.75rem";
-      wrap.style.background = "rgba(15,23,42,0.9)";
-      wrap.style.border = "1px solid rgba(55,65,81,0.9)";
-
-      const t = card.t || card.type || "Loot";
-      const v = card.v ?? "?";
-
-      const title = document.createElement("div");
-      title.textContent = `${idx + 1}. ${t}`;
-      title.style.fontSize = "0.85rem";
-      title.style.fontWeight = "500";
-
-      const meta = document.createElement("div");
-      meta.textContent = `Waarde: ${v}`;
-      meta.style.fontSize = "0.8rem";
-      meta.style.opacity = "0.85";
-
-      wrap.appendChild(title);
-      wrap.appendChild(meta);
-      lootCardsGrid.appendChild(wrap);
-    });
-  }
-
-  lootModalOverlay.classList.remove("hidden");
-}
-
-function closeLootModal() {
-  if (!lootModalOverlay) return;
-  lootModalOverlay.classList.add("hidden");
 }
 
 // ===== LOGGING HELPER =====
