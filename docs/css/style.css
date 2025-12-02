@@ -738,3 +738,22 @@ input[type="text"] {
   padding-top: 0.9rem;
 }
 
+/* ==========================================
+   VOSSENJACHT GENERIC CARDS (cardRenderer.js)
+   ========================================== */
+
+.vj-card {
+  position: relative;
+  width: var(--card-w);
+  height: var(--card-h); /* 2:3 via jouw vars */
+  border-radius: 12px;
+  overflow: hidden;
+
+  /* 👉 placeholder-art voor alle generieke kaarten */
+  background-image: url("./assets/card_placeholder.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+
+  box-shadow: 0 10px 18px rgba(0, 0, 0, 0.7);
+}
