@@ -1,0 +1,580 @@
+/* ==========================================
+   VOSSENJACHT – PLAYER SCREEN LAYOUT
+   ========================================== */
+
+body.player-body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background: radial-gradient(circle at top, #020617, #020617 40%, #000);
+  color: #e5e7eb;
+}
+
+.player-shell {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0.75rem 0.75rem 1.25rem;
+  box-sizing: border-box;
+}
+
+/* ==========================================
+   HEADER
+   ========================================== */
+
+.player-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.player-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.player-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.player-logo img {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  box-shadow: 0 0 15px rgba(251, 191, 36, 0.7);
+  object-fit: cover;
+}
+
+.player-logo-text {
+  font-size: 0.95rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #facc15;
+}
+
+.player-game-status {
+  font-size: 0.85rem;
+  opacity: 0.9;
+}
+
+.player-header-right {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex: 1;
+}
+
+.player-header-hint {
+  font-size: 0.8rem;
+  opacity: 0.7;
+  text-align: right;
+}
+
+/* ==========================================
+   MAIN GRID
+   ========================================== */
+
+.player-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.player-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* Desktop: 3 kolommen */
+@media (min-width: 900px) {
+  .player-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.1fr);
+    align-items: stretch;
+  }
+}
+
+.player-hero,
+.player-event-panel,
+.player-host-panel {
+  min-width: 0;
+}
+
+/* ==========================================
+   HERO / PLAYER CARD
+   ========================================== */
+
+.hero-card {
+  border-radius: 18px;
+  padding: 0.65rem 0.75rem;
+  box-sizing: border-box;
+  background: radial-gradient(circle at top left, #1e293b, #020617);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.8);
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.hero-top {
+  display: flex;
+  align-items: stretch;
+  gap: 0.55rem;
+}
+
+.hero-avatar {
+  flex: 0 0 auto;
+  width: var(--card-w);
+  height: calc(var(--card-h) * 1.1);
+  border-radius: 12px;
+  overflow: hidden;
+  background: radial-gradient(circle at top, #0f172a, #020617);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.9);
+  position: relative;
+}
+
+/* Als cardRenderer een vj-card in de avatar zet */
+.hero-avatar .vj-card {
+  width: 100%;
+  height: 100%;
+}
+
+.hero-info {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.hero-name {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.hero-den {
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+.hero-status {
+  font-size: 0.8rem;
+  opacity: 0.9;
+}
+
+.hero-score {
+  font-size: 0.8rem;
+  color: #bbf7d0;
+}
+
+/* Loot-meter onderin hero */
+
+.hero-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.25rem;
+}
+
+.loot-meter {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.95);
+  overflow: hidden;
+  border: 1px solid rgba(55, 65, 81, 0.9);
+}
+
+.loot-meter-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #22c55e, #ef4444);
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.9);
+  transition: width 0.25s ease-out;
+}
+
+.loot-summary {
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+
+/* ==========================================
+   EVENT PANEL
+   ========================================== */
+
+.event-card-panel {
+  border-radius: 18px;
+  padding: 0.65rem 0.75rem;
+  box-sizing: border-box;
+  background: radial-gradient(circle at top, #0f172a, #020617);
+  border: 1px dashed rgba(250, 204, 21, 0.8);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.85);
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.event-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.event-panel-title {
+  font-size: 0.8rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #facc15;
+}
+
+.event-current {
+  font-size: 0.9rem;
+  line-height: 1.3;
+}
+
+.event-scout-preview {
+  font-size: 0.8rem;
+  opacity: 0.85;
+  padding: 0.35rem 0.4rem;
+  border-radius: 10px;
+  background: rgba(30, 64, 175, 0.3);
+  border: 1px solid rgba(129, 140, 248, 0.7);
+}
+
+.event-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.15rem;
+}
+
+/* chips voor ronde-flags (Scatter, Burrow Beacon, etc.) */
+.event-flag-chip {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.7);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+/* Kleurvarianten kun je vanuit JS toevoegen:
+   .event-flag-chip--danger, --safe, --info, etc. */
+.event-flag-chip--danger {
+  border-color: rgba(248, 113, 113, 0.9);
+  background: rgba(127, 29, 29, 0.8);
+}
+
+.event-flag-chip--safe {
+  border-color: rgba(52, 211, 153, 0.9);
+  background: rgba(22, 101, 52, 0.8);
+}
+
+/* ==========================================
+   HOST MESSAGE BOARD
+   ========================================== */
+
+.host-board {
+  border-radius: 18px;
+  padding: 0.65rem 0.75rem;
+  box-sizing: border-box;
+  background: radial-gradient(circle at top right, #111827, #020617);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.85);
+}
+
+.host-board-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.host-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: radial-gradient(circle at top, #f97316, #b91c1c);
+  box-shadow: 0 0 16px rgba(248, 113, 113, 0.9);
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* Optioneel: kleine vos-emoji in avatar */
+.host-avatar::after {
+  content: "🦊";
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+}
+
+.host-board-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.host-status-line {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.host-feedback-line {
+  font-size: 0.78rem;
+  opacity: 0.8;
+}
+
+/* ==========================================
+   PHASE PANELS (MOVE / ACTIONS / DECISION)
+   ========================================== */
+
+.player-phases {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.phase-panel {
+  border-radius: 16px;
+  padding: 0.6rem 0.7rem 0.7rem;
+  box-sizing: border-box;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(55, 65, 81, 0.9);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.8);
+  opacity: 0.6;
+  transform: translateY(0);
+  transition: opacity 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease,
+    transform 0.12s ease;
+}
+
+/* Actieve fase highlight */
+.phase-panel.active {
+  opacity: 1;
+  border-color: rgba(129, 140, 248, 0.9);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.8),
+    0 14px 28px rgba(37, 99, 235, 0.6);
+  transform: translateY(-1px);
+}
+
+.phase-panel-header h2 {
+  margin: 0 0 0.15rem;
+  font-size: 0.95rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: #facc15;
+}
+
+.phase-panel-sub {
+  margin: 0;
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.phase-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+/* Op small screens 2 knoppen per rij */
+.phase-btn {
+  flex: 1 1 calc(50% - 0.4rem);
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  padding: 0.45rem 0.2rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-align: center;
+  line-height: 1.2;
+  white-space: normal;
+  word-break: keep-all;
+  transition: transform 0.08s ease, box-shadow 0.08s ease,
+    background 0.12s ease, opacity 0.12s ease;
+}
+
+@media (min-width: 700px) {
+  .phase-btn {
+    flex: 0 0 auto;
+    min-width: 140px;
+  }
+}
+
+.btn-sub {
+  display: block;
+  font-size: 0.7rem;
+  opacity: 0.8;
+}
+
+/* Kleurvarianten */
+
+.phase-btn-primary {
+  background: linear-gradient(135deg, #4f46e5, #22c55e);
+  color: #f9fafb;
+  box-shadow: 0 7px 18px rgba(79, 70, 229, 0.7);
+}
+
+.phase-btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  background: linear-gradient(135deg, #4338ca, #16a34a);
+}
+
+.phase-btn-secondary {
+  background: #0f172a;
+  color: #e5e7eb;
+  border: 1px solid rgba(148, 163, 184, 0.8);
+}
+
+.phase-btn-secondary:hover:not(:disabled) {
+  background: #1f2937;
+  transform: translateY(-1px);
+}
+
+.phase-btn-ghost {
+  background: transparent;
+  color: #9ca3af;
+  border: 1px dashed rgba(148, 163, 184, 0.7);
+}
+
+.phase-btn-ghost:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.9);
+  transform: translateY(-1px);
+}
+
+/* Disabled state */
+
+.phase-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+  transform: none;
+}
+
+/* Fase-status tekst onder knoppen */
+
+.phase-state-text {
+  margin: 0.45rem 0 0;
+  font-size: 0.78rem;
+  opacity: 0.8;
+}
+
+/* ==========================================
+   MODALS (HAND / LOOT)
+   ========================================== */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.9);
+  backdrop-filter: blur(4px);
+}
+
+.modal-box {
+  width: 100%;
+  max-width: 520px;
+  max-height: 80vh;
+  border-radius: 18px;
+  padding: 0.9rem 0.9rem 1rem;
+  box-sizing: border-box;
+  background: #020617;
+  border: 1px solid rgba(129, 140, 248, 0.9);
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.9);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.modal-close {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.4rem;
+  border: none;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 1.4rem;
+  cursor: pointer;
+}
+
+.modal-title {
+  margin: 0.1rem 0 0.1rem;
+  font-size: 1rem;
+}
+
+.modal-subtitle {
+  margin: 0;
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+.modal-content {
+  margin-top: 0.4rem;
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Grid voor kaarten in modals */
+
+#handCardsGrid,
+#lootCardsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.4rem;
+}
+
+/* Stel dat cardRenderer vj-card plaatst in modals */
+#handCardsGrid .vj-card,
+#lootCardsGrid .vj-card {
+  width: 100%;
+  height: auto;
+}
+
+/* Zorg dat de overlay standaard niet zichtbaar is via JS-class .hidden */
+.hidden {
+  display: none !important;
+}
+
+/* ==========================================
+   RESPONSIVE TWEAKS
+   ========================================== */
+
+@media (max-width: 600px) {
+  .player-header {
+    align-items: flex-start;
+  }
+
+  .player-header-hint {
+    text-align: left;
+  }
+
+  .hero-top {
+    flex-direction: row;
+  }
+
+  .hero-avatar {
+    width: calc(var(--card-w) * 0.9);
+    height: calc(var(--card-h) * 0.9);
+  }
+
+  .modal-box {
+    max-width: 100%;
+    margin: 0 0.4rem;
+  }
+}
