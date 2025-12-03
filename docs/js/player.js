@@ -724,12 +724,65 @@ function renderHand() {
   }
 }
 // ==========================================
-// HAND MODAL – ACTION CARDS
+// HAND MODAL – ACTION CARDS ALS VJ-CARDS
 // ==========================================
 
 function openHandModal() {
-  if (!handModalOverlay) return;
-  renderHandModal();
+  if (!handModalOverlay || !handCardsGrid) return;
+  if (!currentGame || !currentPlayer) return;
+
+  const g = currentGame;
+  const p = currentPlayer;
+  const hand = Array.isArray(p.hand) ? p.hand : [];
+
+  handCardsGrid.innerHTML = "";
+
+  if (!hand.length) {
+    const msg = document.createElement("p");
+    msg.textContent = "Je hebt geen Action Cards in je hand.";
+    msg.style.fontSize = "0.85rem";
+    msg.style.opacity = "0.85";
+    handCardsGrid.appendChild(msg);
+
+    handModalOverlay.classList.remove("hidden");
+    return;
+  }
+
+  // Mag je nu überhaupt een kaart spelen?
+  const canPlayNow = canPlayActionNow(g, p) && isMyOpsTurn(g);
+
+  hand.forEach((card, idx) => {
+    // Eén tegel per kaart
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "hand-card-tile";
+    tile.disabled = !canPlayNow;
+
+    // De 'kaart' zelf
+    const cardDiv = document.createElement("div");
+    cardDiv.className = "vj-card hand-card";
+
+    // Label onderaan op de kaart
+    const label = document.createElement("div");
+    label.className = "hand-card-label";
+    label.textContent = card.name || `Kaart #${idx + 1}`;
+
+    cardDiv.appendChild(label);
+    tile.appendChild(cardDiv);
+
+    // Klik = kaart spelen
+    tile.addEventListener("click", async () => {
+      // Nog een check op het moment zelf
+      if (!canPlayActionNow(currentGame, currentPlayer)) return;
+      if (!isMyOpsTurn(currentGame)) return;
+
+      await playActionCard(idx);
+      closeHandModal();
+    });
+
+    handCardsGrid.appendChild(tile);
+  });
+
   handModalOverlay.classList.remove("hidden");
 }
 
@@ -738,86 +791,9 @@ function closeHandModal() {
   handModalOverlay.classList.add("hidden");
 }
 
-function renderHandModal() {
-  if (!handCardsGrid) return;
-
-  handCardsGrid.innerHTML = "";
-
-  if (!currentGame || !currentPlayer) {
-    const msg = document.createElement("p");
-    msg.textContent = "Game of speler niet geladen.";
-    msg.style.fontSize = "0.85rem";
-    msg.style.opacity = "0.85";
-    handCardsGrid.appendChild(msg);
-    return;
-  }
-
-  const g = currentGame;
-  const p = currentPlayer;
-  const hand = Array.isArray(p.hand) ? p.hand : [];
-
-  if (!hand.length) {
-    const msg = document.createElement("p");
-    msg.textContent = "Je hebt geen Action Cards in je hand.";
-    msg.style.fontSize = "0.85rem";
-    msg.style.opacity = "0.85";
-    handCardsGrid.appendChild(msg);
-    return;
-  }
-
-  const canPlayNow = canPlayActionNow(g, p) && isMyOpsTurn(g);
-
-  hand.forEach((card, index) => {
-    const tile = document.createElement("div");
-    tile.className = "hand-card-tile";
-
-    // Kaartplaatje
-    const cardDiv = document.createElement("div");
-    cardDiv.className = "modal-card modal-card-action";
-
-    const label = document.createElement("div");
-    label.className = "modal-card-label";
-    label.textContent = card.name || `Kaart #${index + 1}`;
-    cardDiv.appendChild(label);
-
-    // Naam onder de kaart
-    const name = document.createElement("div");
-    name.className = "hand-card-name";
-    name.textContent = card.name || `Kaart #${index + 1}`;
-
-    // Speel-knop
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "hand-card-play-btn";
-    btn.textContent = "Speel deze kaart";
-    btn.disabled = !canPlayNow;
-
-    btn.addEventListener("click", async () => {
-      await playActionCard(index);
-      closeHandModal();
-    });
-
-    tile.appendChild(cardDiv);
-    tile.appendChild(name);
-    tile.appendChild(btn);
-    handCardsGrid.appendChild(tile);
-  });
-}
-
 // ==========================================
-// LOOT MODAL – BUITKAARTEN
+// LOOT MODAL – BUITKAARTEN ALS VJ-CARDS
 // ==========================================
-
-function openLootModal() {
-  if (!lootModalOverlay) return;
-  renderLootModal();
-  lootModalOverlay.classList.remove("hidden");
-}
-
-function closeLootModal() {
-  if (!lootModalOverlay) return;
-  lootModalOverlay.classList.add("hidden");
-}
 
 function renderLootModal() {
   if (!lootCardsGrid) return;
@@ -835,10 +811,11 @@ function renderLootModal() {
 
   const p = currentPlayer;
 
-  // 1) Probeer echte loot-kaarten
+  // 1) Echte loot-kaarten op de speler
   let loot = Array.isArray(p.loot) ? [...p.loot] : [];
 
-  // 2) Zoniet, maak pseudo-kaarten uit eggs/hens/prize
+  // 2) Als er geen losse loot-kaarten zijn, maak pseudo-kaarten
+  //    van eggs / hens / prize (score)
   if (!loot.length) {
     const eggs  = p.eggs  || 0;
     const hens  = p.hens  || 0;
@@ -853,36 +830,48 @@ function renderLootModal() {
       return;
     }
 
-    if (prize) loot.push({ t: "Prize Hen", v: 3, count: prize });
-    if (hens)  loot.push({ t: "Hen",       v: 2, count: hens  });
-    if (eggs)  loot.push({ t: "Egg",       v: 1, count: eggs  });
+    if (prize > 0) {
+      loot.push({ t: "Prize Hen", v: 3, count: prize });
+    }
+    if (hens > 0) {
+      loot.push({ t: "Hen", v: 2, count: hens });
+    }
+    if (eggs > 0) {
+      loot.push({ t: "Egg", v: 1, count: eggs });
+    }
   }
 
-  loot.forEach((card) => {
+  loot.forEach((card, index) => {
     const tile = document.createElement("div");
     tile.className = "loot-card-tile";
 
     const cardDiv = document.createElement("div");
-    cardDiv.className = "modal-card modal-card-loot";
+    cardDiv.className = "vj-card loot-card";
 
     const label = document.createElement("div");
-    label.className = "modal-card-label";
+    label.className = "loot-card-label";
 
     const type  = card.t || card.type || "Loot";
     const val   = card.v ?? "?";
     const count = card.count || 1;
 
     label.textContent = `${type} x${count} (waarde ${val})`;
+
     cardDiv.appendChild(label);
-
-    const name = document.createElement("div");
-    name.className = "loot-card-name";
-    name.textContent = type;
-
     tile.appendChild(cardDiv);
-    tile.appendChild(name);
     lootCardsGrid.appendChild(tile);
   });
+}
+
+function openLootModal() {
+  if (!lootModalOverlay) return;
+  renderLootModal();
+  lootModalOverlay.classList.remove("hidden");
+}
+
+function closeLootModal() {
+  if (!lootModalOverlay) return;
+  lootModalOverlay.classList.add("hidden");
 }
 
 // ===== LOGGING HELPER =====
