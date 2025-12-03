@@ -723,240 +723,86 @@ function renderHand() {
     btnPass.disabled = !(canPlayOverall && myTurnOverall);
   }
 }
-// ==========================================
-// HAND MODAL – ACTION CARDS (GRID + DETAIL)
-// ==========================================
+/* ==========================================
+   MODAL CONTENT GRID
+   ========================================== */
 
-function renderHandModal() {
-  if (!handCardsGrid) return;
-
-  handCardsGrid.innerHTML = "";
-
-  if (!currentGame || !currentPlayer) {
-    const msg = document.createElement("p");
-    msg.textContent = "Game of speler niet geladen.";
-    msg.style.fontSize = "0.85rem";
-    msg.style.opacity = "0.85";
-    handCardsGrid.appendChild(msg);
-    return;
-  }
-
-  const hand = Array.isArray(currentPlayer.hand) ? currentPlayer.hand : [];
-
-  if (!hand.length) {
-    const msg = document.createElement("p");
-    msg.textContent = "Je hebt geen Action Cards in je hand.";
-    msg.style.fontSize = "0.85rem";
-    msg.style.opacity = "0.85";
-    handCardsGrid.appendChild(msg);
-    return;
-  }
-
-  // GRID: alle kaarten even groot, klik = detail openen
-  hand.forEach((card, index) => {
-    const tile = document.createElement("button");
-    tile.type = "button";
-    tile.className = "hand-card-tile";
-
-    const cardDiv = document.createElement("div");
-    cardDiv.className = "vj-card hand-card";
-
-    const title = document.createElement("div");
-    title.className = "hand-card-title";
-    title.textContent = card.name || `Kaart #${index + 1}`;
-
-    tile.appendChild(cardDiv);
-    tile.appendChild(title);
-
-    tile.addEventListener("click", () => {
-      showHandCardDetail(index);
-    });
-
-    handCardsGrid.appendChild(tile);
-  });
+.modal-content {
+  margin-top: 0.4rem;
+  flex: 1;
+  overflow-y: auto;
 }
 
-// Detailweergave: grote kaart + uitleg + speel-knop
-function showHandCardDetail(index) {
-  if (!handCardsGrid || !currentGame || !currentPlayer) return;
-
-  const hand = Array.isArray(currentPlayer.hand) ? currentPlayer.hand : [];
-  const card = hand[index];
-  if (!card) return;
-
-  handCardsGrid.innerHTML = "";
-
-  const wrapper = document.createElement("div");
-  wrapper.className = "hand-card-detail";
-
-  // Grote kaart
-  const cardDiv = document.createElement("div");
-  cardDiv.className = "vj-card hand-card";
-
-  // Tekstblok
-  const info = document.createElement("div");
-  info.className = "hand-card-detail-text";
-
-  const title = document.createElement("h3");
-  title.textContent = card.name || `Kaart #${index + 1}`;
-
-  const text = document.createElement("p");
-  const desc =
-    card.text ||
-    card.description ||
-    "Digitale uitleg volgt nog. Gebruik voorlopig de fysieke spelregels voor de exacte werking.";
-
-  text.textContent = desc;
-
-  info.appendChild(title);
-  info.appendChild(text);
-
-  // Actieknoppen
-  const actions = document.createElement("div");
-  actions.className = "hand-card-detail-actions";
-
-  const playBtn = document.createElement("button");
-  playBtn.type = "button";
-  playBtn.textContent = "Speel deze kaart";
-  playBtn.className = "phase-btn phase-btn-primary";
-
-  const canPlay =
-    canPlayActionNow(currentGame, currentPlayer) &&
-    isMyOpsTurn(currentGame);
-
-  playBtn.disabled = !canPlay;
-
-  playBtn.addEventListener("click", async () => {
-    await handlePlayHandCard(index);
-  });
-
-  const backBtn = document.createElement("button");
-  backBtn.type = "button";
-  backBtn.textContent = "Terug naar hand";
-  backBtn.className = "phase-btn phase-btn-secondary";
-
-  backBtn.addEventListener("click", () => {
-    renderHandModal();
-  });
-
-  actions.appendChild(playBtn);
-  actions.appendChild(backBtn);
-
-  wrapper.appendChild(cardDiv);
-  wrapper.appendChild(info);
-  wrapper.appendChild(actions);
-
-  handCardsGrid.appendChild(wrapper);
+#handCardsGrid,
+#lootCardsGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  justify-content: flex-start;
 }
 
-// Speel-knop vanuit detail view
-async function handlePlayHandCard(index) {
-  if (!currentGame || !currentPlayer) return;
+/* ==========================================
+   HAND & LOOT KAARTEN IN MODALS
+   ========================================== */
 
-  if (
-    !canPlayActionNow(currentGame, currentPlayer) ||
-    !isMyOpsTurn(currentGame)
-  ) {
-    alert("Je kunt nu geen Action Card spelen.");
-    return;
-  }
-
-  await playActionCard(index);
-  closeHandModal();
+.hand-card-tile,
+.loot-card-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.3rem;
 }
 
-function openHandModal() {
-  if (!handModalOverlay) return;
-  renderHandModal();
-  handModalOverlay.classList.remove("hidden");
+/* De kaart zelf in de modal (los van .vj-card op het bord) */
+.modal-card {
+  width: 110px;
+  aspect-ratio: 2 / 3;
+  border-radius: 12px;
+  position: relative;
+  overflow: hidden;
+  background: radial-gradient(circle at top, #0ea5e9, #22c55e, #020617);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.85);
 }
 
-function closeHandModal() {
-  if (!handModalOverlay) return;
-  handModalOverlay.classList.add("hidden");
+/* Label IN de kaart */
+.modal-card-label {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  padding: 2px 4px;
+  border-radius: 8px;
+  font-size: 0.7rem;
+  text-align: center;
+  background: rgba(15, 23, 42, 0.95);
+  color: #f9fafb;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
 }
 
-// ==========================================
-// LOOT MODAL – BUITKAARTEN (ECHTE + AGGEGEERD)
-// ==========================================
-
-function renderLootModal() {
-  if (!lootCardsGrid) return;
-
-  lootCardsGrid.innerHTML = "";
-
-  if (!currentPlayer) {
-    const msg = document.createElement("p");
-    msg.textContent = "Speler niet geladen.";
-    msg.style.fontSize = "0.85rem";
-    msg.style.opacity = "0.85";
-    lootCardsGrid.appendChild(msg);
-    return;
-  }
-
-  const p = currentPlayer;
-
-  // 1) Probeer echte loot-kaarten
-  let loot = Array.isArray(p.loot) ? [...p.loot] : [];
-
-  // 2) Geen losse kaarten? Gebruik eggs/hens/prize als pseudo-kaarten
-  if (!loot.length) {
-    const eggs  = p.eggs  || 0;
-    const hens  = p.hens  || 0;
-    const prize = p.prize || 0;
-
-    if (!eggs && !hens && !prize) {
-      const msg = document.createElement("p");
-      msg.textContent = "Je hebt nog geen buit verzameld.";
-      msg.style.fontSize = "0.85rem";
-      msg.style.opacity = "0.85";
-      lootCardsGrid.appendChild(msg);
-      return;
-    }
-
-    if (prize > 0) {
-      loot.push({ t: "Prize Hen", v: 3, count: prize });
-    }
-    if (hens > 0) {
-      loot.push({ t: "Hen", v: 2, count: hens });
-    }
-    if (eggs > 0) {
-      loot.push({ t: "Egg", v: 1, count: eggs });
-    }
-  }
-
-  loot.forEach((card, index) => {
-    const tile = document.createElement("div");
-    tile.className = "loot-card-tile";
-
-    const cardDiv = document.createElement("div");
-    cardDiv.className = "vj-card loot-card";
-
-    const title = document.createElement("div");
-    title.className = "loot-card-title";
-
-    const type  = card.t || card.type || "Loot";
-    const val   = card.v ?? "?";
-    const count = card.count || 1;
-
-    // Bv: "Prize Hen x1 (waarde 3)"
-    title.textContent = `${type} x${count} (waarde ${val})`;
-
-    tile.appendChild(cardDiv);
-    tile.appendChild(title);
-    lootCardsGrid.appendChild(tile);
-  });
+/* Teksten onder de kaart */
+.hand-card-name,
+.loot-card-name {
+  font-size: 0.8rem;
+  font-weight: 500;
+  text-align: center;
 }
 
-function openLootModal() {
-  if (!lootModalOverlay) return;
-  renderLootModal();
-  lootModalOverlay.classList.remove("hidden");
+/* Speel-knop onder de Action Card */
+.hand-card-play-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 0.25rem 0.6rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  background: #22c55e;
+  color: #020617;
+  font-weight: 600;
 }
 
-function closeLootModal() {
-  if (!lootModalOverlay) return;
-  lootModalOverlay.classList.add("hidden");
+.hand-card-play-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 // ===== LOGGING HELPER =====
