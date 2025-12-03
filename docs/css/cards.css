@@ -41,3 +41,15 @@
   width: 160px;
 }
 
+/* OVERRIDE – geen groene gradient / overlay meer op vj-card */
+.vj-card {
+  background-color: #020617;   /* neutrale donkere basis */
+  background-image: none;      /* oude gradients uit deze file uitzetten */
+}
+
+/* alle pseudo-overlays uitzetten (we gebruiken echte art/placeholder) */
+.vj-card::before {
+  content: none !important;
+  background: none !important;
+}
+
