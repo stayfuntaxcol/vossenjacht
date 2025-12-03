@@ -603,16 +603,6 @@ body.player-body {
   background-repeat: no-repeat;
 }
 
-/* Fallback achtergrond als er nog geen echte art is */
-.vj-card.hand-card::before,
-.vj-card.loot-card::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(circle at top, #0ea5e9, #22c55e, #020617);
-  opacity: 0.9;
-}
-
 /* Label onderaan OP de kaart */
 .hand-card-label,
 .loot-card-label {
