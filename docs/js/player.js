@@ -71,6 +71,50 @@ const lootModalOverlay = document.getElementById("lootModalOverlay");
 const lootModalClose   = document.getElementById("lootModalClose");
 const lootCardsGrid    = document.getElementById("lootCardsGrid");
 
+/* === Simple Host Icon Mapper (DROP-IN) === */
+const HOST_FILES = {
+  idle_start:   "host_sleeping.png",
+  move_cta:     "host_holdup.png",
+  actions_turn: "host_thumbsup.png",
+  actions_wait: "host_nowwhat_stare.png",
+  decision_cta: "host_holdup.png",
+  reveal:       "host_nowwhat_stare.png",
+  pass:         "host_dontknow.png",
+  success:      "host_muscle_flex.png",
+  scatter:      "host_holdup.png",
+  beacon:       "host_scared_fear.png",
+  ops_locked:   "host_jerkmove.png",
+  loot_big:     "host_rich_money.png",
+  caught:       "host_sad_defeated.png",
+  end:          "host_sad_defeated.png",
+};
+
+const HOST_DEFAULT_FILE = "host_thumbsup.png";
+
+function setHost(kind, text){
+  const statusEl = document.getElementById("hostStatusLine");
+  const sticker  = document.getElementById("hostSticker");
+  const bar      = document.getElementById("hostBar");
+
+  if (statusEl) statusEl.textContent = text || "";
+
+  const file = HOST_FILES[kind] || HOST_DEFAULT_FILE;
+  if (sticker){
+    const fallback = `./assets/${HOST_DEFAULT_FILE}`;
+    sticker.onerror = () => { sticker.onerror = null; sticker.src = fallback; };
+    sticker.src = `./assets/${file}`;
+    sticker.alt = `Host: ${kind}`;
+  }
+  if (bar){
+    bar.classList.remove("flash"); void bar.offsetWidth; bar.classList.add("flash");
+  }
+}
+
+// preload (optioneel, lichtgewicht)
+(function preloadHostIcons(){
+  Object.values(HOST_FILES).forEach(fn => { const i = new Image(); i.src = `./assets/${fn}`; });
+})();
+
 // ===== Host/Coach – onderbalk met stickers =====
 const HOST_BASE = "./assets/";
 const HOST_DEFAULT = "host_thumbsup.png";
@@ -466,17 +510,15 @@ function updatePhasePanels(game, player) {
   phaseDecisionPanel.classList.remove("active");
 
   if (!game) {
-    if (hostStatusLine) setHostStatus("Wachten op game-data…");
+    setHost("idle_start", "Wachten op game-data…");
     return;
   }
 
-  const phase = game.phase || "";
+  const phase  = game.phase  || "";
   const status = game.status || "";
 
   if (status === "finished" || phase === "END") {
-    if (hostStatusLine) {
-      setHostStatus("Raid is afgelopen – er worden geen keuzes meer gevraagd.");
-    }
+    setHost("end", "Raid is afgelopen – er worden geen keuzes meer gevraagd.");
     updateMoveButtonsState();
     updateDecisionButtonsState();
     renderHand();
@@ -485,51 +527,43 @@ function updatePhasePanels(game, player) {
 
   if (phase === "MOVE") {
     phaseMovePanel.classList.add("active");
-    if (hostStatusLine) {
-      if (player && canMoveNow(game, player)) {
-        setHostStatus("MOVE-fase – kies één actie: SNATCH / FORAGE / SCOUT / SHIFT.");
-      } else {
-        setHostStatus("MOVE-fase – je kunt nu geen MOVE doen (al bewogen, niet in de Yard of al DASHED.");
-      }
+    if (player && canMoveNow(game, player)) {
+      setHost("move_cta", "MOVE – kies: SNATCH / FORAGE / SCOUT / SHIFT.");
+    } else {
+      setHost("actions_wait", "MOVE – je kunt nu geen MOVE doen.");
     }
   } else if (phase === "ACTIONS") {
     phaseActionsPanel.classList.add("active");
-    if (hostStatusLine) {
-      if (player && canPlayActionNow(game, player)) {
-        if (isMyOpsTurn(game)) {
-          setHostStatus("ACTIONS-fase – jij bent aan de beurt. Speel een kaart via HAND of kies PASS.");
-        } else {
-          setHostStatus("ACTIONS-fase – wacht tot je weer aan de beurt bent.");
-        }
+    if (player && canPlayActionNow(game, player)) {
+      if (isMyOpsTurn(game)) {
+        setHost("actions_turn", "ACTIONS – jij bent aan de beurt. Speel een kaart of PASS.");
       } else {
-        setHostStatus("ACTIONS-fase – je doet niet (meer) mee in deze ronde (niet in de Yard of al DASHED).");
+        setHost("actions_wait", "ACTIONS – wacht tot je aan de beurt bent.");
       }
+    } else {
+      setHost("actions_wait", "ACTIONS – je doet niet (meer) mee in deze ronde.");
     }
   } else if (phase === "DECISION") {
     phaseDecisionPanel.classList.add("active");
-    if (hostStatusLine) {
-      if (player && canDecideNow(game, player)) {
-        setHostStatus("DECISION-fase – kies LURK (blijven), HIDE (Burrow) of DASH (wegrennen).");
-      } else if (player && player.decision) {
-        setHostStatus(`DECISION-fase – jouw keuze staat al vast: ${player.decision}.`);
-      } else {
-        setHostStatus("DECISION-fase – je doet niet mee (niet in de Yard of al DASHED).");
-      }
+    if (player && canDecideNow(game, player)) {
+      setHost("decision_cta", "DECISION – kies LURK / HIDE (Burrow) / DASH.");
+    } else if (player && player.decision) {
+      setHost("actions_wait", `DECISION – jouw keuze staat al vast: ${player.decision}.`);
+    } else {
+      setHost("actions_wait", "DECISION – je doet niet mee.");
     }
   } else if (phase === "REVEAL") {
-    if (hostStatusLine) {
-      setHostStatus("REVEAL – Event wordt toegepast. Kijk mee op het grote scherm.");
-    }
+    setHost("reveal", "REVEAL – Event wordt toegepast. Kijk mee op het grote scherm.");
   } else {
-    if (hostStatusLine) {
-      setHostStatus("Wacht op de volgende ronde of een nieuwe raid.");
-    }
+    // lobby/new/setup valt hier meestal onder voordat een ronde start
+    setHost("idle_start", "Wacht tot de host de raid start…");
   }
 
   updateMoveButtonsState();
   updateDecisionButtonsState();
   renderHand();
 }
+
 
 function renderGame() {
   if (!currentGame || !gameStatusDiv) return;
@@ -1327,7 +1361,7 @@ async function playActionCard(index) {
   hand.splice(index, 1);
   await updateDoc(playerRef, { hand });
   await logMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
-  hostSay("action_success");
+  setHost("success", `Kaart gespeeld: ${cardName}`);
 
   const nextIndex = computeNextOpsIndex(game);
   await updateDoc(gameRef, { opsTurnIndex: nextIndex, opsConsecutivePasses: 0 });
@@ -1353,7 +1387,8 @@ async function passAction() {
 
   await updateDoc(gameRef, { opsTurnIndex: nextIndex, opsConsecutivePasses: newPasses });
   await logMoveAction(game, player, "ACTION_PASS", "ACTIONS");
-  setActionFeedback("Je hebt PASS gekozen. Als de ronde omgaat en iemand weer een kaart speelt, kun je later opnieuw meedoen.");
+  setHost("PASS – je slaat deze beurt over. Als de ronde omgaat en iemand weer een kaart speelt, kun je later opnieuw meedoen.");
+
 }
 
 // ===== CONCRETE ACTION CARD EFFECTS =====
@@ -1365,6 +1400,7 @@ async function playScatter(game, player) {
   await addLog(gameId, { round: game.round || 0, phase: "ACTIONS", kind: "ACTION", playerId,
     message: `${player.name || "Speler"} speelt Scatter! – niemand mag Scouten deze ronde.` });
   setActionFeedback("Scatter! is actief – niemand mag Scouten deze ronde.");
+  setHost("scatter", "Scatter! – niemand mag SCOUTen.");
   return true;
 }
 
@@ -1434,6 +1470,7 @@ async function playBurrowBeacon(game, player) {
   await addLog(gameId, { round: game.round || 0, phase: "ACTIONS", kind: "ACTION", playerId,
     message: `${player.name || "Speler"} speelt Burrow Beacon – Event Track kan deze ronde niet meer veranderen.` });
   setActionFeedback("Burrow Beacon: de Event Track is gelocked – geen SHIFT of schudden meer deze ronde.");
+  setHost("beacon", "Burrow Beacon – Event Track gelocked.");
   return true;
 }
 
@@ -1458,6 +1495,7 @@ async function playHoldStill(game, player) {
   await addLog(gameId, { round: game.round || 0, phase: "ACTIONS", kind: "ACTION", playerId,
     message: `${player.name || "Speler"} speelt Hold Still – geen nieuwe Action Cards meer deze ronde, alleen PASS.` });
   setActionFeedback("Hold Still is actief – er mogen geen Action Cards meer gespeeld worden, alleen PASS.");
+  setHost("Hold Still – alleen PASS is toegestaan deze ronde.");
   return true;
 }
 
