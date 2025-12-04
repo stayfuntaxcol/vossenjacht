@@ -1624,9 +1624,6 @@ initAuth(async () => {
   gameRef = doc(db, "games", gameId);
   playerRef = doc(db, "games", gameId, "players", playerId);
 
-  // Host UI init
-  hostInitUI();
-
   // Snapshots met delta-hosthooks
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
