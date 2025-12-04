@@ -2086,9 +2086,6 @@ ensureHostCoachMount(); preloadHost();
 // na succesvolle actie
 hostSay("action_success");
 
-// grote loot
-if (sack.total >= 8) hostSay("loot_big");
-
 // voor event reveal
 hostSay("pre_reveal");
 
