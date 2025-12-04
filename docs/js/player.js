@@ -78,6 +78,112 @@ const lootModalOverlay = document.getElementById("lootModalOverlay");
 const lootModalClose   = document.getElementById("lootModalClose");
 const lootCardsGrid    = document.getElementById("lootCardsGrid");
 
+// ===== Host/Coach – stickers =====
+const HOST_BASE = "./assets/";
+const HOST_DEFAULT = "host_thumbsup.png";
+
+// 3a) Sticker sets per intent (gebruik exact jouw bestandsnamen)
+export const HOST_INTENTS = {
+  confirm: ["host_thumbsup.png","host_easypeazy.png"],
+  power:   ["host_muscle_flex.png","host_rich_money.png"],
+  tip:     ["host_holdup.png","host_nowwhat_stare.png","host_oops_nowwhat.png","host_drink_coffee.png","host_toldyouso.png","host_difficult_sweat.png"],
+  warn:    ["host_scared_fear.png","host_disbelief.png","host_jerkmove.png"],
+  fail:    ["host_sad_defeated.png","host_reallysad_tears.png","host_crying_tears.png","host_knockedout.png","host_dead.png","host_discusted_flies.png"],
+  fun:     ["host_lol_tears.png","host_dontknow.png","host_oops_saint.png","host_inlove.png","host_loveyou_kiss.png"],
+  idle:    ["host_sleeping.png"]
+};
+
+// 3b) Triggers → intent
+export const HOST_TRIGGERS = {
+  action_success: "confirm",
+  action_buff: "power",
+  loot_big: "power",
+  need_choice: "tip",
+  pre_reveal: "tip",
+  timeout: "idle",
+  beacon_on: "warn",
+  dog_near: "warn",
+  bad_map: "warn",
+  paint_bomb: "fail",
+  caught: "fail",
+  round_lost: "fail",
+  funny: "fun",
+  no_info: "fun"
+};
+
+// 3c) Mount (1x aanroepen bij init)
+export function ensureHostCoachMount() {
+  if (document.getElementById("hostCoach")) return;
+  const wrap = document.createElement("div");
+  wrap.id = "hostCoach";
+  wrap.className = "host-coach";
+  wrap.innerHTML = `<img class="host-img" alt="">
+                    <div class="host-bubble" role="status" aria-live="polite"></div>`;
+  document.body.appendChild(wrap);
+}
+
+// 3d) API
+const HOST_PRIOR = { warn:5, fail:5, confirm:4, power:4, tip:3, fun:2, idle:1 };
+let _hostState = { until:0, prior:0 };
+
+export function hostSay(trigger, text) {
+  ensureHostCoachMount();
+  const el = document.getElementById("hostCoach");
+  const now = Date.now();
+
+  const intent = HOST_TRIGGERS[trigger] || "tip";
+  const prior = HOST_PRIOR[intent] || 1;
+
+  // anti-spam: alleen overschrijven bij gelijke/hogere prioriteit of als timeout voorbij is
+  if (now < _hostState.until && prior < _hostState.prior) return;
+
+  const img = el.querySelector(".host-img");
+  const bubble = el.querySelector(".host-bubble");
+  const file = pickHostSticker(intent);
+
+  img.src = HOST_BASE + file;
+  img.alt = "Host: " + intent;
+  bubble.textContent = text || presetText(trigger);
+
+  el.classList.add("show");
+  clearTimeout(el._t);
+  el._t = setTimeout(()=> el.classList.remove("show"), 3600);
+
+  _hostState = { until: now + 2200, prior };
+}
+
+function pickHostSticker(intent) {
+  const list = HOST_INTENTS[intent] || HOST_INTENTS.tip;
+  return (list[Math.floor(Math.random()*list.length)]) || HOST_DEFAULT;
+}
+
+function presetText(trigger) {
+  const T = {
+    action_success:"Lekker! Slim gespeeld.",
+    action_buff:"Power-up geactiveerd.",
+    loot_big:"Zak puilt uit — top!",
+    need_choice:"Kies je zet…",
+    pre_reveal:"Even stil — reveal komt.",
+    timeout:"Koffiepauze?",
+    beacon_on:"Alarm aan! Snel en stil.",
+    dog_near:"Hond dichtbij — oppassen.",
+    bad_map:"Kaart klopt niet…",
+    paint_bomb:"Au — zak gereset.",
+    caught:"Gepakt! Volgende keer anders.",
+    round_lost:"Dawn. Nieuwe ronde.",
+    funny:"Hahaha—die zag ik niet.",
+    no_info:"Geen data; gok slim."
+  };
+  return T[trigger] ?? "Ik denk mee…";
+}
+
+// 3e) Preload (optioneel, bij start)
+export function preloadHost(){
+  const files = new Set(Object.values(HOST_INTENTS).flat());
+  files.forEach(fn => { const i = new Image(); i.src = HOST_BASE + fn; });
+}
+
+
 // ===== FIRESTORE REFS / STATE =====
 
 let gameRef = null;
@@ -1974,6 +2080,39 @@ initAuth(async () => {
     renderPlayer();
   });
 
+// bij player-init
+ensureHostCoachMount(); preloadHost();
+
+// na succesvolle actie
+hostSay("action_success");
+
+// grote loot
+if (sack.total >= 8) hostSay("loot_big");
+
+// voor event reveal
+hostSay("pre_reveal");
+
+// beacon ON
+if (game.beaconOn) hostSay("beacon_on");
+
+// hond dichtbij
+if (dogDistance <= 1) hostSay("dog_near");
+
+// paint-bomb
+if (event.id === "PAINT_BOMB_NEST") hostSay("paint_bomb");
+
+// speler gepakt
+if (player.caught) hostSay("caught");
+
+// ronde voorbij (rooster==3)
+if (game.roosterCount === 3) hostSay("round_lost");
+
+// geen input 25s
+let idleT; window.addEventListener("mousemove", resetIdle);
+window.addEventListener("keydown", resetIdle);
+function resetIdle(){ clearTimeout(idleT); idleT=setTimeout(()=>hostSay("timeout"), 25000); }
+
+  
   // MOVE
   if (btnSnatch) btnSnatch.addEventListener("click", performSnatch);
   if (btnForage) btnForage.addEventListener("click", performForage);
