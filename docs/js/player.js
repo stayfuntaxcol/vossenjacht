@@ -1650,6 +1650,20 @@ initAuth(async () => {
     }
     const newPlayer = { id: snap.id, ...snap.data() };
 
+  // Init van de nieuwe Host-balk (sticker + tekst)
+function hostInitUI() {
+  // zorg dat de onderbalk en assets klaarstaan
+  ensureHostCoachMount();
+  preloadHost();
+
+  // begintekst in de nieuwe balk
+  const s = document.getElementById("hostStatusLine");
+  const f = document.getElementById("hostFeedbackLine");
+  if (s) s.textContent = "Wachten tot de host de raid start…";
+  if (f) f.textContent = "";
+}
+
+    
     // host hooks op player-change (caught e.d.)
     applyHostHooks(currentGame, currentGame, prevPlayer, newPlayer, null);
 
