@@ -1,18 +1,11 @@
 // VOSSENJACHT player.js – nieuwe UI: fase-panels + loot-meter + Host/Coach
+
 import { initAuth } from "./firebase.js";
 import { addLog } from "./log.js";
 import { getEventById } from "./cards.js";
 import {
-  getFirestore,
-  doc,
-  getDoc,
-  onSnapshot,
-  updateDoc,
-  collection,
-  addDoc,
-  serverTimestamp,
-  arrayUnion,
-  getDocs,
+  getFirestore, doc, getDoc, onSnapshot, updateDoc,
+  collection, addDoc, serverTimestamp, arrayUnion, getDocs, setDoc
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const db = getFirestore();
@@ -473,7 +466,7 @@ function updatePhasePanels(game, player) {
   phaseDecisionPanel.classList.remove("active");
 
   if (!game) {
-    if (hostStatusLine) setHostStatus= "Wachten op game-data…";
+    if (hostStatusLine) setHostStatus("Wachten op game-data…");
     return;
   }
 
@@ -482,7 +475,7 @@ function updatePhasePanels(game, player) {
 
   if (status === "finished" || phase === "END") {
     if (hostStatusLine) {
-      setHostStatus= "Raid is afgelopen – er worden geen keuzes meer gevraagd.";
+      setHostStatus("Raid is afgelopen – er worden geen keuzes meer gevraagd.");
     }
     updateMoveButtonsState();
     updateDecisionButtonsState();
@@ -494,9 +487,9 @@ function updatePhasePanels(game, player) {
     phaseMovePanel.classList.add("active");
     if (hostStatusLine) {
       if (player && canMoveNow(game, player)) {
-        setHostStatus= "MOVE-fase – kies één actie: SNATCH / FORAGE / SCOUT / SHIFT.";
+        setHostStatus("MOVE-fase – kies één actie: SNATCH / FORAGE / SCOUT / SHIFT.");
       } else {
-        setHostStatus= "MOVE-fase – je kunt nu geen MOVE doen (al bewogen, niet in de Yard of al DASHED).";
+        setHostStatus("MOVE-fase – je kunt nu geen MOVE doen (al bewogen, niet in de Yard of al DASHED.");
       }
     }
   } else if (phase === "ACTIONS") {
@@ -504,32 +497,32 @@ function updatePhasePanels(game, player) {
     if (hostStatusLine) {
       if (player && canPlayActionNow(game, player)) {
         if (isMyOpsTurn(game)) {
-          setHostStatus= "ACTIONS-fase – jij bent aan de beurt. Speel een kaart via HAND of kies PASS.";
+          setHostStatus("ACTIONS-fase – jij bent aan de beurt. Speel een kaart via HAND of kies PASS.");
         } else {
-          setHostStatus= "ACTIONS-fase – wacht tot je weer aan de beurt bent.";
+          setHostStatus("ACTIONS-fase – wacht tot je weer aan de beurt bent.");
         }
       } else {
-        setHostStatus= "ACTIONS-fase – je doet niet (meer) mee in deze ronde (niet in de Yard of al DASHED).";
+        setHostStatus("ACTIONS-fase – je doet niet (meer) mee in deze ronde (niet in de Yard of al DASHED).");
       }
     }
   } else if (phase === "DECISION") {
     phaseDecisionPanel.classList.add("active");
     if (hostStatusLine) {
       if (player && canDecideNow(game, player)) {
-        setHostStatus= "DECISION-fase – kies LURK (blijven), HIDE (Burrow) of DASH (wegrennen).";
+        setHostStatus("DECISION-fase – kies LURK (blijven), HIDE (Burrow) of DASH (wegrennen).");
       } else if (player && player.decision) {
-        setHostStatus= `DECISION-fase – jouw keuze staat al vast: ${player.decision}.`;
+        setHostStatus(`DECISION-fase – jouw keuze staat al vast: ${player.decision}.`);
       } else {
-        setHostStatus= "DECISION-fase – je doet niet mee (niet in de Yard of al DASHED).";
+        setHostStatus("DECISION-fase – je doet niet mee (niet in de Yard of al DASHED).");
       }
     }
   } else if (phase === "REVEAL") {
     if (hostStatusLine) {
-      setHostStatus= "REVEAL – Event wordt toegepast. Kijk mee op het grote scherm.";
+      setHostStatus("REVEAL – Event wordt toegepast. Kijk mee op het grote scherm.");
     }
   } else {
     if (hostStatusLine) {
-      setHostStatus= "Wacht op de volgende ronde of een nieuwe raid.";
+      setHostStatus("Wacht op de volgende ronde of een nieuwe raid.");
     }
   }
 
@@ -1617,6 +1610,30 @@ async function playMaskSwap(game, player) {
 }
 
 // ===== INIT / LISTENERS =====
+
+async function ensurePlayerDoc() {
+  if (!playerRef) return;
+  const snap = await getDoc(playerRef);
+  if (snap.exists()) return;
+
+  // Minimale velden die je code al verwacht
+  const seed = {
+    name: "Vos",
+    joinOrder: Date.now(),
+    inYard: true,
+    dashed: false,
+    hand: [],
+    loot: [],
+    eggs: 0,
+    hens: 0,
+    prize: 0,
+    score: 0,
+    color: null,
+    decision: null,
+    burrowUsed: false
+  };
+  await setDoc(playerRef, seed, { merge: true });
+}
 
 initAuth(async () => {
   if (!gameId || !playerId) return;
