@@ -2089,9 +2089,6 @@ hostSay("action_success");
 // voor event reveal
 hostSay("pre_reveal");
 
-// hond dichtbij
-if (dogDistance <= 1) hostSay("dog_near");
-
 // paint-bomb
 if (event.id === "PAINT_BOMB_NEST") hostSay("paint_bomb");
 
