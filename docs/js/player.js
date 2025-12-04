@@ -2089,9 +2089,6 @@ hostSay("action_success");
 // voor event reveal
 hostSay("pre_reveal");
 
-// beacon ON
-if (game.beaconOn) hostSay("beacon_on");
-
 // hond dichtbij
 if (dogDistance <= 1) hostSay("dog_near");
 
