@@ -105,6 +105,22 @@ function pickHostSticker(intent){
   const list = HOST_INTENTS[intent] || HOST_INTENTS.tip;
   return (list[Math.floor(Math.random()*list.length)]) || HOST_DEFAULT;
 }
+function setHostStatus(text) {
+  const el = document.getElementById("hostStatusLine");
+  if (el) el.textContent = text || "";
+}
+
+function setHostFeedback(text) {
+  const el = document.getElementById("hostFeedbackLine");
+  if (el) el.textContent = text || "";
+}
+
+// (optioneel) legacy shim: als ergens nog oldMessenger() of msg() wordt geroepen
+window.msg = function(text, kind = "status") {
+  if (kind === "feedback") setHostFeedback(text);
+  else setHostStatus(text);
+};
+
 function presetText(trigger){
   const T = {
     action_success:"Lekker! Slim gespeeld.",
@@ -457,7 +473,7 @@ function updatePhasePanels(game, player) {
   phaseDecisionPanel.classList.remove("active");
 
   if (!game) {
-    if (hostStatusLine) hostStatusLine.textContent = "Wachten op game-data…";
+    if (hostStatusLine) setHostStatus= "Wachten op game-data…";
     return;
   }
 
@@ -466,7 +482,7 @@ function updatePhasePanels(game, player) {
 
   if (status === "finished" || phase === "END") {
     if (hostStatusLine) {
-      hostStatusLine.textContent = "Raid is afgelopen – er worden geen keuzes meer gevraagd.";
+      setHostStatus= "Raid is afgelopen – er worden geen keuzes meer gevraagd.";
     }
     updateMoveButtonsState();
     updateDecisionButtonsState();
@@ -478,9 +494,9 @@ function updatePhasePanels(game, player) {
     phaseMovePanel.classList.add("active");
     if (hostStatusLine) {
       if (player && canMoveNow(game, player)) {
-        hostStatusLine.textContent = "MOVE-fase – kies één actie: SNATCH / FORAGE / SCOUT / SHIFT.";
+        setHostStatus= "MOVE-fase – kies één actie: SNATCH / FORAGE / SCOUT / SHIFT.";
       } else {
-        hostStatusLine.textContent = "MOVE-fase – je kunt nu geen MOVE doen (al bewogen, niet in de Yard of al DASHED).";
+        setHostStatus= "MOVE-fase – je kunt nu geen MOVE doen (al bewogen, niet in de Yard of al DASHED).";
       }
     }
   } else if (phase === "ACTIONS") {
@@ -488,32 +504,32 @@ function updatePhasePanels(game, player) {
     if (hostStatusLine) {
       if (player && canPlayActionNow(game, player)) {
         if (isMyOpsTurn(game)) {
-          hostStatusLine.textContent = "ACTIONS-fase – jij bent aan de beurt. Speel een kaart via HAND of kies PASS.";
+          setHostStatus= "ACTIONS-fase – jij bent aan de beurt. Speel een kaart via HAND of kies PASS.";
         } else {
-          hostStatusLine.textContent = "ACTIONS-fase – wacht tot je weer aan de beurt bent.";
+          setHostStatus= "ACTIONS-fase – wacht tot je weer aan de beurt bent.";
         }
       } else {
-        hostStatusLine.textContent = "ACTIONS-fase – je doet niet (meer) mee in deze ronde (niet in de Yard of al DASHED).";
+        setHostStatus= "ACTIONS-fase – je doet niet (meer) mee in deze ronde (niet in de Yard of al DASHED).";
       }
     }
   } else if (phase === "DECISION") {
     phaseDecisionPanel.classList.add("active");
     if (hostStatusLine) {
       if (player && canDecideNow(game, player)) {
-        hostStatusLine.textContent = "DECISION-fase – kies LURK (blijven), HIDE (Burrow) of DASH (wegrennen).";
+        setHostStatus= "DECISION-fase – kies LURK (blijven), HIDE (Burrow) of DASH (wegrennen).";
       } else if (player && player.decision) {
-        hostStatusLine.textContent = `DECISION-fase – jouw keuze staat al vast: ${player.decision}.`;
+        setHostStatus= `DECISION-fase – jouw keuze staat al vast: ${player.decision}.`;
       } else {
-        hostStatusLine.textContent = "DECISION-fase – je doet niet mee (niet in de Yard of al DASHED).";
+        setHostStatus= "DECISION-fase – je doet niet mee (niet in de Yard of al DASHED).";
       }
     }
   } else if (phase === "REVEAL") {
     if (hostStatusLine) {
-      hostStatusLine.textContent = "REVEAL – Event wordt toegepast. Kijk mee op het grote scherm.";
+      setHostStatus= "REVEAL – Event wordt toegepast. Kijk mee op het grote scherm.";
     }
   } else {
     if (hostStatusLine) {
-      hostStatusLine.textContent = "Wacht op de volgende ronde of een nieuwe raid.";
+      setHostStatus= "Wacht op de volgende ronde of een nieuwe raid.";
     }
   }
 
@@ -529,6 +545,30 @@ function renderGame() {
 
   gameStatusDiv.textContent = `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
 
+  if (!currentGame) {
+  setHostStatus("Verbinding maken met het spel…");
+} else {
+  const g = currentGame;
+  if (g.status === "lobby" || g.status === "new" || g.phase === "SETUP") {
+    setHostStatus("Wachten tot de host de raid start…");
+  } else if (g.phase === "MOVE") {
+    setHostStatus("MOVE-fase – kies SNATCH / FORAGE / SCOUT / SHIFT.");
+  } else if (g.phase === "ACTIONS") {
+    setHostStatus(isMyOpsTurn(g)
+      ? "ACTIONS-fase – jij bent aan de beurt. Speel een kaart of kies PASS."
+      : "ACTIONS-fase – wacht tot jij aan de beurt bent.");
+  } else if (g.phase === "DECISION") {
+    setHostStatus("DECISION-fase – kies LURK / BURROW / DASH.");
+  } else if (g.phase === "REVEAL") {
+    setHostStatus("REVEAL – Event wordt toegepast.");
+  } else if (g.status === "finished" || g.phase === "END") {
+    setHostStatus("Raid afgelopen – bekijk het scorebord op het Community Board.");
+  } else {
+    setHostStatus("Even geduld…");
+  }
+}
+
+  
   // Spel afgelopen
   if (g.status === "finished" || g.phase === "END") {
     setActionFeedback("Het spel is afgelopen – het scorebord staat op het Community Board.");
