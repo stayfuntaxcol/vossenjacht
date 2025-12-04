@@ -78,7 +78,7 @@ const lootModalOverlay = document.getElementById("lootModalOverlay");
 const lootModalClose   = document.getElementById("lootModalClose");
 const lootCardsGrid    = document.getElementById("lootCardsGrid");
 
-// ===== Host/Coach – stickers (bestanden in ./assets/) =====
+// ===== Host/Coach – onderbalk met stickers =====
 const HOST_BASE = "./assets/";
 const HOST_DEFAULT = "host_thumbsup.png";
 
@@ -91,78 +91,21 @@ export const HOST_INTENTS = {
   fun:     ["host_lol_tears.png","host_dontknow.png","host_oops_saint.png","host_inlove.png","host_loveyou_kiss.png"],
   idle:    ["host_sleeping.png"]
 };
-
 export const HOST_TRIGGERS = {
-  action_success: "confirm",
-  action_buff: "power",
-  loot_big: "power",
-  need_choice: "tip",
-  pre_reveal: "tip",
-  timeout: "idle",
-  beacon_on: "warn",
-  dog_near: "warn",
-  bad_map: "warn",
-  paint_bomb: "fail",
-  caught: "fail",
-  round_lost: "fail",
-  funny: "fun",
-  no_info: "fun"
+  action_success:"confirm", action_buff:"power", loot_big:"power",
+  need_choice:"tip", pre_reveal:"tip", timeout:"idle",
+  beacon_on:"warn", dog_near:"warn", bad_map:"warn",
+  paint_bomb:"fail", caught:"fail", round_lost:"fail",
+  funny:"fun", no_info:"fun"
 };
-
-export function ensureHostCoachMount() {
-  if (document.getElementById("hostCoach")) return;
-  const wrap = document.createElement("div");
-  wrap.id = "hostCoach";
-  wrap.className = "host-coach";
-  wrap.innerHTML = `<img class="host-img" alt="">
-                    <div class="host-bubble" role="status" aria-live="polite"></div>`;
-  document.body.appendChild(wrap);
-}
-
 const HOST_PRIOR = { warn:5, fail:5, confirm:4, power:4, tip:3, fun:2, idle:1 };
-let _hostState = { until:0, prior:0 };
+let _hostGate = { until:0, prior:0 };
 
-export function hostSay(trigger, text) {
-  try {
-    ensureHostCoachMount();
-    const el = document.getElementById("hostCoach");
-    const now = Date.now();
-    const intent = HOST_TRIGGERS[trigger] || "tip";
-    const prior = HOST_PRIOR[intent] || 1;
-
-    if (now < _hostState.until && prior < _hostState.prior) return;
-
-    const bubble = el.querySelector(".host-bubble");
-    setHostImage(pickHostSticker(intent));
-    bubble.textContent = text || presetText(trigger);
-
-    el.classList.add("show");
-    clearTimeout(el._t);
-    el._t = setTimeout(()=> el.classList.remove("show"), 3600);
-
-    _hostState = { until: now + 2200, prior };
-  } catch(e) {
-    console.warn("hostSay error", e);
-  }
-}
-
-function setHostImage(file){
-  const el = document.getElementById("hostCoach");
-  const img = el?.querySelector(".host-img");
-  if (!img) return;
-  const src = HOST_BASE + file;
-  const fallback = HOST_BASE + (HOST_INTENTS.confirm[0] || HOST_DEFAULT);
-  img.onerror = () => { img.onerror = null; img.src = fallback; };
-  img.src = src;
-  img.alt = "Host";
-}
-
-function pickHostSticker(intent) {
+function pickHostSticker(intent){
   const list = HOST_INTENTS[intent] || HOST_INTENTS.tip;
   return (list[Math.floor(Math.random()*list.length)]) || HOST_DEFAULT;
 }
-
-function presetText(trigger) {
+function presetText(trigger){
   const T = {
     action_success:"Lekker! Slim gespeeld.",
     action_buff:"Power-up geactiveerd.",
@@ -176,35 +119,51 @@ function presetText(trigger) {
     paint_bomb:"Au — zak gereset.",
     caught:"Gepakt! Volgende keer anders.",
     round_lost:"Dawn. Nieuwe ronde.",
-    funny:"Hahaha—die zag ik niet.",
+    funny:"😅",
     no_info:"Geen data; gok slim."
   };
-  return T[trigger] ?? "Ik denk mee…";
+  return T[trigger] ?? "";
 }
 
+export function ensureHostCoachMount(){
+  // niets bouwen; we gebruiken de vaste onderbalk
+  const bar = document.getElementById("hostBar");
+  const sticker = document.getElementById("hostSticker");
+  const sLine = document.getElementById("hostStatusLine");
+  const fLine = document.getElementById("hostFeedbackLine");
+  if (!bar || !sticker || !sLine || !fLine){
+    console.warn("Host bar ontbreekt in HTML.");
+  }
+}
 export function preloadHost(){
   const files = new Set(Object.values(HOST_INTENTS).flat());
   files.forEach(fn => { const i = new Image(); i.src = HOST_BASE + fn; });
 }
 
-function setupHostIdleTimer(){
-  let idleT;
-  const reset = ()=>{
-    clearTimeout(idleT);
-    idleT = setTimeout(()=> hostSay("timeout"), 25000);
-  };
-  ["mousemove","keydown","pointerdown","touchstart","visibilitychange"].forEach(ev=>{
-    window.addEventListener(ev, reset, {passive:true});
-  });
-  reset();
-}
+export function hostSay(trigger, text){
+  const bar = document.getElementById("hostBar");
+  const sticker = document.getElementById("hostSticker");
+  const fLine = document.getElementById("hostFeedbackLine");
+  // prioriteits-throttling
+  const now = Date.now();
+  const intent = HOST_TRIGGERS[trigger] || "tip";
+  const prior = HOST_PRIOR[intent] || 1;
+  if (now < _hostGate.until && prior < _hostGate.prior) return;
 
-function hostInitUI(){
-  try {
-    ensureHostCoachMount();
-    preloadHost();
-    setupHostIdleTimer();
-  } catch(e){ console.warn("hostInitUI", e); }
+  if (sticker){
+    const file = pickHostSticker(intent);
+    sticker.src = HOST_BASE + file;
+    sticker.alt = "Host: " + intent;
+  }
+  if (fLine){
+    fLine.textContent = text || presetText(trigger);
+  }
+  if (bar){
+    bar.classList.remove("flash"); // retrigger anim
+    void bar.offsetWidth;
+    bar.classList.add("flash");
+  }
+  _hostGate = { until: now + 2000, prior };
 }
 
 // ===== FIRESTORE REFS / STATE =====
