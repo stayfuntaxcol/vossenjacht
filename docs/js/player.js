@@ -393,6 +393,7 @@ function updateLootUi(player) {
 
 // ===== HOST FEEDBACK =====
 
+
 function setActionFeedback(msg) {
   if (!hostFeedbackLine) return;
 
@@ -2089,20 +2090,43 @@ hostSay("action_success");
 // voor event reveal
 hostSay("pre_reveal");
 
-// paint-bomb
-if (event.id === "PAINT_BOMB_NEST") hostSay("paint_bomb");
+// Call deze in je onSnapshot / game-state update:
+export function applyHostHooks(prevGame, game, prevPlayer, player, lastEvent){
+  try{
+    // 1) Loot zak groeit fors (drempel 8)
+    if (getSackTotal(prevGame) < 8 && getSackTotal(game) >= 8) {
+      hostSay("loot_big");
+    }
 
-// speler gepakt
-if (player.caught) hostSay("caught");
+    // 2) Beacon gaat aan
+    if (!getBeaconOn(prevGame) && getBeaconOn(game)) {
+      hostSay("beacon_on");
+    }
 
-// ronde voorbij (rooster==3)
-if (game.roosterCount === 3) hostSay("round_lost");
+    // 3) Hond dichtbij (manhattan afstand ≤ 1)
+    const d = getDogDistance(game, player);
+    if (d !== null && d <= 1) {
+      hostSay("dog_near");
+    }
 
-// geen input 25s
-let idleT; window.addEventListener("mousemove", resetIdle);
-window.addEventListener("keydown", resetIdle);
-function resetIdle(){ clearTimeout(idleT); idleT=setTimeout(()=>hostSay("timeout"), 25000); }
+    // 4) Paint-Bomb event zojuist afgegaan
+    if (lastEvent && lastEvent.id === "PAINT_BOMB_NEST") {
+      hostSay("paint_bomb");
+    }
 
+    // 5) Speler net gepakt
+    if (!getCaught(prevPlayer) && getCaught(player)) {
+      hostSay("caught");
+    }
+
+    // 6) Einde raid (rooster == 3)
+    if (getRoosterCount(prevGame) !== 3 && getRoosterCount(game) === 3) {
+      hostSay("round_lost");
+    }
+  } catch(e){
+    console.warn("applyHostHooks", e);
+  }
+}
   
   // MOVE
   if (btnSnatch) btnSnatch.addEventListener("click", performSnatch);
