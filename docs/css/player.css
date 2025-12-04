@@ -1,3 +1,4 @@
+
 /* ==========================================
    VOSSENJACHT – PLAYER SCREEN LAYOUT
    ========================================== */
@@ -352,44 +353,6 @@ body.player-body {
   opacity: 0.8;
 }
 
-/* Host coach */
-.host-coach{
-  position:fixed; left:12px; bottom:12px; display:flex; gap:8px; align-items:flex-end;
-  z-index:50; pointer-events:none;
-}
-.host-img{ width:112px; height:auto; filter: drop-shadow(0 8px 18px rgba(0,0,0,.35)); }
-.host-bubble{
-  max-width: 360px; padding:10px 14px; border-radius:12px;
-  background: url("./assets/ui/wood_parchment.png") center/cover no-repeat, rgba(0,0,0,.12);
-  color:#2b1b12; font:600 14px/1.25 system-ui, sans-serif;
-  box-shadow:0 10px 24px rgba(0,0,0,.25);
-  transform-origin:left bottom; opacity:0; transform:scale(.92) translateY(6px);
-  transition:transform .18s ease, opacity .18s ease;
-  pointer-events:auto;
-}
-.host-coach.show .host-bubble{ opacity:1; transform:scale(1) translateY(0); }
-
-.host-bar{
-  position: fixed; left: 0; right: 0; bottom: 0;
-  display: flex; gap: .75rem; align-items: center;
-  padding: .6rem .9rem;
-  background: rgba(10, 15, 25, .92); /* donker translucent */
-  border-top: 1px solid rgba(255,255,255,.08);
-  z-index: 1000; backdrop-filter: blur(4px);
-}
-.host-img{
-  width: 64px; height: 64px; object-fit: contain; flex: 0 0 auto;
-  filter: drop-shadow(0 2px 2px rgba(0,0,0,.4));
-}
-.host-messages{ min-height: 48px; display: grid; gap: .25rem; }
-.host-line{ line-height: 1.25; }
-.host-line--status{ font-weight: 600; opacity: .95; }
-.host-line--feedback{ font-size: .9rem; opacity: .85; }
-.host-bar.flash{ animation: hb-flash .5s ease; }
-@keyframes hb-flash { from { box-shadow: inset 0 0 0 9999px rgba(255,255,255,.06); } to { box-shadow: none; } }
-/* Zorg dat je hoofdcontent niet onder de balk valt */
-.player-shell{ padding-bottom: 90px; }
-
 /* ==========================================
    PHASE PANELS (MOVE / ACTIONS / DECISION)
    ========================================== */
@@ -714,4 +677,3 @@ body.player-body {
     margin: 0 0.4rem;
   }
 }
-
