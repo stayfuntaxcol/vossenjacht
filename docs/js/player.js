@@ -32,6 +32,7 @@ const hostFeedbackLine = document.getElementById("hostFeedbackLine");
 
 // Hero / spelerkaart
 const playerAvatarEl = document.getElementById("playerAvatar");
+const playerCardArtEl = document.getElementById("playerCardArt");
 const playerNameEl = document.getElementById("playerName");
 const playerDenColorEl = document.getElementById("playerDenColor");
 const playerStatusEl = document.getElementById("playerStatus");
@@ -603,6 +604,35 @@ function setActionFeedback(msg) {
   hostFeedbackLine.textContent = `[${time}] ${msg}`;
 }
 
+// ===== PLAYER CARD ART (card_player1–5) =====
+
+const PLAYER_CARD_FILES = [
+  "card_player1.png",
+  "card_player2.png",
+  "card_player3.png",
+  "card_player4.png",
+  "card_player5.png",
+];
+
+function pickPlayerCardFile(player) {
+  if (!player) return null;
+
+  // Optioneel: expliciet veld uit Firestore gebruiken als je dat later toevoegt
+  if (typeof player.cardArt === "string" && player.cardArt) {
+    return player.cardArt;
+  }
+  if (typeof player.avatarKey === "string" && player.avatarKey) {
+    return player.avatarKey;
+  }
+
+  // Anders: stabiele keuze op basis van joinOrder
+  const join = typeof player.joinOrder === "number" ? player.joinOrder : 0;
+  if (!PLAYER_CARD_FILES.length) return null;
+
+  const idx = Math.abs(join) % PLAYER_CARD_FILES.length;
+  return PLAYER_CARD_FILES[idx];
+}
+
 // ===== HERO CARD VISUAL (NEON + STATUS + LEAD) =====
 
 async function updateHeroCardVisual(game, player) {
@@ -619,14 +649,20 @@ async function updateHeroCardVisual(game, player) {
     "is-lead-fox"
   );
 
-  if (!player) return;
+  // Reset kaart-art als er (nog) geen speler is
+  if (!player) {
+    if (playerCardArtEl) playerCardArtEl.style.backgroundImage = "";
+    return;
+  }
 
+  // Den-kleur → neon rand
   const color = (player.color || "").toUpperCase();
   if (color === "RED") playerAvatarEl.classList.add("den-red");
   else if (color === "BLUE") playerAvatarEl.classList.add("den-blue");
   else if (color === "GREEN") playerAvatarEl.classList.add("den-green");
   else if (color === "YELLOW") playerAvatarEl.classList.add("den-yellow");
 
+  // Status → overlay op de kaart
   let statusClass = "status-yard";
   if (player.dashed) {
     statusClass = "status-dashed";
@@ -635,9 +671,18 @@ async function updateHeroCardVisual(game, player) {
   }
   playerAvatarEl.classList.add(statusClass);
 
+  // Lead Fox → dubbele neon
   const leadId = await resolveLeadPlayerId(game);
   if (leadId && player.id && leadId === player.id) {
     playerAvatarEl.classList.add("is-lead-fox");
+  }
+
+  // Spelerskaart-art (2:3 kaart in de avatar)
+  if (playerCardArtEl) {
+    const file = pickPlayerCardFile(player);
+    playerCardArtEl.style.backgroundImage = file
+      ? `url('./assets/${file}')`
+      : "";
   }
 }
 
