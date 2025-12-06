@@ -771,8 +771,8 @@ function renderGame() {
       specialFlagsDiv.appendChild(chip);
     }
   }
-
   updatePhasePanels(g, currentPlayer);
+  updateHeroCardVisual(currentGame, currentPlayer);
 }
 
 function renderPlayer() {
