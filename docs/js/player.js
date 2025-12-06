@@ -774,7 +774,6 @@ function renderGame() {
   }
   updatePhasePanels(g, currentPlayer);
   updateHeroCardVisual(currentGame, currentPlayer);
-}
 
 function renderPlayer() {
   if (!currentPlayer) return;
