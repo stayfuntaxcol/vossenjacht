@@ -27,10 +27,13 @@ const playerDenColorEl  = document.getElementById("playerDenColor");
 const playerStatusEl    = document.getElementById("playerStatus");
 const playerScoreEl     = document.getElementById("playerScore");
 const lootSummaryEl     = document.getElementById("lootSummary");
+const playerAvatarEl    = document.getElementById("playerAvatar");
 const lootMeterEl       = document.getElementById("lootMeter");
 const lootMeterFillEl   = lootMeterEl
   ? lootMeterEl.querySelector(".loot-meter-fill")
   : null;
+
+
 
 // Event + scout + flags
 const eventCurrentDiv      = document.getElementById("eventCurrent");
@@ -229,6 +232,48 @@ let currentPlayer = null;
 
 let prevGame = null;
 let prevPlayer = null;
+
+// Lead Fox cache (minder Firestore-reads)
+let cachedLeadId = null;
+let cachedLeadIndex = null;
+
+function resetLeadCache() {
+  cachedLeadId = null;
+  cachedLeadIndex = null;
+}
+
+async function deriveLeadIdFromIndex(game) {
+  const idx = typeof game.leadIndex === "number" ? game.leadIndex : null;
+  if (idx === null || idx < 0) return null;
+
+  if (cachedLeadId && cachedLeadIndex === idx) {
+    return cachedLeadId;
+  }
+
+  try {
+    const players = await fetchPlayersForGame();
+    const ordered = sortPlayersByJoinOrder(players);
+    if (!ordered.length || idx >= ordered.length) return null;
+
+    cachedLeadId = ordered[idx].id;
+    cachedLeadIndex = idx;
+    return cachedLeadId;
+  } catch (err) {
+    console.warn("deriveLeadIdFromIndex error", err);
+    return null;
+  }
+}
+
+async function resolveLeadPlayerId(game) {
+  if (!game) return null;
+
+  // Als host ooit een direct id veld gaat gebruiken, eerst die
+  if (game.leadPlayerId) return game.leadPlayerId;
+  if (game.leadId) return game.leadId;
+
+  // Anders: gebruik leadIndex + joinOrder
+  return await deriveLeadIdFromIndex(game);
+}
 
 // ===== HELPERS ROUND FLAGS / PLAYERS =====
 
@@ -477,7 +522,45 @@ function updateLootUi(player) {
   } else {
     lootSummaryEl.textContent = `P:${prize} H:${hens} E:${eggs} – totaal ~${score} punten.`;
   }
+async function updateHeroCardVisual(game, player) {
+  if (!playerAvatarEl) return;
 
+  playerAvatarEl.classList.remove(
+    "den-red",
+    "den-blue",
+    "den-green",
+    "den-yellow",
+    "status-yard",
+    "status-caught",
+    "status-dashed",
+    "is-lead-fox"
+  );
+
+  if (!player) return;
+
+  // Den-kleur → neon rand
+  const color = (player.color || "").toUpperCase();
+  if (color === "RED") playerAvatarEl.classList.add("den-red");
+  else if (color === "BLUE") playerAvatarEl.classList.add("den-blue");
+  else if (color === "GREEN") playerAvatarEl.classList.add("den-green");
+  else if (color === "YELLOW") playerAvatarEl.classList.add("den-yellow");
+
+  // Status → overlay
+  let statusClass = "status-yard";
+  if (player.dashed) {
+    statusClass = "status-dashed";
+  } else if (player.inYard === false) {
+    statusClass = "status-caught";
+  }
+  playerAvatarEl.classList.add(statusClass);
+
+  // Lead Fox → dubbele neon
+  const leadId = await resolveLeadPlayerId(game);
+  if (leadId && leadId === player.id) {
+    playerAvatarEl.classList.add("is-lead-fox");
+  }
+}
+  
   // Totaal 12+ punten ~ volle zak (mag je later tweaken)
   const baseMax = 12;
   const rawPct = baseMax > 0 ? (score / baseMax) * 100 : 0;
@@ -602,7 +685,9 @@ function renderGame() {
     if (eventCurrentDiv) eventCurrentDiv.textContent = "Spel afgelopen. Bekijk het scorebord op het grote scherm.";
     if (eventScoutPreviewDiv) eventScoutPreviewDiv.textContent = "";
     if (specialFlagsDiv) specialFlagsDiv.innerHTML = "";
-    updatePhasePanels(g, currentPlayer);
+      updatePhasePanels(g, currentPlayer);
+  updateHeroCardVisual(currentGame, currentPlayer);
+}
     return;
   }
 
@@ -722,6 +807,7 @@ function renderPlayer() {
 
   updateLootUi(p);
   updatePhasePanels(currentGame, p);
+  updateHeroCardVisual(currentGame, p);
 }
 
 // ===== MOVE / DECISION BUTTON STATE =====
@@ -1682,20 +1768,25 @@ initAuth(async () => {
   await ensurePlayerDoc();   // <-- voeg deze regel toe
 
   // Snapshots met delta-hosthooks
-  onSnapshot(gameRef, (snap) => {
-    if (!snap.exists()) {
-      if (gameStatusDiv) gameStatusDiv.textContent = "Spel niet gevonden.";
-      return;
-    }
-    const newGame = { id: snap.id, ...snap.data() };
+onSnapshot(gameRef, (snap) => {
+  if (!snap.exists()) {
+    if (gameStatusDiv) gameStatusDiv.textContent = "Spel niet gevonden.";
+    return;
+  }
+  const newGame = { id: snap.id, ...snap.data() };
 
-    // host hooks op game-change (met huidige/prev player)
-    applyHostHooks(prevGame, newGame, prevPlayer, currentPlayer, null);
+  // leadIndex veranderd? → cache resetten
+  if (prevGame && prevGame.leadIndex !== newGame.leadIndex) {
+    resetLeadCache();
+  }
 
-    currentGame = newGame;
-    prevGame = newGame; // bewaar voor volgende delta
-    renderGame();
-  });
+  // host hooks op game-change (met huidige/prev player)
+  applyHostHooks(prevGame, newGame, prevPlayer, currentPlayer, null);
+
+  currentGame = newGame;
+  prevGame = newGame; // bewaar voor volgende delta
+  renderGame();
+});
 
   onSnapshot(playerRef, (snap) => {
     if (!snap.exists()) {
