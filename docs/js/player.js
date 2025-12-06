@@ -575,7 +575,8 @@ function updateLootUi(player) {
   if (eggs === 0 && hens === 0 && prize === 0 && score === 0) {
     lootSummaryEl.textContent = "Nog geen buit verzameld.";
   } else {
-    lootSummaryEl.textContent = `P:${prize} H:${hens} E:${eggs} – totaal ~${score} punten.`;
+    // Alleen verdeling laten zien, GEEN score meer onder de balk
+    lootSummaryEl.textContent = `P:${prize}  H:${hens}  E:${eggs}`;
   }
 
   const baseMax = 12;
@@ -584,6 +585,7 @@ function updateLootUi(player) {
   lootMeterFillEl.style.width = `${meterPct}%`;
 
   if (playerScoreEl) {
+    // Score alleen nog hier tonen (boven de balk), nu in oranje
     playerScoreEl.textContent = `Score: ${score} (P:${prize} H:${hens} E:${eggs})`;
   }
 }
