@@ -294,7 +294,7 @@ body.player-body {
 
 .hero-score {
   font-size: 0.8rem;
-  color: #bbf7d0;
+  color: #f97316;
 }
 
 /* Loot-meter onderin hero */
@@ -319,8 +319,8 @@ body.player-body {
   width: 0%;
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, #22c55e, #ef4444);
-  box-shadow: 0 0 10px rgba(52, 211, 153, 0.9);
+  background: #f97316;              /* effen oranje */
+  box-shadow: 0 0 10px rgba(249, 115, 22, 0.9);
   transition: width 0.25s ease-out;
 }
 
