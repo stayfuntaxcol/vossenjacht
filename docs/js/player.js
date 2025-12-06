@@ -1,3 +1,4 @@
+
 // VOSSENJACHT player.js – nieuwe UI: fase-panels + loot-meter + Host/Coach
 
 import { initAuth } from "./firebase.js";
@@ -772,6 +773,8 @@ function renderGame() {
     }
   }
   updatePhasePanels(g, currentPlayer);
+  updateHeroCardVisual(currentGame, currentPlayer);
+}
 
 function renderPlayer() {
   if (!currentPlayer) return;
