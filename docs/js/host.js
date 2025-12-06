@@ -547,39 +547,57 @@ async function renderFinalScoreboard(game) {
 
   section.appendChild(table);
 
-  // ===== multi-leaderboards =====
-  const leaderboardSection = document.createElement("div");
-  leaderboardSection.className = "leaderboard-section-multi";
-  leaderboardSection.innerHTML = `
-    <h3 class="leaderboard-main-title">Leaderboards</h3>
-    <div class="leaderboard-grid">
-      <div class="leaderboard-block">
-        <div class="leaderboard-title">Top 10 – Vandaag</div>
-        <ul class="leaderboard-list" id="leaderboardToday"></ul>
-      </div>
-      <div class="leaderboard-block">
-        <div class="leaderboard-title">Top 25 – Deze maand</div>
-        <ul class="leaderboard-list" id="leaderboardMonth"></ul>
-      </div>
-      <div class="leaderboard-block">
-        <div class="leaderboard-title">Top 100 – All-time</div>
-        <ul class="leaderboard-list" id="leaderboardAllTime"></ul>
-      </div>
+ // ===== multi-leaderboards =====
+const leaderboardSection = document.createElement("div");
+leaderboardSection.className = "leaderboard-section-multi";
+leaderboardSection.innerHTML = `
+  <h3 class="leaderboard-main-title">Leaderboards</h3>
+  <div class="leaderboard-grid">
+    <div class="leaderboard-block">
+      <div class="leaderboard-title">Top 10 – Vandaag</div>
+      <ul class="leaderboard-list" id="leaderboardToday"></ul>
     </div>
-  `;
-  section.appendChild(leaderboardSection);
+    <div class="leaderboard-block">
+      <div class="leaderboard-title">Top 25 – Deze maand</div>
+      <ul class="leaderboard-list" id="leaderboardMonth"></ul>
+    </div>
+    <div class="leaderboard-block">
+      <div class="leaderboard-title">Top 100 – All-time</div>
+      <ul class="leaderboard-list" id="leaderboardAllTime"></ul>
+    </div>
+  </div>
+`;
+section.appendChild(leaderboardSection);
 
-  roundInfo.appendChild(section);
+roundInfo.appendChild(section);
 
-  // leaderboards vullen in roundInfo
-  await loadLeaderboardsMulti();
+// leaderboards vullen in roundInfo
+await loadLeaderboardsMulti();
 
-  // daarna zelfde inhoud in de popup zetten
-  if (scoreOverlayContent) {
-    const scoreboardClone = section.cloneNode(true);
-    scoreOverlayContent.innerHTML = "";
-    scoreOverlayContent.appendChild(scoreboardClone);
-  }
+// daarna zelfde inhoud in de popup zetten
+if (scoreOverlayContent) {
+  const scoreboardClone = section.cloneNode(true);
+  scoreOverlayContent.innerHTML = "";
+  scoreOverlayContent.appendChild(scoreboardClone);
+}
+
+/**
+ * Berekent de "echte" leaderboard-score, incl. sack-bonus.
+ * E = 1, H = 2, P = 3, + bonus.
+ * Neemt de hoogste van (oude) data.score en deze berekening.
+ */
+function calcLeaderboardScore(data) {
+  if (!data) return 0;
+
+  const eggs  = Number(data.eggs  || 0);
+  const hens  = Number(data.hens  || 0);
+  const prize = Number(data.prize || 0);
+  const bonus = Number(data.bonus || 0); // sack-bonus
+
+  const baseFromCounts = eggs + hens * 2 + prize * 3;
+  const stored         = Number(data.score || 0);
+
+  return Math.max(stored, baseFromCounts + bonus);
 }
 
 function appendLeaderboardRow(listEl, rank, data) {
@@ -587,7 +605,7 @@ function appendLeaderboardRow(listEl, rank, data) {
   const hens  = data.hens  || 0;
   const prize = data.prize || 0;
   const bonus = data.bonus || 0;
-  const score = data.score || 0;
+  const score = calcLeaderboardScore(data);
 
   let dateLabel = "";
   if (data.playedAt && data.playedAt.seconds != null) {
@@ -649,11 +667,14 @@ async function fillLeaderboardAllTime(listEl) {
     return;
   }
 
+  const docs = [];
+  snap.forEach((docSnap) => docs.push(docSnap.data()));
+
+  // Sorteer op de gecorrigeerde score (incl. bonus / sack)
+  docs.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
+
   let rank = 1;
-  snap.forEach((docSnap) => {
-    const data = docSnap.data();
-    appendLeaderboardRow(listEl, rank++, data);
-  });
+  docs.forEach((data) => appendLeaderboardRow(listEl, rank++, data));
 }
 
 async function fillLeaderboardToday(listEl) {
@@ -681,7 +702,8 @@ async function fillLeaderboardToday(listEl) {
   const docs = [];
   snap.forEach((docSnap) => docs.push(docSnap.data()));
 
-  docs.sort((a, b) => (b.score || 0) - (a.score || 0));
+  // Sorteer op gecorrigeerde score
+  docs.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
   const top = docs.slice(0, 10);
 
   top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
@@ -712,7 +734,8 @@ async function fillLeaderboardMonth(listEl) {
   const docs = [];
   snap.forEach((docSnap) => docs.push(docSnap.data()));
 
-  docs.sort((a, b) => (b.score || 0) - (a.score || 0));
+  // Sorteer op gecorrigeerde score
+  docs.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
   const top = docs.slice(0, 25);
 
   top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
