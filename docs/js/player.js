@@ -648,45 +648,139 @@ function updatePhasePanels(game, player) {
   renderHand();
 }
 
-
 function renderGame() {
   if (!currentGame || !gameStatusDiv) return;
 
   const g = currentGame;
 
-  gameStatusDiv.textContent = `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
+  gameStatusDiv.textContent = `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${
+    g.phase || "?"
+  }`;
 
-  if (!currentGame) {
-  setHostStatus("Verbinding maken met het spel…");
-} else {
-  const g = currentGame;
+  // Host status-regel boven de knoppen
   if (g.status === "lobby" || g.status === "new" || g.phase === "SETUP") {
     setHostStatus("Wachten tot de host de raid start…");
   } else if (g.phase === "MOVE") {
     setHostStatus("MOVE-fase – kies SNATCH / FORAGE / SCOUT / SHIFT.");
   } else if (g.phase === "ACTIONS") {
-    setHostStatus(isMyOpsTurn(g)
-      ? "ACTIONS-fase – jij bent aan de beurt. Speel een kaart of kies PASS."
-      : "ACTIONS-fase – wacht tot jij aan de beurt bent.");
+    setHostStatus(
+      isMyOpsTurn(g)
+        ? "ACTIONS-fase – jij bent aan de beurt. Speel een kaart of kies PASS."
+        : "ACTIONS-fase – wacht tot jij aan de beurt bent."
+    );
   } else if (g.phase === "DECISION") {
     setHostStatus("DECISION-fase – kies LURK / BURROW / DASH.");
   } else if (g.phase === "REVEAL") {
     setHostStatus("REVEAL – Event wordt toegepast.");
   } else if (g.status === "finished" || g.phase === "END") {
-    setHostStatus("Raid afgelopen – bekijk het scorebord op het Community Board.");
+    setHostStatus(
+      "Raid afgelopen – bekijk het scorebord op het Community Board."
+    );
   } else {
     setHostStatus("Even geduld…");
   }
-}
 
-  
   // Spel afgelopen
   if (g.status === "finished" || g.phase === "END") {
-    setActionFeedback("Het spel is afgelopen – het scorebord staat op het Community Board.");
-    if (eventCurrentDiv) eventCurrentDiv.textContent = "Spel afgelopen. Bekijk het scorebord op het grote scherm.";
+    setActionFeedback(
+      "Het spel is afgelopen – het scorebord staat op het Community Board."
+    );
+    if (eventCurrentDiv)
+      eventCurrentDiv.textContent =
+        "Spel afgelopen. Bekijk het scorebord op het grote scherm.";
     if (eventScoutPreviewDiv) eventScoutPreviewDiv.textContent = "";
     if (specialFlagsDiv) specialFlagsDiv.innerHTML = "";
-      updatePhasePanels(g, currentPlayer);
+
+    updatePhasePanels(g, currentPlayer);
+    updateHeroCardVisual(currentGame, currentPlayer);
+    return;
+  }
+
+  // Buiten ACTIONS: feedback resetten
+  if (g.phase !== "ACTIONS") setActionFeedback("");
+
+  // EVENT + SCOUT leegmaken
+  if (eventCurrentDiv) eventCurrentDiv.innerHTML = "";
+  if (eventScoutPreviewDiv) eventScoutPreviewDiv.textContent = "";
+  if (specialFlagsDiv) specialFlagsDiv.innerHTML = "";
+
+  let ev = null;
+  let label = "";
+
+  // REVEAL → actueel event
+  if (g.phase === "REVEAL" && g.currentEventId) {
+    ev = getEventById(g.currentEventId);
+    label = "Actueel Event (REVEAL)";
+  } else if (
+    currentPlayer &&
+    currentPlayer.scoutPeek &&
+    typeof currentPlayer.scoutPeek.index === "number" &&
+    currentPlayer.scoutPeek.round === (g.round || 0)
+  ) {
+    const peek = currentPlayer.scoutPeek;
+    const track = g.eventTrack || [];
+    const idx = peek.index;
+    if (idx >= 0 && idx < track.length && track[idx] === peek.eventId) {
+      ev = getEventById(peek.eventId);
+      label = `SCOUT preview – positie ${idx + 1}`;
+    }
+  }
+
+  if (ev && eventCurrentDiv) {
+    const labelDiv = document.createElement("div");
+    labelDiv.style.fontSize = "0.78rem";
+    labelDiv.style.opacity = "0.75";
+    labelDiv.style.marginBottom = "0.2rem";
+    labelDiv.textContent = label || "Event";
+
+    const titleDiv = document.createElement("div");
+    titleDiv.style.fontWeight = "600";
+    titleDiv.textContent = ev.title || "Event";
+
+    const textDiv = document.createElement("div");
+    textDiv.style.fontSize = "0.85rem";
+    textDiv.style.opacity = "0.9";
+    textDiv.textContent = ev.text || "";
+
+    eventCurrentDiv.appendChild(labelDiv);
+    eventCurrentDiv.appendChild(titleDiv);
+    eventCurrentDiv.appendChild(textDiv);
+  } else if (eventCurrentDiv) {
+    eventCurrentDiv.textContent =
+      "Nog geen Event Card onthuld (pas zichtbaar bij REVEAL of via SCOUT).";
+  }
+
+  // Extra SCOUT preview tekst (alleen voor jou)
+  if (eventScoutPreviewDiv && currentPlayer && currentPlayer.scoutPeek) {
+    const peek = currentPlayer.scoutPeek;
+    if (peek.round === (g.round || 0)) {
+      const evPeek = getEventById(peek.eventId);
+      if (evPeek) {
+        eventScoutPreviewDiv.textContent = `SCOUT preview (alleen voor jou): positie ${
+          peek.index + 1
+        } – ${evPeek.title}`;
+      }
+    }
+  }
+
+  // Flags chips
+  if (specialFlagsDiv) {
+    const flags = mergeRoundFlags(g);
+    if (flags.scatter) {
+      const chip = document.createElement("span");
+      chip.className = "event-flag-chip event-flag-chip--danger";
+      chip.textContent = "Scatter! – niemand mag Scouten deze ronde";
+      specialFlagsDiv.appendChild(chip);
+    }
+    if (flags.lockEvents) {
+      const chip = document.createElement("span");
+      chip.className = "event-flag-chip event-flag-chip--safe";
+      chip.textContent = "Burrow Beacon – Event Track gelocked";
+      specialFlagsDiv.appendChild(chip);
+    }
+  }
+
+  updatePhasePanels(g, currentPlayer);
   updateHeroCardVisual(currentGame, currentPlayer);
 }
     return;
