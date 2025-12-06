@@ -1238,6 +1238,19 @@ function openHandCardDetail(index) {
   handCardsGrid.appendChild(wrapper);
 }
 
+// Kies juiste loot-kaart art op basis van type
+function getLootCardImage(card) {
+  const tRaw = (card && (card.t || card.type)) || "";
+  const t = String(tRaw).toUpperCase();
+
+  if (t.includes("PRIZE")) return "card_loot_prize_hen.png";
+  if (t.includes("HEN")) return "card_loot_hen.png";
+  if (t.includes("EGG")) return "card_loot_egg.png";
+
+  // geen match → gebruik placeholder uit CSS
+  return null;
+}
+
 // ===== LOOT MODAL =====
 
 function renderLootModal() {
@@ -1283,6 +1296,12 @@ function renderLootModal() {
 
     const cardDiv = document.createElement("div");
     cardDiv.className = "vj-card loot-card";
+
+    // Kies de juiste loot-kaart afbeelding
+    const imgFile = getLootCardImage(card);
+    if (imgFile) {
+      cardDiv.style.backgroundImage = `url('./assets/${imgFile}')`;
+    }
 
     const label = document.createElement("div");
     label.className = "loot-card-label";
