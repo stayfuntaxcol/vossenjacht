@@ -93,23 +93,25 @@
 
           <!-- HOST MESSAGE BOARD -->
           <section class="player-host-panel">
-            <div class="host-board">
-              <div class="host-board-header">
-                <div id="hostAvatar" class="host-avatar">
-                  <!-- optioneel: kleine Host-fox afbeelding via CSS -->
-                </div>
-                <div class="host-board-text">
-                  <div id="hostStatusLine" class="host-status-line">
-                    Wacht tot de host de raid start…
-                  </div>
-                  <div id="hostFeedbackLine" class="host-feedback-line">
-                    <!-- timestamped feedback regels -->
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
+          <div id="hostBar" class="host-board">
+          <div class="host-board-header">
+          <div class="host-avatar">
+          <img
+          id="hostSticker"
+          class="host-sticker"
+          src="./assets/host_thumbsup.png"
+          alt="Host"
+        />
+      </div>
+      <div class="host-board-text">
+        <div id="hostStatusLine" class="host-status-line">
+          Wacht tot de host de raid start…
         </div>
+        <div id="hostFeedbackLine" class="host-feedback-line"></div>
+      </div>
+    </div>
+  </div>
+</section>
 
         <!-- ONDERSTE RIJ: FASE PANELEN -->
         <section class="player-phases">
