@@ -528,70 +528,89 @@ function applyHostHooks(prevGame, game, prevPlayer, player, lastEvent) {
 }
 
 // ===== LOOT / SCORE HELPERS + UI =====
-//
-// Eén waarheid voor punten:
-// Egg  = 1
-// Hen  = 2
-// Prize Hen = 3
-// Loot Sack = bonus (extra punten uit de sack aan het einde)
 
+// Berekent altijd een score op basis van de loot in de player-doc.
+// Tijdens het spel: score = punten uit loot.
+// Aan het einde: als player.score hoger is (incl. sack-bonus), gebruiken we die
+// en tonen we het verschil als "Loot Sack" bonus.
 function calcLootStats(player) {
   if (!player) {
-    return {
-      eggs: 0,
-      hens: 0,
-      prize: 0,
-      bonus: 0,
-      baseScore: 0,
-      totalScore: 0,
-    };
+    return { eggs: 0, hens: 0, prize: 0, lootBonus: 0, score: 0 };
   }
 
-  // Tellingen komen uit het player-document
-  const eggs  = Number(player.eggs  || 0);
-  const hens  = Number(player.hens  || 0);
-  const prize = Number(player.prize || 0);
+  const loot = Array.isArray(player.loot) ? player.loot : [];
 
-  // Loot Sack verdeling wordt als bonus opgeslagen
-  const bonus = Number(player.bonus || 0);
+  let eggs = 0;
+  let hens = 0;
+  let prize = 0;
+  let otherPoints = 0;
 
-  // Basis-score alleen uit Eggs/Hens/Prize
-  const baseScore = eggs + hens * 2 + prize * 3;
+  loot.forEach((card) => {
+    const tRaw = card.t || card.type || "";
+    const t = String(tRaw).toUpperCase();
+    const v = typeof card.v === "number" ? card.v : 0;
 
-  // Als er al een score in Firestore staat, gebruik die als minimum
-  const stored = typeof player.score === "number" ? player.score : null;
-  const withBonus = baseScore + bonus;
+    if (t.includes("PRIZE")) {
+      // Prize Hen
+      prize += 1;
+    } else if (t.includes("HEN")) {
+      // gewone Hen
+      hens += 1;
+    } else if (t.includes("EGG")) {
+      eggs += 1;
+    } else {
+      // evt. speciale loot met eigen v-waarde
+      otherPoints += v;
+    }
+  });
 
-  const totalScore =
-    stored != null && !Number.isNaN(stored)
-      ? Math.max(stored, withBonus)
-      : withBonus;
+  // basispunten uit de zichtbare loot
+  const pointsFromCounts = eggs + hens * 2 + prize * 3 + otherPoints;
 
-  return { eggs, hens, prize, bonus, baseScore, totalScore };
+  // score uit Firestore (wordt op het einde gezet incl. sack-bonus)
+  const recordedScore =
+    typeof player.score === "number" ? player.score : 0;
+
+  // Tijdens het spel: recordedScore = 0 → we gebruiken pointsFromCounts
+  // Na het spel: recordedScore >= pointsFromCounts → we nemen recordedScore
+  const score = recordedScore > 0 ? recordedScore : pointsFromCounts;
+
+  // Loot Sack bonus = alles boven de "normale" loot
+  const lootBonus =
+    recordedScore > pointsFromCounts
+      ? recordedScore - pointsFromCounts
+      : 0;
+
+  return { eggs, hens, prize, lootBonus, score };
 }
 
 function updateLootUi(player) {
   if (!lootSummaryEl || !lootMeterFillEl) return;
 
-  const { eggs, hens, prize, bonus, totalScore } = calcLootStats(player || {});
+  const { eggs, hens, prize, lootBonus, score } = calcLootStats(player || {});
 
-  // Tekst onder de balk
-  if (eggs === 0 && hens === 0 && prize === 0 && bonus === 0) {
+  if (eggs === 0 && hens === 0 && prize === 0 && score === 0) {
     lootSummaryEl.textContent = "Nog geen buit verzameld.";
   } else {
-    lootSummaryEl.textContent =
-      `Eggs: ${eggs} • Hens: ${hens} • Prize Hens: ${prize} • Loot Sack: +${bonus}`;
+    let line = `Eggs: ${eggs}  Hens: ${hens}  Prize Hens: ${prize}`;
+    if (lootBonus > 0) {
+      line += `  | Loot Sack: +${lootBonus}`;
+    }
+    lootSummaryEl.textContent = line;
   }
 
-  // Breedte van de oranje balk (alleen gebaseerd op totale score)
-  const maxScoreForBar = 40; // eventueel later tunen
-  const rawPct = maxScoreForBar > 0 ? (totalScore / maxScoreForBar) * 100 : 0;
+  // Oranje meter vult op basis van totale score
+  const baseMax  = 12; // kun je later nog tunen
+  const rawPct   = baseMax > 0 ? (score / baseMax) * 100 : 0;
   const meterPct = Math.max(5, Math.min(100, Math.round(rawPct)));
   lootMeterFillEl.style.width = `${meterPct}%`;
 
-  // Score alleen boven de balk tonen (in oranje via CSS)
+  // Score altijd tonen (dus ook midden in het spel)
   if (playerScoreEl) {
-    playerScoreEl.textContent = `Score: ${totalScore} pts`;
+    let label = `Score: ${score} (E:${eggs} H:${hens} P:${prize}`;
+    if (lootBonus > 0) label += ` +${lootBonus}`;
+    label += ")";
+    playerScoreEl.textContent = label;
   }
 }
 
