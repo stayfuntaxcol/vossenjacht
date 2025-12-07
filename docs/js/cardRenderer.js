@@ -7,14 +7,18 @@ import {
   getActivityById,
 } from "./cards.js";
 
-// Kaartframes voor spelers per Den-kleur
-const PLAYER_CARD_IMAGES = {
-  RED: "./assets/card_player1.png",
-  BLUE: "./assets/card_player2.png",
-  GREEN: "./assets/card_player3.png",
-  YELLOW: "./assets/card_player4.png",
-  LEAD: "./assets/card_player5.png", // speciale frame voor Lead Fox (optioneel)
-};
+/**
+ * VASTE player-art per seat/joinOrder.
+ * Speler die als eerste joint → card_player1.png
+ * Tweede                        → card_player2.png
+ * etc. (wrapt met % als er meer dan 4 spelers zijn).
+ */
+const PLAYER_SLOT_ART = [
+  "./assets/card_player1.png",
+  "./assets/card_player2.png",
+  "./assets/card_player3.png",
+  "./assets/card_player4.png",
+];
 
 /**
  * Zet veilig een achtergrondafbeelding op een kaart.
@@ -175,20 +179,42 @@ export function renderLootCard(lootCard, opts = {}) {
 }
 
 // =========================
-// PLAYER SLOT CARDS
+// PLAYER SLOT CARDS (Community Board)
 // =========================
 
 /**
  * Render een spelerkaart voor het scoreboard / community board.
- * player = Firestore player-doc (met .color / .denColor / .den)
- * - Geen tekst-overlay
- * - Glow rand in Den-kleur
- * - 🦊 icoon rechtsboven als Lead Fox
+ *
+ * Belangrijk:
+ * - ART is VAST per speler (joinOrder/slotIndex) → verandert niet als Den-kleur wijzigt.
+ * - Den-kleur alleen als CSS-glow (vj-card--den-red / blue / green / yellow).
+ * - Lead Fox alleen via .vj-card--lead (neon rand), geen andere art.
+ *
+ * Opties:
+ *  - opts.size      → "small" | "medium" | "large" (default "medium")
+ *  - opts.isLead    → forceer lead-glow (naast player.isLead)
+ *  - opts.slotIndex → overschrijf joinOrder als je zelf de seat-index bepaalt
  */
 export function renderPlayerSlotCard(player, opts = {}) {
   if (!player) return null;
 
-  // Den-kleur bepalen: eerst .color (uit game), anders .denColor / .den
+  // ---- Seat / slot bepalen voor vaste art ----
+  let slotIndex = 0;
+  if (typeof opts.slotIndex === "number") {
+    slotIndex = opts.slotIndex;
+  } else if (typeof player.joinOrder === "number") {
+    slotIndex = player.joinOrder;
+  }
+
+  if (!Number.isFinite(slotIndex)) slotIndex = 0;
+  if (slotIndex < 0) slotIndex = Math.abs(slotIndex);
+
+  const hasArtList = PLAYER_SLOT_ART && PLAYER_SLOT_ART.length > 0;
+  const artIndex = hasArtList ? slotIndex % PLAYER_SLOT_ART.length : 0;
+  const imageUrl =
+    (hasArtList && PLAYER_SLOT_ART[artIndex]) || CARD_BACK;
+
+  // ---- Den-kleur alleen voor glow-classes ----
   let denColor = "";
   if (player.color) {
     denColor = String(player.color).toUpperCase();
@@ -200,12 +226,6 @@ export function renderPlayerSlotCard(player, opts = {}) {
 
   const isLead = Boolean(player.isLead || opts.isLead);
 
-  // Kies frame op basis van Den-kleur
-  let imageUrl = CARD_BACK;
-  if (denColor && PLAYER_CARD_IMAGES[denColor]) {
-    imageUrl = PLAYER_CARD_IMAGES[denColor];
-  }
-
   const extraClasses = [];
   if (denColor) {
     extraClasses.push("vj-card--den-" + denColor.toLowerCase());
@@ -214,7 +234,7 @@ export function renderPlayerSlotCard(player, opts = {}) {
     extraClasses.push("vj-card--lead");
   }
 
-  // Geen tekst-overlay meer: alleen full-art kaart + glow/icoontje
+  // Geen tekst-overlay: alleen full-art kaart + CSS-glow
   return createBaseCard({
     imageUrl,
     title: "",
