@@ -2732,40 +2732,11 @@ initAuth(async () => {
   if (btnScout) btnScout.addEventListener("click", performScout);
   if (btnShift) btnShift.addEventListener("click", performShift);
 
-  // DECISION
-  if (btnLurk) btnLurk.addEventListener("click", () => selectDecision("LURK"));
-  if (btnBurrow)
-    btnBurrow.addEventListener("click", () => selectDecision("BURROW"));
-  if (btnDash) btnDash.addEventListener("click", () => selectDecision("DASH"));
-
   // ACTIONS
   if (btnPass) btnPass.addEventListener("click", passAction);
   if (btnHand) btnHand.addEventListener("click", openHandModal);
   if (btnLoot) btnLoot.addEventListener("click", openLootModal);
-
-    if (btnLead) {
-    btnLead.addEventListener("click", () => {
-      openLeadCommandCenter();
-    });
-  }
-
-      const leadId = await resolveLeadPlayerId(currentGame);
-      if (!leadId) {
-        alert("Er is nog geen Lead Fox aangewezen.");
-        return;
-      }
-
-      // Niet-lead: geen toegang tot de OPS-log
-      if (leadId !== currentPlayer.id) {
-        alert(
-          "Alleen de Lead Fox heeft toegang tot het volledige overzicht van gespeelde Action Cards in de OPS-fase."
-        );
-        return;
-      }
-
-      // Jij bent de Lead Fox → toon geheime OPS-log
-      await showOpsLogForLead();
-    });
+  if (btnLead) btnLead.addEventListener("click", openLeadCommandCenter);
 
   if (btnHint) {
     btnHint.addEventListener("click", () => {
