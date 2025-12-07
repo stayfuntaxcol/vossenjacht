@@ -2844,4 +2844,4 @@ initAuth(async () => {
       }
     });
   }
-}); // <– dit is de enige afsluitende `});` van initAuth
+});
