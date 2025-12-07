@@ -439,8 +439,7 @@ function renderStatusCards(game) {
     `;
   }
 }
-
-// ==== EINDSCORE / SCOREBOARD ====
+// ==== EINDSCORE / SCOREBOARD + LEADERBOARDS ====
 
 async function renderFinalScoreboard(game) {
   if (!roundInfo) return;
@@ -483,7 +482,6 @@ async function renderFinalScoreboard(game) {
   const winners    = enriched.filter((p) => p.totalScore === bestScore);
   const winnerIds  = new Set(winners.map((w) => w.id));
 
-  // eerst alles in roundInfo opbouwen
   roundInfo.innerHTML = "";
 
   const section = document.createElement("div");
@@ -507,7 +505,6 @@ async function renderFinalScoreboard(game) {
     section.appendChild(pWin);
   }
 
-  // Tabel met de eindstand van DIT spel
   const table = document.createElement("table");
   table.className = "scoreboard-table";
   table.innerHTML = `
@@ -547,38 +544,39 @@ async function renderFinalScoreboard(game) {
 
   section.appendChild(table);
 
- // ===== multi-leaderboards =====
-const leaderboardSection = document.createElement("div");
-leaderboardSection.className = "leaderboard-section-multi";
-leaderboardSection.innerHTML = `
-  <h3 class="leaderboard-main-title">Leaderboards</h3>
-  <div class="leaderboard-grid">
-    <div class="leaderboard-block">
-      <div class="leaderboard-title">Top 10 – Vandaag</div>
-      <ul class="leaderboard-list" id="leaderboardToday"></ul>
+  // ===== multi-leaderboards onder score-tabel =====
+  const leaderboardSection = document.createElement("div");
+  leaderboardSection.className = "leaderboard-section-multi";
+  leaderboardSection.innerHTML = `
+    <h3 class="leaderboard-main-title">Leaderboards</h3>
+    <div class="leaderboard-grid">
+      <div class="leaderboard-block">
+        <div class="leaderboard-title">Top 10 – Vandaag</div>
+        <ul class="leaderboard-list" id="leaderboardToday"></ul>
+      </div>
+      <div class="leaderboard-block">
+        <div class="leaderboard-title">Top 25 – Deze maand</div>
+        <ul class="leaderboard-list" id="leaderboardMonth"></ul>
+      </div>
+      <div class="leaderboard-block">
+        <div class="leaderboard-title">Top 100 – All-time</div>
+        <ul class="leaderboard-list" id="leaderboardAllTime"></ul>
+      </div>
     </div>
-    <div class="leaderboard-block">
-      <div class="leaderboard-title">Top 25 – Deze maand</div>
-      <ul class="leaderboard-list" id="leaderboardMonth"></ul>
-    </div>
-    <div class="leaderboard-block">
-      <div class="leaderboard-title">Top 100 – All-time</div>
-      <ul class="leaderboard-list" id="leaderboardAllTime"></ul>
-    </div>
-  </div>
-`;
-section.appendChild(leaderboardSection);
+  `;
+  section.appendChild(leaderboardSection);
 
-roundInfo.appendChild(section);
+  roundInfo.appendChild(section);
 
-// leaderboards vullen in roundInfo
-await loadLeaderboardsMulti();
+  // Leaderboards vullen voor dit scherm
+  await loadLeaderboardsMulti();
 
-// daarna zelfde inhoud in de popup zetten
-if (scoreOverlayContent) {
-  const scoreboardClone = section.cloneNode(true);
-  scoreOverlayContent.innerHTML = "";
-  scoreOverlayContent.appendChild(scoreboardClone);
+  // Daarna dezelfde inhoud in de popup zetten
+  if (scoreOverlayContent) {
+    const scoreboardClone = section.cloneNode(true);
+    scoreOverlayContent.innerHTML = "";
+    scoreOverlayContent.appendChild(scoreboardClone);
+  }
 }
 
 /**
@@ -670,7 +668,6 @@ async function fillLeaderboardAllTime(listEl) {
   const docs = [];
   snap.forEach((docSnap) => docs.push(docSnap.data()));
 
-  // Sorteer op de gecorrigeerde score (incl. bonus / sack)
   docs.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
 
   let rank = 1;
@@ -702,7 +699,6 @@ async function fillLeaderboardToday(listEl) {
   const docs = [];
   snap.forEach((docSnap) => docs.push(docSnap.data()));
 
-  // Sorteer op gecorrigeerde score
   docs.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
   const top = docs.slice(0, 10);
 
@@ -734,7 +730,6 @@ async function fillLeaderboardMonth(listEl) {
   const docs = [];
   snap.forEach((docSnap) => docs.push(docSnap.data()));
 
-  // Sorteer op gecorrigeerde score
   docs.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
   const top = docs.slice(0, 25);
 
