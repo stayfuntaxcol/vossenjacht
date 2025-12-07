@@ -33,6 +33,11 @@ const gameStatusDiv = document.getElementById("gameStatus");
 const hostStatusLine = document.getElementById("hostStatusLine");
 const hostFeedbackLine = document.getElementById("hostFeedbackLine");
 
+// Lead Fox Command Center
+const leadCommandModalOverlay = document.getElementById("leadCommandModalOverlay");
+const leadCommandModalClose   = document.getElementById("leadCommandModalClose");
+const leadCommandContent      = document.getElementById("leadCommandContent");
+
 // Hero / spelerkaart
 const playerAvatarEl = document.getElementById("playerAvatar");
 const playerCardArtEl = document.getElementById("playerCardArt");
@@ -1576,6 +1581,54 @@ function computeNextOpsIndex(game) {
   return (idx + 1) % order.length;
 }
 
+function formatChoiceForDisplay(phase, rawChoice) {
+  if (!rawChoice) return "–";
+  const choice = String(rawChoice);
+
+  // DECISION_xxx
+  if (phase === "DECISION" && choice.startsWith("DECISION_")) {
+    const kind = choice.slice("DECISION_".length);
+    if (kind === "LURK")   return "LURK – in de Yard blijven";
+    if (kind === "BURROW") return "BURROW – schuilen / verstoppen";
+    if (kind === "DASH")   return "DASH – met buit vluchten";
+    return kind;
+  }
+
+  // MOVE_xxx
+  if (phase === "MOVE" && choice.startsWith("MOVE_")) {
+    if (choice.includes("SNATCH")) {
+      return "SNATCH – 1 buitkaart uit de stapel";
+    }
+    if (choice.includes("FORAGE")) {
+      const m = choice.match(/FORAGE_(\d+)/);
+      const n = m ? m[1] : "?";
+      return `FORAGE – ${n} Action Card(s) getrokken`;
+    }
+    if (choice.includes("SCOUT_")) {
+      const m = choice.match(/SCOUT_(\d+)/);
+      const pos = m ? m[1] : "?";
+      return `SCOUT – Event op positie ${pos} bekeken`;
+    }
+    if (choice.includes("SHIFT_")) {
+      const m = choice.match(/SHIFT_(.+)/);
+      const detail = m ? m[1] : "?";
+      return `SHIFT – events gewisseld (${detail})`;
+    }
+    return choice.slice("MOVE_".length);
+  }
+
+  // ACTION_xxx
+  if (phase === "ACTIONS" && choice.startsWith("ACTION_")) {
+    const name = choice.slice("ACTION_".length);
+    if (name === "PASS") {
+      return "PASS – geen kaart gespeeld";
+    }
+    return `${name} – Action Card`;
+  }
+
+  return choice;
+}
+
 // ===== MOVE-ACTIES =====
 
 async function performSnatch() {
@@ -2465,7 +2518,169 @@ async function playMaskSwap(game, player) {
     );
     return;
   }
+async function renderLeadCommandCenter() {
+  if (!leadCommandContent || !currentGame) return;
 
+  leadCommandContent.innerHTML = "";
+
+  const round = currentGame.round || 0;
+
+  // Haal spelers op (voor naam + Den-kleur)
+  const players = await fetchPlayersForGame();
+  const playerById = {};
+  players.forEach((p) => {
+    playerById[p.id] = p;
+  });
+
+  // Haal alle acties op en filter op deze ronde
+  const actionsCol = collection(db, "games", gameId, "actions");
+  const snap = await getDocs(actionsCol);
+
+  const perPlayer = new Map();
+
+  snap.forEach((docSnap) => {
+    const d = docSnap.data() || {};
+    if ((d.round || 0) !== round) return;
+
+    const pid = d.playerId || "unknown";
+    const phase = d.phase || "";
+    const choice = d.choice || "";
+
+    let bucket = perPlayer.get(pid);
+    if (!bucket) {
+      bucket = { moves: [], actions: [], decisions: [] };
+      perPlayer.set(pid, bucket);
+    }
+
+    if (phase === "MOVE") bucket.moves.push(d);
+    else if (phase === "ACTIONS") bucket.actions.push(d);
+    else if (phase === "DECISION") bucket.decisions.push(d);
+  });
+
+  // Info-header
+  const header = document.createElement("p");
+  header.className = "lead-command-subtitle";
+  header.textContent = `Ronde ${round} – overzicht van alle keuzes per speler.`;
+  leadCommandContent.appendChild(header);
+
+  const orderedPlayers = sortPlayersByJoinOrder(players);
+
+  if (!orderedPlayers.length) {
+    const msg = document.createElement("p");
+    msg.textContent = "Er zijn nog geen spelers gevonden.";
+    msg.style.fontSize = "0.9rem";
+    msg.style.opacity = "0.8";
+    leadCommandContent.appendChild(msg);
+    return;
+  }
+
+  orderedPlayers.forEach((p) => {
+    const group = perPlayer.get(p.id) || { moves: [], actions: [], decisions: [] };
+
+    const block = document.createElement("div");
+    block.className = "lead-player-block";
+
+    const color = (p.color || p.denColor || p.den || "").toUpperCase();
+    if (color === "RED") block.classList.add("den-red");
+    else if (color === "BLUE") block.classList.add("den-blue");
+    else if (color === "GREEN") block.classList.add("den-green");
+    else if (color === "YELLOW") block.classList.add("den-yellow");
+
+    if (currentPlayer && p.id === currentPlayer.id) {
+      block.classList.add("is-self-lead");
+    }
+
+    const headerRow = document.createElement("div");
+    headerRow.className = "lead-player-header";
+
+    const nameEl = document.createElement("div");
+    nameEl.className = "lead-player-name";
+    nameEl.textContent = p.name || "Vos";
+
+    const denEl = document.createElement("div");
+    denEl.className = "lead-player-denpill";
+    denEl.textContent = color ? `Den ${color}` : "Den onbekend";
+
+    headerRow.appendChild(nameEl);
+    headerRow.appendChild(denEl);
+
+    const phaseGrid = document.createElement("div");
+    phaseGrid.className = "lead-phase-grid";
+
+    // Helper om een kolom te bouwen
+    function buildPhaseCol(title, phaseKey, items) {
+      const col = document.createElement("div");
+      col.className = "lead-phase-col";
+
+      const tEl = document.createElement("div");
+      tEl.className = "lead-phase-title";
+      tEl.textContent = title;
+      col.appendChild(tEl);
+
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "lead-phase-line lead-phase-empty";
+        empty.textContent = "Nog geen keuze.";
+        col.appendChild(empty);
+      } else {
+        items.forEach((a) => {
+          const line = document.createElement("div");
+          line.className = "lead-phase-line";
+          line.textContent = formatChoiceForDisplay(phaseKey, a.choice);
+          col.appendChild(line);
+        });
+      }
+      return col;
+    }
+
+    const moveCol = buildPhaseCol("MOVE", "MOVE", group.moves);
+    const actCol  = buildPhaseCol("ACTIONS", "ACTIONS", group.actions);
+    const decCol  = buildPhaseCol("DECISION", "DECISION", group.decisions);
+
+    phaseGrid.appendChild(moveCol);
+    phaseGrid.appendChild(actCol);
+    phaseGrid.appendChild(decCol);
+
+    block.appendChild(headerRow);
+    block.appendChild(phaseGrid);
+
+    leadCommandContent.appendChild(block);
+  });
+}
+
+async function openLeadCommandCenter() {
+  if (!currentGame || !currentPlayer) {
+    alert("Geen game of speler geladen.");
+    return;
+  }
+
+  const leadId = await resolveLeadPlayerId(currentGame);
+  if (!leadId) {
+    alert("Er is nog geen Lead Fox aangewezen.");
+    return;
+  }
+
+  if (leadId !== currentPlayer.id) {
+    alert(
+      "Alleen de Lead Fox heeft toegang tot het Command Center met alle keuzes van deze ronde."
+    );
+    return;
+  }
+
+  if (!leadCommandModalOverlay || !leadCommandContent) {
+    alert("Command Center UI ontbreekt in de HTML.");
+    return;
+  }
+
+  leadCommandModalOverlay.classList.remove("hidden");
+  await renderLeadCommandCenter();
+}
+
+function closeLeadCommandCenter() {
+  if (!leadCommandModalOverlay) return;
+  leadCommandModalOverlay.classList.add("hidden");
+}
+   
   // sorteer op tijd als createdAt beschikbaar is
   list.sort((a, b) => {
     const ta = a.createdAt && typeof a.createdAt.toMillis === "function"
