@@ -2493,31 +2493,8 @@ async function playMaskSwap(game, player) {
   );
   return true;
 }
+// ===== LEAD FOX COMMAND CENTER =====
 
- async function showOpsLogForLead() {
-  if (!currentGame) {
-    alert("Geen game geladen.");
-    return;
-  }
-
-  const round = currentGame.round || 0;
-  const actionsCol = collection(db, "games", gameId, "actions");
-  const snap = await getDocs(actionsCol);
-
-  const list = [];
-  snap.forEach((docSnap) => {
-    const d = docSnap.data() || {};
-    if ((d.phase || "") === "ACTIONS" && (d.round || 0) === round) {
-      list.push(d);
-    }
-  });
-
-  if (!list.length) {
-    alert(
-      `OPS-log – Ronde ${round}\n\nEr zijn in deze ronde nog geen Action Cards gespeeld.`
-    );
-    return;
-  }
 async function renderLeadCommandCenter() {
   if (!leadCommandContent || !currentGame) return;
 
@@ -2525,14 +2502,12 @@ async function renderLeadCommandCenter() {
 
   const round = currentGame.round || 0;
 
-  // Haal spelers op (voor naam + Den-kleur)
   const players = await fetchPlayersForGame();
   const playerById = {};
   players.forEach((p) => {
     playerById[p.id] = p;
   });
 
-  // Haal alle acties op en filter op deze ronde
   const actionsCol = collection(db, "games", gameId, "actions");
   const snap = await getDocs(actionsCol);
 
@@ -2542,9 +2517,8 @@ async function renderLeadCommandCenter() {
     const d = docSnap.data() || {};
     if ((d.round || 0) !== round) return;
 
-    const pid = d.playerId || "unknown";
+    const pid   = d.playerId || "unknown";
     const phase = d.phase || "";
-    const choice = d.choice || "";
 
     let bucket = perPlayer.get(pid);
     if (!bucket) {
@@ -2552,12 +2526,11 @@ async function renderLeadCommandCenter() {
       perPlayer.set(pid, bucket);
     }
 
-    if (phase === "MOVE") bucket.moves.push(d);
-    else if (phase === "ACTIONS") bucket.actions.push(d);
+    if (phase === "MOVE")       bucket.moves.push(d);
+    else if (phase === "ACTIONS")  bucket.actions.push(d);
     else if (phase === "DECISION") bucket.decisions.push(d);
   });
 
-  // Info-header
   const header = document.createElement("p");
   header.className = "lead-command-subtitle";
   header.textContent = `Ronde ${round} – overzicht van alle keuzes per speler.`;
@@ -2575,7 +2548,11 @@ async function renderLeadCommandCenter() {
   }
 
   orderedPlayers.forEach((p) => {
-    const group = perPlayer.get(p.id) || { moves: [], actions: [], decisions: [] };
+    const group = perPlayer.get(p.id) || {
+      moves: [],
+      actions: [],
+      decisions: [],
+    };
 
     const block = document.createElement("div");
     block.className = "lead-player-block";
@@ -2607,7 +2584,6 @@ async function renderLeadCommandCenter() {
     const phaseGrid = document.createElement("div");
     phaseGrid.className = "lead-phase-grid";
 
-    // Helper om een kolom te bouwen
     function buildPhaseCol(title, phaseKey, items) {
       const col = document.createElement("div");
       col.className = "lead-phase-col";
@@ -2630,16 +2606,19 @@ async function renderLeadCommandCenter() {
           col.appendChild(line);
         });
       }
+
       return col;
     }
 
-    const moveCol = buildPhaseCol("MOVE", "MOVE", group.moves);
-    const actCol  = buildPhaseCol("ACTIONS", "ACTIONS", group.actions);
-    const decCol  = buildPhaseCol("DECISION", "DECISION", group.decisions);
-
-    phaseGrid.appendChild(moveCol);
-    phaseGrid.appendChild(actCol);
-    phaseGrid.appendChild(decCol);
+    phaseGrid.appendChild(
+      buildPhaseCol("MOVE", "MOVE", group.moves)
+    );
+    phaseGrid.appendChild(
+      buildPhaseCol("ACTIONS", "ACTIONS", group.actions)
+    );
+    phaseGrid.appendChild(
+      buildPhaseCol("DECISION", "DECISION", group.decisions)
+    );
 
     block.appendChild(headerRow);
     block.appendChild(phaseGrid);
@@ -2679,29 +2658,6 @@ async function openLeadCommandCenter() {
 function closeLeadCommandCenter() {
   if (!leadCommandModalOverlay) return;
   leadCommandModalOverlay.classList.add("hidden");
-}
-   
-  // sorteer op tijd als createdAt beschikbaar is
-  list.sort((a, b) => {
-    const ta = a.createdAt && typeof a.createdAt.toMillis === "function"
-      ? a.createdAt.toMillis()
-      : 0;
-    const tb = b.createdAt && typeof b.createdAt.toMillis === "function"
-      ? b.createdAt.toMillis()
-      : 0;
-    return ta - tb;
-  });
-
-  const lines = list.map((a) => {
-    const name = a.playerName || "Vos";
-    const choice = a.choice || "?";
-    return `${name}: ${choice}`;
-  });
-
-  alert(
-    `OPS-log – Ronde ${round}\n\nAlle gespeelde Action Cards in de OPS-fase:\n\n` +
-      lines.join("\n")
-  );
 }
 
 // ===== INIT / LISTENERS =====
