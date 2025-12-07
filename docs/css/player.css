@@ -141,7 +141,8 @@ body.player-body {
 
 .hero-top {
   display: flex;
-  align-items: stretch;
+  align-items: center;
+  justify-content: center; /* kaart centreren */
   gap: 0.55rem;
 }
 
@@ -269,12 +270,9 @@ body.player-body {
 
 /* In the Yard = geen overlay (status-yard krijgt geen ::after) */
 
+/* Spelersinfo volledig verbergen */
 .hero-info {
-  flex: 1 1 auto;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 0.35rem;
+  display: none;
 }
 
 .hero-name {
