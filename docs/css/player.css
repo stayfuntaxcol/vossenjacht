@@ -790,3 +790,20 @@ body.player-body {
     margin: 0 0.4rem;
   }
 }
+
+/* MOBIEL: kaart zo groot mogelijk in beeld */
+@media (max-width: 700px) {
+  .player-shell {
+    padding: 0.5rem;
+  }
+
+  .hero-card {
+    padding: 0.5rem 0.5rem 0.75rem;
+  }
+
+  .hero-avatar {
+    width: 100%;
+    max-width: 380px;   /* bijna volle breedte telefoon */
+    aspect-ratio: 2 / 3;
+  }
+}
