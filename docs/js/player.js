@@ -1,6 +1,9 @@
 // VOSSENJACHT player.js – nieuwe UI: fase-panels + loot-meter + Host/Coach
 
 import { initAuth } from "./firebase.js";
+import { renderPlayerSlotCard } from "./cardRenderer.js";
+
+// pas ./cardRenderer.js aan als jouw bestand anders heet
 import { addLog } from "./log.js";
 import { getEventById } from "./cards.js";
 import {
@@ -332,6 +335,33 @@ async function resolveLeadPlayerId(game) {
 }
 
 // ===== HELPERS ROUND FLAGS / PLAYERS =====
+
+// Hero-kaart op het spelersscherm (zelfde logica als community board)
+function renderHeroAvatarCard(player, game) {
+  const avatarEl = document.getElementById("playerAvatar");
+  if (!avatarEl || !player) return;
+
+  // container leegmaken
+  avatarEl.innerHTML = "";
+
+  // Bepaal of deze speler Lead Fox is (optioneel, alleen als je dat gebruikt)
+  let isLead = false;
+  if (game && Array.isArray(game.playersOrder)) {
+    // Als je ergens een playersOrder of leadPlayerId hebt kun je dit aanpassen
+    // Voor nu houden we het simpel: als player.isLead == true
+    isLead = !!player.isLead;
+  }
+
+  // Gebruik dezelfde renderer als de community board
+  const cardEl = renderPlayerSlotCard(
+    { ...player, isLead },
+    { size: "large" } // grotere kaart in het hero-vak
+  );
+
+  if (cardEl) {
+    avatarEl.appendChild(cardEl);
+  }
+}
 
 function mergeRoundFlags(game) {
   const base = {
@@ -926,31 +956,42 @@ function renderPlayer() {
   if (!currentPlayer) return;
 
   const p = currentPlayer;
+  const g = currentGame || null;
 
-  if (playerNameEl) playerNameEl.textContent = p.name || "Onbekende vos";
+  if (playerNameEl) {
+    playerNameEl.textContent = p.name || "Onbekende vos";
+  }
 
   if (playerDenColorEl) {
-    const color = (p.color || "").toUpperCase();
-    let label = "Den: onbekend";
-    if (color === "RED") label = "Den: RED";
-    else if (color === "BLUE") label = "Den: BLUE";
-    else if (color === "GREEN") label = "Den: GREEN";
-    else if (color === "YELLOW") label = "Den: YELLOW";
-    playerDenColorEl.textContent = label;
+    const color = p.color || p.denColor || p.den || "?";
+    playerDenColorEl.textContent = color
+      ? `Den-kleur: ${String(color).toUpperCase()}`
+      : "Den-kleur onbekend";
   }
 
   if (playerStatusEl) {
-    let statusText;
-    if (p.dashed) {
-      statusText = "Status: DASHED – je hebt de Yard verlaten met je buit.";
-    } else if (p.inYard === false) {
-      statusText = "Status: CAUGHT – je bent gevangen.";
-    } else {
-      statusText = "Status: in de Yard.";
-    }
-    if (p.decision) statusText += ` (Decision deze ronde: ${p.decision})`;
-    playerStatusEl.textContent = statusText;
+    const status = p.inYard === false
+      ? "Gevangen / uit de raid"
+      : p.dashed
+      ? "Met buit gevlucht (DASH)"
+      : "In de Yard";
+    playerStatusEl.textContent = `Status: ${status}`;
   }
+
+  if (playerScoreEl) {
+    const eggs  = p.eggs  || 0;
+    const hens  = p.hens  || 0;
+    const prize = p.prize || 0;
+    const score = p.score || 0;
+    playerScoreEl.textContent = `Score: ${score} (P:${prize} H:${hens} E:${eggs})`;
+  }
+
+  // Hero-kaart in de avatar: vaste spelerskaart per naam
+  renderHeroAvatarCard(p, g);
+
+  // Loot-meter / loot-summary enz. kun je hieronder laten staan zoals je al had
+  updateLootMeterAndSummary(p);
+}
 
   updateLootUi(p);
   updatePhasePanels(currentGame, p);
