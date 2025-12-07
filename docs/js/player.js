@@ -2441,6 +2441,54 @@ async function playMaskSwap(game, player) {
   return true;
 }
 
+ async function showOpsLogForLead() {
+  if (!currentGame) {
+    alert("Geen game geladen.");
+    return;
+  }
+
+  const round = currentGame.round || 0;
+  const actionsCol = collection(db, "games", gameId, "actions");
+  const snap = await getDocs(actionsCol);
+
+  const list = [];
+  snap.forEach((docSnap) => {
+    const d = docSnap.data() || {};
+    if ((d.phase || "") === "ACTIONS" && (d.round || 0) === round) {
+      list.push(d);
+    }
+  });
+
+  if (!list.length) {
+    alert(
+      `OPS-log – Ronde ${round}\n\nEr zijn in deze ronde nog geen Action Cards gespeeld.`
+    );
+    return;
+  }
+
+  // sorteer op tijd als createdAt beschikbaar is
+  list.sort((a, b) => {
+    const ta = a.createdAt && typeof a.createdAt.toMillis === "function"
+      ? a.createdAt.toMillis()
+      : 0;
+    const tb = b.createdAt && typeof b.createdAt.toMillis === "function"
+      ? b.createdAt.toMillis()
+      : 0;
+    return ta - tb;
+  });
+
+  const lines = list.map((a) => {
+    const name = a.playerName || "Vos";
+    const choice = a.choice || "?";
+    return `${name}: ${choice}`;
+  });
+
+  alert(
+    `OPS-log – Ronde ${round}\n\nAlle gespeelde Action Cards in de OPS-fase:\n\n` +
+      lines.join("\n")
+  );
+}
+
 // ===== INIT / LISTENERS =====
 
 async function ensurePlayerDoc() {
@@ -2526,26 +2574,27 @@ initAuth(async () => {
 
   if (btnLead) {
     btnLead.addEventListener("click", async () => {
-      if (!currentGame) {
-        alert("Geen game geladen.");
+      if (!currentGame || !currentPlayer) {
+        alert("Geen game of speler geladen.");
         return;
       }
-      const players = await fetchPlayersForGame();
-      const ordered = sortPlayersByJoinOrder(players);
-      const idx =
-        typeof currentGame.leadIndex === "number"
-          ? currentGame.leadIndex
-          : 0;
-      const lead = ordered[idx];
-      if (!lead) {
+
+      const leadId = await resolveLeadPlayerId(currentGame);
+      if (!leadId) {
         alert("Er is nog geen Lead Fox aangewezen.");
         return;
       }
-      alert(
-        `Lead Fox is: ${lead.name || "Vos"} (Den ${
-          lead.color || "?"
-        })`
-      );
+
+      // Niet-lead: geen toegang tot de OPS-log
+      if (leadId !== currentPlayer.id) {
+        alert(
+          "Alleen de Lead Fox heeft toegang tot het volledige overzicht van gespeelde Action Cards in de OPS-fase."
+        );
+        return;
+      }
+
+      // Jij bent de Lead Fox → toon geheime OPS-log
+      await showOpsLogForLead();
     });
   }
 
