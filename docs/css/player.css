@@ -230,45 +230,28 @@ body.player-body {
     0 0 32px rgba(234, 179, 8, 1);
 }
 
-/* Status-overlays op de kaart: CAUGHT / DASHED */
+/* Status-overlays op de kaart: CAUGHT / DASHED
+   → vervangen door status-kaarten uit /assets */
 .hero-avatar.status-caught::after,
 .hero-avatar.status-dashed::after {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-align: center;
-  color: #f9fafb;
-  text-shadow: 0 0 6px rgba(0, 0, 0, 0.7);
+  content: "";
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
-/* CAUGHT = roodachtige overlay */
+/* CAUGHT gebruikt card_player_status_caught.png */
 .hero-avatar.status-caught::after {
-  content: "CAUGHT";
-  background: linear-gradient(
-    135deg,
-    rgba(127, 29, 29, 0.92),
-    rgba(15, 23, 42, 0.96)
-  );
+  background-image: url("../assets/card_player_status_caught.png");
 }
 
-/* DASHED = groenige overlay */
+/* DASHED gebruikt card_status_player_dashed.png */
 .hero-avatar.status-dashed::after {
-  content: "DASHED";
-  background: linear-gradient(
-    135deg,
-    rgba(22, 101, 52, 0.9),
-    rgba(15, 23, 42, 0.96)
-  );
+  background-image: url("../assets/card_status_player_dashed.png");
 }
-
-/* In the Yard = geen overlay (status-yard krijgt geen ::after) */
 
 /* Spelersinfo volledig verbergen */
 .hero-info {
