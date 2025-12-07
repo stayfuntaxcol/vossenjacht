@@ -581,8 +581,8 @@ async function renderFinalScoreboard(game) {
 
 /**
  * Berekent de "echte" leaderboard-score, incl. sack-bonus.
- * E = 1, H = 2, P = 3, + bonus.
- * Neemt de hoogste van (oude) data.score en deze berekening.
+ * E = 1, H = 2, P = 3, + evt. bonus.
+ * Neemt de hoogste van data.score en deze berekening.
  */
 function calcLeaderboardScore(data) {
   if (!data) return 0;
@@ -590,7 +590,7 @@ function calcLeaderboardScore(data) {
   const eggs  = Number(data.eggs  || 0);
   const hens  = Number(data.hens  || 0);
   const prize = Number(data.prize || 0);
-  const bonus = Number(data.bonus || 0); // sack-bonus
+  const bonus = Number(data.bonus || 0); // als je die opslaat
 
   const baseFromCounts = eggs + hens * 2 + prize * 3;
   const stored         = Number(data.score || 0);
@@ -604,6 +604,9 @@ function appendLeaderboardRow(listEl, rank, data) {
   const prize = data.prize || 0;
   const bonus = data.bonus || 0;
   const score = calcLeaderboardScore(data);
+
+  // Extra safeguard: geen regels met 0 score
+  if (score <= 0) return;
 
   let dateLabel = "";
   if (data.playedAt && data.playedAt.seconds != null) {
@@ -665,8 +668,19 @@ async function fillLeaderboardAllTime(listEl) {
     return;
   }
 
-  const docs = [];
+  let docs = [];
   snap.forEach((docSnap) => docs.push(docSnap.data()));
+
+  // filter alles met 0 of minder weg
+  docs = docs.filter((d) => calcLeaderboardScore(d) > 0);
+
+  if (!docs.length) {
+    const li = document.createElement("li");
+    li.className = "leaderboard-empty";
+    li.textContent = "Nog geen scores.";
+    listEl.appendChild(li);
+    return;
+  }
 
   docs.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
 
@@ -696,8 +710,17 @@ async function fillLeaderboardToday(listEl) {
     return;
   }
 
-  const docs = [];
+  let docs = [];
   snap.forEach((docSnap) => docs.push(docSnap.data()));
+
+  docs = docs.filter((d) => calcLeaderboardScore(d) > 0);
+  if (!docs.length) {
+    const li = document.createElement("li");
+    li.className = "leaderboard-empty";
+    li.textContent = "Nog geen scores voor vandaag.";
+    listEl.appendChild(li);
+    return;
+  }
 
   docs.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
   const top = docs.slice(0, 10);
@@ -727,8 +750,17 @@ async function fillLeaderboardMonth(listEl) {
     return;
   }
 
-  const docs = [];
+  let docs = [];
   snap.forEach((docSnap) => docs.push(docSnap.data()));
+
+  docs = docs.filter((d) => calcLeaderboardScore(d) > 0);
+  if (!docs.length) {
+    const li = document.createElement("li");
+    li.className = "leaderboard-empty";
+    li.textContent = "Nog geen scores voor deze maand.";
+    listEl.appendChild(li);
+    return;
+  }
 
   docs.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
   const top = docs.slice(0, 25);
