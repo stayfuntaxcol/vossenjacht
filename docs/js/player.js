@@ -958,10 +958,12 @@ function renderPlayer() {
   const p = currentPlayer;
   const g = currentGame || null;
 
+  // Naam
   if (playerNameEl) {
     playerNameEl.textContent = p.name || "Onbekende vos";
   }
 
+  // Den-kleur
   if (playerDenColorEl) {
     const color = p.color || p.denColor || p.den || "?";
     playerDenColorEl.textContent = color
@@ -969,15 +971,18 @@ function renderPlayer() {
       : "Den-kleur onbekend";
   }
 
+  // Status
   if (playerStatusEl) {
-    const status = p.inYard === false
-      ? "Gevangen / uit de raid"
-      : p.dashed
-      ? "Met buit gevlucht (DASH)"
-      : "In de Yard";
+    const status =
+      p.inYard === false
+        ? "Gevangen / uit de raid"
+        : p.dashed
+        ? "Met buit gevlucht (DASH)"
+        : "In de Yard";
     playerStatusEl.textContent = `Status: ${status}`;
   }
 
+  // Score
   if (playerScoreEl) {
     const eggs  = p.eggs  || 0;
     const hens  = p.hens  || 0;
@@ -986,16 +991,24 @@ function renderPlayer() {
     playerScoreEl.textContent = `Score: ${score} (P:${prize} H:${hens} E:${eggs})`;
   }
 
-  // Hero-kaart in de avatar: vaste spelerskaart per naam
+  // Hero-kaart in de avatar (vaste spelerskaart per naam)
   renderHeroAvatarCard(p, g);
 
-  // Loot-meter / loot-summary enz. kun je hieronder laten staan zoals je al had
-  updateLootMeterAndSummary(p);
-}
+  // Loot-meter + samenvatting (nieuwe helper)
+  if (typeof updateLootMeterAndSummary === "function") {
+    updateLootMeterAndSummary(p);
+  }
 
-  updateLootUi(p);
-  updatePhasePanels(currentGame, p);
-  updateHeroCardVisual(currentGame, p);
+  // Oude helpers – alleen aanroepen als ze nog bestaan
+  if (typeof updateLootUi === "function") {
+    updateLootUi(p);
+  }
+  if (typeof updatePhasePanels === "function") {
+    updatePhasePanels(currentGame, p);
+  }
+  if (typeof updateHeroCardVisual === "function") {
+    updateHeroCardVisual(currentGame, p);
+  }
 }
 
 // ===== MOVE / DECISION BUTTON STATE =====
