@@ -898,12 +898,12 @@ export async function saveLeaderboardForGame(gameId) {
       });
     });
 
-    for (const entry of leaderboardEntries) {
-      await addDoc(collection(db, "leaderboard"), entry);
-    }
+for (const entry of leaderboardEntries) {
+  // Zorg dat er alleen spelers met een echte score in de leaderboard komen
+  const s = typeof entry.score === "number" ? entry.score : 0;
+  if (s <= 0) continue; // sla 0-scores over
 
-    await updateDoc(gameRef, { leaderboardWritten: true });
-  } catch (err) {
-    console.error("Fout bij saveLeaderboardForGame:", err);
-  }
+  await addDoc(collection(db, "leaderboard"), entry);
 }
+
+await updateDoc(gameRef, { leaderboardWritten: true });
