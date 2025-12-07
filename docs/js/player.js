@@ -2810,7 +2810,6 @@ initAuth(async () => {
       // Jij bent de Lead Fox → toon geheime OPS-log
       await showOpsLogForLead();
     });
-  }
 
   if (btnHint) {
     btnHint.addEventListener("click", () => {
