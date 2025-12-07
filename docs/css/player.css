@@ -763,6 +763,148 @@ body.player-body {
   padding-inline: 0.9rem;
 }
 
+/* ===== LEAD FOX COMMAND CENTER ===== */
+
+.vj-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 5, 10, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+}
+
+.vj-modal-overlay.hidden {
+  display: none;
+}
+
+.vj-modal-panel.lead-command-panel {
+  background: #05060a;
+  border-radius: 1.25rem;
+  padding: 1.5rem 1.75rem;
+  max-width: 960px;
+  width: 95%;
+  max-height: 85vh;
+  overflow: auto;
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.vj-modal-close {
+  border: none;
+  background: transparent;
+  color: #fff;
+  font-size: 1.4rem;
+  cursor: pointer;
+  float: right;
+}
+
+.lead-command-title {
+  margin: 0 0 0.25rem;
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+
+.lead-command-subtitle {
+  margin: 0 0 1rem;
+  font-size: 0.9rem;
+  opacity: 0.8;
+}
+
+.lead-command-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* Per speler blok */
+
+.lead-player-block {
+  border-radius: 0.9rem;
+  padding: 0.75rem 0.9rem;
+  background: radial-gradient(circle at top left, rgba(255,255,255,0.08), rgba(10,10,20,0.9));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.lead-player-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.lead-player-name {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.lead-player-denpill {
+  font-size: 0.8rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  text-transform: uppercase;
+}
+
+/* Den-kleuren als rand-glow om het blok */
+
+.lead-player-block.den-red {
+  box-shadow: 0 0 12px rgba(255, 60, 60, 0.65);
+}
+
+.lead-player-block.den-blue {
+  box-shadow: 0 0 12px rgba(70, 170, 255, 0.65);
+}
+
+.lead-player-block.den-green {
+  box-shadow: 0 0 12px rgba(80, 220, 120, 0.65);
+}
+
+.lead-player-block.den-yellow {
+  box-shadow: 0 0 12px rgba(255, 220, 80, 0.75);
+}
+
+/* Fase-overzicht */
+
+.lead-phase-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.lead-phase-col {
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 0.6rem;
+  padding: 0.4rem 0.5rem;
+}
+
+.lead-phase-title {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  font-weight: 600;
+  opacity: 0.85;
+  margin-bottom: 0.25rem;
+}
+
+.lead-phase-line {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  opacity: 0.9;
+}
+
+.lead-phase-empty {
+  font-size: 0.75rem;
+  opacity: 0.6;
+  fontStyle: italic;
+}
+
+/* Kleine extra: highlight voor Lead Fox zelf in de lijst (optioneel) */
+.lead-player-block.is-self-lead {
+  border-width: 2px;
+}
+
 /* ==========================================
    RESPONSIVE TWEAKS
    ========================================== */
