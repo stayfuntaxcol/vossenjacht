@@ -2726,11 +2726,22 @@ initAuth(async () => {
     renderPlayer();
   });
 
-  // MOVE
+// MOVE
   if (btnSnatch) btnSnatch.addEventListener("click", performSnatch);
   if (btnForage) btnForage.addEventListener("click", performForage);
-  if (btnScout) btnScout.addEventListener("click", performScout);
-  if (btnShift) btnShift.addEventListener("click", performShift);
+  if (btnScout)  btnScout.addEventListener("click", performScout);
+  if (btnShift)  btnShift.addEventListener("click", performShift);
+
+  // DECISION
+  if (btnLurk) {
+    btnLurk.addEventListener("click", () => selectDecision("LURK"));
+  }
+  if (btnBurrow) {
+    btnBurrow.addEventListener("click", () => selectDecision("BURROW"));
+  }
+  if (btnDash) {
+    btnDash.addEventListener("click", () => selectDecision("DASH"));
+  }
 
   // ACTIONS
   if (btnPass) btnPass.addEventListener("click", passAction);
