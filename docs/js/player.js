@@ -1244,6 +1244,124 @@ function renderHandGrid() {
   });
 }
 
+// ===== ACTION CARD INFO (voor spelersuitleg in HAND-modal) =====
+
+const ACTION_CARD_INFO = {
+  "Scatter!": {
+    moment: "OPS-fase, tijdens jouw beurt.",
+    choice: null,
+    effect:
+      "Tot het einde van deze ronde mag geen enkele vos de MOVE ‘SCOUT’ gebruiken.",
+    note:
+      "Gebruik deze kaart bij voorkeur voordat andere vossen hun MOVE kiezen."
+  },
+  "Den Signal": {
+    moment: "OPS-fase, tijdens jouw beurt.",
+    choice: "Kies één Den-kleur: RED, BLUE, GREEN of YELLOW.",
+    effect:
+      "Alle vossen met die Den-kleur zijn deze ronde immuun voor vang-events vanuit de Event Track (bijv. Dog Charge).",
+    note:
+      "Geldt alleen voor deze ronde en alleen tegen Event-gedreven vangacties."
+  },
+  "No-Go Zone": {
+    moment: "OPS-fase, tijdens jouw beurt.",
+    choice: "Kies één positie op de Event Track (bijv. 3 voor het 3e event).",
+    effect:
+      "Die positie wordt een No-Go Zone: niemand mag daar deze ronde op SCOUTen.",
+    note:
+      "Het event blijft liggen; alleen SCOUT-moves naar die positie zijn verboden."
+  },
+  "Kick Up Dust": {
+    moment: "OPS-fase, tijdens jouw beurt.",
+    choice: "Geen keuze nodig; het spel kiest willekeurig twee Event-posities.",
+    effect:
+      "Twee Event Cards op de Event Track wisselen willekeurig van plek.",
+    note:
+      "Werkt niet als Burrow Beacon (Event Track gelocked) al actief is."
+  },
+  "Burrow Beacon": {
+    moment: "OPS-fase, tijdens jouw beurt.",
+    choice: null,
+    effect:
+      "De Event Track wordt gelocked: deze ronde kan de volgorde van Events niet meer veranderen.",
+    note:
+      "Blokkeert o.a. SHIFT, Kick Up Dust en Pack Tinker voor de rest van de ronde."
+  },
+  "Molting Mask": {
+    moment: "OPS-fase, tijdens jouw beurt.",
+    choice: null,
+    effect:
+      "Verander jouw Den-kleur in een andere willekeurige kleur (RED / BLUE / GREEN / YELLOW), anders dan je huidige.",
+    note:
+      "Vanaf nu val je onder de Den-events en Dog-/Sheepdog-effects van je nieuwe kleur, niet meer van je oude."
+  },
+  "Hold Still": {
+    moment: "OPS-fase, tijdens jouw beurt.",
+    choice: null,
+    effect:
+      "Vanaf nu mogen deze ronde geen nieuwe Action Cards meer worden gespeeld; spelers mogen alleen nog PASS kiezen in de OPS-fase.",
+    note:
+      "Gebruik deze kaart als je de OPS-chaos wilt stoppen en de situatie wilt bevriezen."
+  },
+  "Nose for Trouble": {
+    moment: "OPS-fase, tijdens jouw beurt.",
+    choice:
+      "Kies één Event uit de lijst waarvan jij denkt dat het als volgende wordt onthuld.",
+    effect:
+      "Je voorspelt welk Event als volgende uitkomt. De voorspelling wordt gelogd in deze ronde.",
+    note:
+      "Beloning/straffen voor juiste of foute voorspellingen horen bij de uitgebreide (fysieke) spelregels of jullie huisregels."
+  },
+  "Scent Check": {
+    moment: "OPS-fase, tijdens jouw beurt.",
+    choice: "Kies één andere vos die nog in de Yard zit.",
+    effect:
+      "Je ziet direct de huidige DECISION van die vos (LURK/BURROW/DASH of nog geen keuze). Later, zodra jij jouw DECISION kiest, krijg je opnieuw een pop-up met hun actuele keuze.",
+    note:
+      "Je kopieert hun keuze niet; je krijgt alleen extra informatie over hun gedrag."
+  },
+  "Follow the Tail": {
+    moment: "OPS-fase, tijdens jouw beurt.",
+    choice: "Kies één andere vos die nog in de Yard zit.",
+    effect:
+      "Aan het einde van de DECISION-fase wordt jouw definitieve DECISION automatisch gelijk aan die van de gekozen vos.",
+    note:
+      "Je mag zelf een DECISION kiezen, maar bij de reveal telt uiteindelijk wat jouw ‘staart-leider’ gekozen heeft."
+  },
+  "Alpha Call": {
+    moment: "OPS-fase, tijdens jouw beurt (liefst aan het begin van een ronde).",
+    choice: "Kies één vos als nieuwe Lead Fox.",
+    effect:
+      "De gekozen vos wordt de nieuwe Lead Fox (neonkaart, rol in de raid volgens jullie spelvariant).",
+    note:
+      "De exacte speciale rechten van de Lead Fox staan verder uitgewerkt in de spelregels."
+  },
+  "Pack Tinker": {
+    moment: "OPS-fase, tijdens jouw beurt.",
+    choice:
+      "Kies twee posities op de Event Track (bijv. posities 2 en 5) om te wisselen.",
+    effect:
+      "De Event Cards op die twee posities wisselen van plek.",
+    note:
+      "Werkt niet als Burrow Beacon al actief is (Event Track gelocked)."
+  },
+  "Mask Swap": {
+    moment: "OPS-fase, tijdens jouw beurt.",
+    choice:
+      "Geen keuze nodig; alle vossen die nog in de Yard zitten doen automatisch mee.",
+    effect:
+      "Alle Den-kleuren van vossen in de Yard worden gehusseld en opnieuw uitgedeeld.",
+    note:
+      "Je weet niet welke kleur je terugkrijgt. Vang-events kunnen hierdoor plots heel anders uitpakken."
+  }
+};
+
+function getActionCardInfo(card) {
+  if (!card || !card.name) return null;
+  const key = String(card.name).trim();
+  return ACTION_CARD_INFO[key] || null;
+}
+
 function openHandCardDetail(index) {
   if (!handCardsGrid) return;
   if (!currentGame || !currentPlayer) return;
@@ -1273,16 +1391,40 @@ function openHandCardDetail(index) {
 
   const titleEl = document.createElement("h3");
   titleEl.textContent = card.name || "Onbekende kaart";
-
-  const descEl = document.createElement("p");
-  const desc =
-    card.desc ||
-    card.text ||
-    "Deze kaart heeft nog geen digitale beschrijving. Gebruik de fysieke spelregels of speel hem op gevoel.";
-  descEl.textContent = desc;
-
   textBox.appendChild(titleEl);
-  textBox.appendChild(descEl);
+
+  const info = getActionCardInfo(card);
+
+  if (info) {
+    if (info.moment) {
+      const pMoment = document.createElement("p");
+      pMoment.innerHTML = `<strong>Moment:</strong> ${info.moment}`;
+      textBox.appendChild(pMoment);
+    }
+    if (info.choice) {
+      const pChoice = document.createElement("p");
+      pChoice.innerHTML = `<strong>Kies:</strong> ${info.choice}`;
+      textBox.appendChild(pChoice);
+    }
+    if (info.effect) {
+      const pEffect = document.createElement("p");
+      pEffect.innerHTML = `<strong>Effect:</strong> ${info.effect}`;
+      textBox.appendChild(pEffect);
+    }
+    if (info.note) {
+      const pNote = document.createElement("p");
+      pNote.innerHTML = `<strong>Let op:</strong> ${info.note}`;
+      textBox.appendChild(pNote);
+    }
+  } else {
+    const descEl = document.createElement("p");
+    const desc =
+      card.desc ||
+      card.text ||
+      "Deze kaart heeft nog geen digitale beschrijving. Gebruik de fysieke spelregels of speel hem op gevoel.";
+    descEl.textContent = desc;
+    textBox.appendChild(descEl);
+  }
 
   const actions = document.createElement("div");
   actions.className = "hand-card-detail-actions";
