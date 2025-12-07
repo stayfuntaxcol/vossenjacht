@@ -404,13 +404,13 @@ function renderStatusCards(game) {
     sackCard.classList.remove("sack-empty", "sack-half", "sack-full");
 
     // simpele drempels:
-    // 0  kaarten  => empty
-    // 1–4 kaarten => half
-    // 5+ kaarten  => full
+    // 0-3  kaarten  => empty
+    // 4-7 kaarten => half
+    // 8+ kaarten  => full
     let stateClass = "sack-empty";
-    if (count === 0) {
+    if (count <= 4) {
       stateClass = "sack-empty";
-    } else if (count <= 4) {
+    } else if (count <= 8) {
       stateClass = "sack-half";
     } else {
       stateClass = "sack-full";
