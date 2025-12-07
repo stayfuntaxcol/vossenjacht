@@ -2787,12 +2787,11 @@ initAuth(async () => {
   if (btnHand) btnHand.addEventListener("click", openHandModal);
   if (btnLoot) btnLoot.addEventListener("click", openLootModal);
 
-  if (btnLead) {
-    btnLead.addEventListener("click", async () => {
-      if (!currentGame || !currentPlayer) {
-        alert("Geen game of speler geladen.");
-        return;
-      }
+    if (btnLead) {
+    btnLead.addEventListener("click", () => {
+      openLeadCommandCenter();
+    });
+  }
 
       const leadId = await resolveLeadPlayerId(currentGame);
       if (!leadId) {
@@ -2835,3 +2834,16 @@ initAuth(async () => {
     });
   }
 });
+
+  // LEAD Command Center modal sluiten
+  if (leadCommandModalClose) {
+    leadCommandModalClose.addEventListener("click", closeLeadCommandCenter);
+  }
+  if (leadCommandModalOverlay) {
+    leadCommandModalOverlay.addEventListener("click", (e) => {
+      if (e.target === leadCommandModalOverlay) {
+        closeLeadCommandCenter();
+      }
+    });
+  }
+
