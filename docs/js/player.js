@@ -2832,7 +2832,6 @@ initAuth(async () => {
       if (e.target === lootModalOverlay) closeLootModal();
     });
   }
-});
 
   // LEAD Command Center modal sluiten
   if (leadCommandModalClose) {
@@ -2845,4 +2844,4 @@ initAuth(async () => {
       }
     });
   }
-
+}); // <– dit is de enige afsluitende `});` van initAuth
