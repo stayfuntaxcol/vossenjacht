@@ -528,65 +528,70 @@ function applyHostHooks(prevGame, game, prevPlayer, player, lastEvent) {
 }
 
 // ===== LOOT / SCORE HELPERS + UI =====
+//
+// Eén waarheid voor punten:
+// Egg  = 1
+// Hen  = 2
+// Prize Hen = 3
+// Loot Sack = bonus (extra punten uit de sack aan het einde)
 
 function calcLootStats(player) {
   if (!player) {
-    return { eggs: 0, hens: 0, prize: 0, score: 0 };
+    return {
+      eggs: 0,
+      hens: 0,
+      prize: 0,
+      bonus: 0,
+      baseScore: 0,
+      totalScore: 0,
+    };
   }
-  const loot = Array.isArray(player.loot) ? player.loot : [];
 
-  let eggs = player.eggs || 0;
-  let hens = player.hens || 0;
-  let prize = player.prize || 0;
+  // Tellingen komen uit het player-document
+  const eggs  = Number(player.eggs  || 0);
+  const hens  = Number(player.hens  || 0);
+  const prize = Number(player.prize || 0);
 
-  loot.forEach((card) => {
-    const tRaw = card.t || card.type || "";
-    const t = String(tRaw).toUpperCase();
-    if (t.includes("EGG")) {
-      eggs += 1;
-    } else if (t.includes("HEN") && !t.includes("PRIZE")) {
-      hens += 1;
-    } else if (t.includes("PRIZE")) {
-      prize += 1;
-    }
-  });
+  // Loot Sack verdeling wordt als bonus opgeslagen
+  const bonus = Number(player.bonus || 0);
 
-  const pointsFromCounts = eggs + hens * 2 + prize * 3;
+  // Basis-score alleen uit Eggs/Hens/Prize
+  const baseScore = eggs + hens * 2 + prize * 3;
 
-  let otherPoints = 0;
-  loot.forEach((card) => {
-    const v = typeof card.v === "number" ? card.v : 0;
-    const tRaw = card.t || card.type || "";
-    const t = String(tRaw).toUpperCase();
-    if (["EGG", "HEN", "PRIZE", "PRIZE HEN", "PRIZE_HEN"].includes(t)) return;
-    otherPoints += v;
-  });
+  // Als er al een score in Firestore staat, gebruik die als minimum
+  const stored = typeof player.score === "number" ? player.score : null;
+  const withBonus = baseScore + bonus;
 
-  const recordedScore = typeof player.score === "number" ? player.score : 0;
-  const score = Math.max(recordedScore, pointsFromCounts + otherPoints);
+  const totalScore =
+    stored != null && !Number.isNaN(stored)
+      ? Math.max(stored, withBonus)
+      : withBonus;
 
-  return { eggs, hens, prize, score };
+  return { eggs, hens, prize, bonus, baseScore, totalScore };
 }
 
 function updateLootUi(player) {
   if (!lootSummaryEl || !lootMeterFillEl) return;
-  const { eggs, hens, prize, score } = calcLootStats(player || {});
 
-  if (eggs === 0 && hens === 0 && prize === 0 && score === 0) {
+  const { eggs, hens, prize, bonus, totalScore } = calcLootStats(player || {});
+
+  // Tekst onder de balk
+  if (eggs === 0 && hens === 0 && prize === 0 && bonus === 0) {
     lootSummaryEl.textContent = "Nog geen buit verzameld.";
   } else {
-    // Alleen verdeling laten zien, GEEN score meer onder de balk
-    lootSummaryEl.textContent = `P:${prize}  H:${hens}  E:${eggs}`;
+    lootSummaryEl.textContent =
+      `Eggs: ${eggs} • Hens: ${hens} • Prize Hens: ${prize} • Loot Sack: +${bonus}`;
   }
 
-  const baseMax = 12;
-  const rawPct = baseMax > 0 ? (score / baseMax) * 100 : 0;
+  // Breedte van de oranje balk (alleen gebaseerd op totale score)
+  const maxScoreForBar = 40; // eventueel later tunen
+  const rawPct = maxScoreForBar > 0 ? (totalScore / maxScoreForBar) * 100 : 0;
   const meterPct = Math.max(5, Math.min(100, Math.round(rawPct)));
   lootMeterFillEl.style.width = `${meterPct}%`;
 
+  // Score alleen boven de balk tonen (in oranje via CSS)
   if (playerScoreEl) {
-    // Score alleen nog hier tonen (boven de balk), nu in oranje
-    playerScoreEl.textContent = `Score: ${score} (P:${prize} H:${hens} E:${eggs})`;
+    playerScoreEl.textContent = `Score: ${totalScore} pts`;
   }
 }
 
