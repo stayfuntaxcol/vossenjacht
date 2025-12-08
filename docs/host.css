@@ -1210,3 +1210,66 @@ body.fullscreen-board #board {
 #sackCard.sack-full {
   background-image: url("./assets/card_sack_full.png");
 }
+
+/* VOSSENJACHT – Community Log volledig verbergen op de board */
+#communityLog,
+#communityLogPanel,
+#logPanel,
+.board-log-panel,
+.community-log-panel,
+.log-panel {
+  display: none !important;
+}
+/* ========= ACTION CARD STACK (ipv Community Log) ========= */
+
+#actionStackPanel {
+  min-height: 160px; /* pas gerust aan als het hoger/lager mag */
+}
+
+.action-card-stack {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  padding: 0.5rem;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* 1 kaart in de stack */
+.action-card-visual {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 96px;          /* aanpassen naar jouw kaartformaat */
+  aspect-ratio: 2 / 3;  /* zelfde verhouding als je kaarten */
+  transform: translateX(calc(var(--stack-index, 0) * 18px));
+  z-index: calc(10 + var(--stack-index, 0));
+}
+
+/* kaart-afbeelding */
+.action-card-visual img {
+  width: 100%;
+  height: 100%;
+  border-radius: 10px;
+  object-fit: cover;
+  box-shadow: 0 8px 16px rgba(0,0,0,0.5);
+}
+
+/* label onderop zodat je de naam van overlappende kaarten nog leest */
+.action-card-label {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  padding: 2px 4px;
+  font-size: 11px;
+  line-height: 1.2;
+  background: rgba(0,0,0,0.7);
+  color: #fff;
+  border-radius: 4px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
