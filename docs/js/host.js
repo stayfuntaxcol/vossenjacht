@@ -34,6 +34,16 @@ const startBtn      = document.getElementById("startRoundBtn");
 const endBtn        = document.getElementById("endRoundBtn"); // oude testknop
 const nextPhaseBtn  = document.getElementById("nextPhaseBtn");
 const playAsHostBtn = document.getElementById("playAsHostBtn");
+const newRaidBtn = document.getElementById("newRaidBtn");
+const addBotBtn  = document.getElementById("addBotBtn");
+
+if (newRaidBtn) {
+  newRaidBtn.addEventListener("click", startNewRaidFromBoard);
+}
+
+if (addBotBtn) {
+  addBotBtn.addEventListener("click", addBotToCurrentGame);
+}
 
 // Board / zones
 const eventTrackDiv = document.getElementById("eventTrack");
@@ -908,6 +918,19 @@ initAuth(async (authUser) => {
   const gameRef       = doc(db, "games", gameId);
   const playersColRef = collection(db, "games", gameId, "players");
 
+  // ==== Community Board: Start nieuwe Raid & BOT toevoegen ====
+  const newRaidBtn = document.getElementById("newRaidBtn");
+  const addBotBtn  = document.getElementById("addBotBtn");
+
+  if (newRaidBtn) {
+    newRaidBtn.addEventListener("click", startNewRaidFromBoard);
+  }
+
+  if (addBotBtn) {
+    addBotBtn.addEventListener("click", addBotToCurrentGame);
+  }
+});
+  
   // ==== GAME SNAPSHOT ====
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
@@ -1518,31 +1541,75 @@ if (current === "REVEAL") {
 
     });
   }
-
-  // ==== Host eigen player view openen ====
-  if (playAsHostBtn) {
-    playAsHostBtn.addEventListener("click", async () => {
-      const q = query(
-        playersColRef,
-        where("uid", "==", authUser.uid),
-        where("isHost", "==", true)
-      );
-
-      const snap = await getDocs(q);
-      if (snap.empty) {
-        alert(
-          "Geen host-speler gevonden. Start het spel opnieuw of join met de code."
-        );
-        return;
-      }
-
-      const playerDoc = snap.docs[0];
-      const hostPlayerId = playerDoc.id;
-
-      window.open(
-        `player.html?game=${gameId}&player=${hostPlayerId}`,
-        "_blank"
-      );
-    });
+// Simpele code-generator, zelfde stijl als index
+function generateCode(length = 4) {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  for (let i = 0; i < length; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
   }
-});
+  return code;
+}
+
+// Nieuwe Raid starten vanaf het Community Board
+async function startNewRaidFromBoard() {
+  try {
+    const code = generateCode();
+
+    const gameRef = await addDoc(collection(db, "games"), {
+      code,
+      status: "lobby",
+      phase: "MOVE",
+      round: 0,
+      currentEventId: null,
+      createdAt: serverTimestamp(),
+      hostUid: null, // board is geen speler
+      raidStarted: false,
+      raidEndedByRooster: false,
+      roosterSeen: 0,
+    });
+
+    const newGameId = gameRef.id;
+
+    const url = new URL(window.location.href);
+    url.searchParams.set("game", newGameId);
+    url.searchParams.set("mode", "board"); // Community Board modus
+    window.location.href = url.toString();
+  } catch (err) {
+    console.error("Fout bij Start nieuwe Raid:", err);
+    alert("Er ging iets mis bij het starten van een nieuwe Raid.");
+  }
+}
+
+// BOT-speler toevoegen aan de huidige game
+async function addBotToCurrentGame() {
+  try {
+    if (!gameId) {
+      alert("Geen actief spel gevonden (gameId ontbreekt).");
+      return;
+    }
+
+    await addDoc(collection(db, "games", gameId, "players"), {
+      name: "BOT Fox",
+      isBot: true,
+      isHost: false,
+      uid: null,
+      score: 0,
+      joinedAt: serverTimestamp(),
+      joinOrder: null,
+      color: null,
+      inYard: true,
+      dashed: false,
+      burrowUsed: false,
+      decision: null,
+      hand: [],
+      loot: [],
+    });
+
+    // Optioneel: klein seintje in de console
+    console.log("BOT Fox toegevoegd aan game:", gameId);
+  } catch (err) {
+    console.error("Fout bij BOT toevoegen:", err);
+    alert("Er ging iets mis bij het toevoegen van een BOT.");
+  }
+}
