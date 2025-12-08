@@ -1048,9 +1048,9 @@ renderPlayerZones();
         }`;
         list.appendChild(line);
       });
-      roundInfo.appendChild(list);
+       roundInfo.appendChild(list);
     });
-  });
+  } 
 
 // ==== HELPER: SPELERS ZONES RENDEREN ====
 function renderPlayerZones() {
@@ -1175,8 +1175,8 @@ function renderPlayerZones() {
   latestPlayers = players;
 
   renderPlayerZones();
-});
-
+  });
+}
 
   // ==== LOGPANEL ====
   if (gameId) {
@@ -1204,6 +1204,7 @@ function renderPlayerZones() {
     });
     logPanel.appendChild(inner);
   });
+}
 
   // ==== START ROUND (met Lead Fox rotatie) ====
   if (startBtn) {
@@ -1538,7 +1539,8 @@ if (current === "REVEAL") {
 
     });
   }
-// Simpele code-generator, zelfde stijl als index
+});
+      // Simpele code-generator, zelfde stijl als index
 function generateCode(length = 4) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
@@ -1612,24 +1614,3 @@ async function addBotToCurrentGame() {
     alert("Er ging iets mis bij het toevoegen van een BOT.");
   }
 }
-
-// ==== Community Board: Start nieuwe Raid & BOT toevoegen ====
-// We hangen de listeners los van initAuth op, zodra de DOM klaar is.
-document.addEventListener("DOMContentLoaded", () => {
-  const newRaidBtn = document.getElementById("newRaidBtn");
-  const addBotBtn  = document.getElementById("addBotBtn");
-
-  if (newRaidBtn) {
-    newRaidBtn.addEventListener("click", () => {
-      console.log("[Board] Klik op Start nieuwe Raid");
-      startNewRaidFromBoard();
-    });
-  }
-
-  if (addBotBtn) {
-    addBotBtn.addEventListener("click", () => {
-      console.log("[Board] Klik op BOT toevoegen");
-      addBotToCurrentGame();
-    });
-  }
-});
