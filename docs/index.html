@@ -8,252 +8,76 @@
       content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
     <link rel="stylesheet" href="./css/style.css" />
-
-    <style>
-      body.lobby-body {
-        margin: 0;
-        min-height: 100vh;
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-          sans-serif;
-        background: radial-gradient(circle at top, #020617 0, #020617 40%, #000);
-        color: #e5e7eb;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-
-      .lobby-shell {
-        width: 100%;
-        max-width: 900px;
-        padding: 1.5rem;
-        box-sizing: border-box;
-      }
-
-      .lobby-main {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
-        gap: 1.5rem;
-        background: rgba(15, 23, 42, 0.9);
-        border-radius: 1.25rem;
-        box-shadow:
-          0 18px 40px rgba(15, 23, 42, 0.9),
-          0 0 0 1px rgba(148, 163, 184, 0.15);
-        padding: 1.5rem;
-      }
-
-      @media (max-width: 780px) {
-        .lobby-main {
-          grid-template-columns: minmax(0, 1fr);
-        }
-      }
-
-      .lobby-left {
-        display: flex;
-        flex-direction: column;
-        gap: 0.75rem;
-        justify-content: center;
-      }
-
-      .lobby-title {
-        margin: 0;
-        font-size: 1.9rem;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-      }
-
-      .lobby-subtitle {
-        margin: 0;
-        font-size: 0.95rem;
-        color: #9ca3af;
-      }
-
-      .lobby-right {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-
-      .card-preview {
-        width: 100%;
-        max-width: 260px;
-        aspect-ratio: 63 / 88;
-        border-radius: 1rem;
-        overflow: hidden;
-        box-shadow:
-          0 18px 40px rgba(0, 0, 0, 0.85),
-          0 0 0 1px rgba(248, 250, 252, 0.12);
-        background: #020617;
-      }
-
-      .card-preview img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        display: block;
-      }
-
-      .lobby-form {
-        margin-top: 0.75rem;
-        display: flex;
-        flex-direction: column;
-        gap: 0.9rem;
-      }
-
-      .field-group {
-        display: flex;
-        flex-direction: column;
-        gap: 0.25rem;
-      }
-
-      .field-label {
-        font-size: 0.9rem;
-        color: #cbd5f5;
-      }
-
-      .field-input {
-        width: 100%;
-        border-radius: 999px;
-        border: 1px solid rgba(148, 163, 184, 0.6);
-        background: rgba(15, 23, 42, 0.95);
-        color: #e5e7eb;
-        padding: 0.6rem 0.9rem;
-        font-size: 0.95rem;
-        outline: none;
-      }
-
-      .field-input::placeholder {
-        color: #6b7280;
-      }
-
-      .field-input:focus {
-        border-color: #fb923c;
-        box-shadow:
-          0 0 0 1px rgba(249, 115, 22, 0.5),
-          0 0 12px rgba(249, 115, 22, 0.45);
-      }
-
-      .btn-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem;
-      }
-
-      .btn-primary,
-      .btn-secondary {
-        border-radius: 999px;
-        padding: 0.6rem 1.2rem;
-        font-size: 0.95rem;
-        border: none;
-        cursor: pointer;
-        font-weight: 500;
-        display: inline-flex;
-        align-items: center;
-        gap: 0.4rem;
-        white-space: nowrap;
-      }
-
-      .btn-primary {
-        background: linear-gradient(135deg, #fb923c, #f97316);
-        color: #111827;
-        box-shadow:
-          0 12px 30px rgba(249, 115, 22, 0.5),
-          0 0 0 1px rgba(248, 250, 252, 0.08);
-      }
-
-      .btn-primary:hover {
-        filter: brightness(1.05);
-        transform: translateY(-1px);
-      }
-
-      .btn-secondary {
-        background: rgba(15, 23, 42, 0.95);
-        color: #e5e7eb;
-        border: 1px solid rgba(148, 163, 184, 0.7);
-      }
-
-      .btn-secondary:hover {
-        background: rgba(30, 64, 175, 0.7);
-      }
-
-      .join-row {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 0.5rem;
-      }
-
-      .join-row input {
-        flex: 1 1 120px;
-      }
-
-      .tiny-text {
-        font-size: 0.8rem;
-        color: #6b7280;
-      }
-    </style>
+    <link rel="stylesheet" href="./css/lobby.css" />
   </head>
   <body class="lobby-body">
     <div class="lobby-shell">
+      <!-- POSTER BOVENAAN, SCHERMBREED -->
+      <div class="poster-hero">
+        <img
+          src="./assets/card_vossenjacht.png"
+          alt="Vossenjacht poster"
+        />
+      </div>
+
+      <!-- ONDERKANT: NAAM + KNOPPEN -->
       <div class="lobby-main">
-        <!-- LINKERKANT: titel + simpele form -->
-        <section class="lobby-left">
-          <h1 class="lobby-title">VOSSENJACHT</h1>
-          <p class="lobby-subtitle">Foxes vs Coop – online heist game</p>
-
-          <form class="lobby-form" onsubmit="return false;">
-            <div class="field-group">
-              <label class="field-label" for="playerName">Jouw naam</label>
-              <input
-                id="playerName"
-                class="field-input"
-                type="text"
-                placeholder="Larah Fae"
-                autocomplete="off"
-              />
-            </div>
-
-            <div class="field-group">
-              <div class="btn-row">
-                <button id="hostGameBtn" type="button" class="btn-primary">
-                  🦊 Nieuw spel hosten
-                </button>
-
-                <button
-                  id="boardOnlyBtn"
-                  type="button"
-                  class="btn-secondary"
-                >
-                  🖥️ Alleen Community Board
-                </button>
-              </div>
-            </div>
-
-            <div class="field-group">
-              <div class="join-row">
-                <input
-                  id="joinCode"
-                  class="field-input"
-                  type="text"
-                  placeholder="Game code"
-                  autocomplete="off"
-                />
-                <button id="joinGameBtn" type="button" class="btn-secondary">
-                  Join
-                </button>
-              </div>
-              <p class="tiny-text">Gebruik de code van het grote scherm.</p>
-            </div>
-          </form>
-        </section>
-
-        <!-- RECHTERKANT: alleen de spelerskaart -->
-        <aside class="lobby-right">
-          <div class="card-preview">
-            <img
-              src="./assets/card_vossenjacht.png"
-              alt="Vossenjacht spelerskaart"
+        <form class="lobby-form" onsubmit="return false;">
+          <div class="field-group">
+            <label class="field-label" for="playerName">Jouw naam</label>
+            <input
+              id="playerName"
+              class="field-input"
+              type="text"
+              placeholder="Larah Fae"
+              autocomplete="off"
             />
           </div>
-        </aside>
+
+          <div class="field-group">
+            <div class="btn-row">
+              <!-- ZWARTE 🦊 KNOP, GEEN TEKST -->
+              <button
+                id="hostGameBtn"
+                type="button"
+                class="btn-host-icon"
+                aria-label="Nieuw spel hosten"
+              >
+                🦊
+              </button>
+
+              <!-- Rustige knop voor alleen Community Board -->
+              <button
+                id="boardOnlyBtn"
+                type="button"
+                class="btn-board"
+              >
+                Alleen Community Board
+              </button>
+            </div>
+          </div>
+
+          <div class="field-group">
+            <div class="join-row">
+              <input
+                id="joinCode"
+                class="field-input"
+                type="text"
+                placeholder="Game code"
+                autocomplete="off"
+              />
+              <!-- ORANJE JOIN-KNOP, PROMINENT -->
+              <button
+                id="joinGameBtn"
+                type="button"
+                class="btn-join"
+              >
+                Join
+              </button>
+            </div>
+            <p class="tiny-text">Gebruik de code van het grote scherm.</p>
+          </div>
+        </form>
       </div>
     </div>
 
