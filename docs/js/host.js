@@ -1050,7 +1050,8 @@ renderPlayerZones();
       });
        roundInfo.appendChild(list);
     });
-
+  }
+               
 // ==== HELPER: SPELERS ZONES RENDEREN ====
 function renderPlayerZones() {
   if (!yardZone || !caughtZone || !dashZone) return;
@@ -1489,6 +1490,7 @@ function renderPlayerZones() {
         await resolveAfterReveal(gameId);
         return;
       }
+      
 // REVEAL -> MOVE of EINDE – afhankelijk van overgebleven foxes in de Yard
 if (current === "REVEAL") {
   const latestSnap = await getDoc(gameRef);
@@ -1539,6 +1541,7 @@ if (current === "REVEAL") {
     });
   }
 });
+
       // Simpele code-generator, zelfde stijl als index
 function generateCode(length = 4) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
