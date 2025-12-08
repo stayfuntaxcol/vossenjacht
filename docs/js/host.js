@@ -1050,7 +1050,6 @@ renderPlayerZones();
       });
        roundInfo.appendChild(list);
     });
-  } 
 
 // ==== HELPER: SPELERS ZONES RENDEREN ====
 function renderPlayerZones() {
