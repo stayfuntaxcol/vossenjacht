@@ -1556,6 +1556,7 @@ async function startNewRaidFromBoard() {
   try {
     const code = generateCode();
 
+    // lokaal gameRef – alleen in deze functie
     const gameRef = await addDoc(collection(db, "games"), {
       code,
       status: "lobby",
@@ -1570,6 +1571,8 @@ async function startNewRaidFromBoard() {
     });
 
     const newGameId = gameRef.id;
+    // globale gameId bijwerken als je die erboven hebt staan
+    gameId = newGameId;
 
     const url = new URL(window.location.href);
     url.searchParams.set("game", newGameId);
@@ -1606,10 +1609,30 @@ async function addBotToCurrentGame() {
       loot: [],
     });
 
-    // Optioneel: klein seintje in de console
     console.log("BOT Fox toegevoegd aan game:", gameId);
   } catch (err) {
     console.error("Fout bij BOT toevoegen:", err);
     alert("Er ging iets mis bij het toevoegen van een BOT.");
   }
 }
+
+// ==== Community Board: Start nieuwe Raid & BOT toevoegen ====
+// We hangen de listeners los van initAuth op, zodra de DOM klaar is.
+document.addEventListener("DOMContentLoaded", () => {
+  const newRaidBtn = document.getElementById("newRaidBtn");
+  const addBotBtn  = document.getElementById("addBotBtn");
+
+  if (newRaidBtn) {
+    newRaidBtn.addEventListener("click", () => {
+      console.log("[Board] Klik op Start nieuwe Raid");
+      startNewRaidFromBoard();
+    });
+  }
+
+  if (addBotBtn) {
+    addBotBtn.addEventListener("click", () => {
+      console.log("[Board] Klik op BOT toevoegen");
+      addBotToCurrentGame();
+    });
+  }
+});
