@@ -1,0 +1,190 @@
+/* ===== BASIS LAYOUT ===== */
+
+body.lobby-body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background: #000;
+  color: #e5e7eb;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+}
+
+.lobby-shell {
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #000;
+}
+
+/* ===== POSTER / HERO ===== */
+
+.poster-hero {
+  position: relative;
+  width: 100%;
+  height: 55vh;          /* schermvullend gevoel op mobiel */
+  max-height: 480px;
+  overflow: hidden;
+  background: #000;
+}
+
+.poster-hero img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+/* ===== ONDERKANT MET KNOPPEN ===== */
+
+.lobby-main {
+  flex: 1;
+  background: radial-gradient(circle at top, #020617, #020617 40%, #000);
+  border-radius: 1.5rem 1.5rem 0 0;
+  padding: 1.2rem 1.25rem 1.8rem;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.8);
+  margin-top: -1.2rem; /* overlapping effect onder poster */
+}
+
+@media (min-width: 700px) {
+  .lobby-shell {
+    max-width: 600px;
+  }
+
+  .poster-hero {
+    height: 60vh;
+    max-height: 520px;
+  }
+}
+
+/* ===== FORM & VELDEN ===== */
+
+.lobby-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.field-label {
+  font-size: 0.9rem;
+  color: #cbd5f5;
+}
+
+.field-input {
+  width: 100%;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.6);
+  background: rgba(15, 23, 42, 0.95);
+  color: #e5e7eb;
+  padding: 0.6rem 0.9rem;
+  font-size: 0.95rem;
+  outline: none;
+}
+
+.field-input::placeholder {
+  color: #6b7280;
+}
+
+.field-input:focus {
+  border-color: #fb923c;
+  box-shadow:
+    0 0 0 1px rgba(249, 115, 22, 0.5),
+    0 0 12px rgba(249, 115, 22, 0.45);
+}
+
+/* ===== KNOPPEN ===== */
+
+.btn-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* Zwarte host-knop met alleen 🦊 */
+.btn-host-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 999px;
+  border: 1px solid #374151;
+  background: #020617;
+  color: #fbbf24;
+  font-size: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.85);
+  cursor: pointer;
+}
+
+.btn-host-icon:active {
+  transform: translateY(1px) scale(0.97);
+}
+
+/* Board-only knop: rustige grijze pill */
+.btn-board {
+  flex: 1;
+  border-radius: 999px;
+  padding: 0.6rem 1rem;
+  background: transparent;
+  border: 1px solid #4b5563;
+  color: #e5e7eb;
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-align: center;
+}
+
+.btn-board:hover {
+  background: rgba(31, 41, 55, 0.9);
+}
+
+/* Join rij */
+.join-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.join-row input {
+  flex: 1 1 auto;
+}
+
+/* Oranje JOIN-knop, prominent */
+.btn-join {
+  border-radius: 999px;
+  padding: 0.65rem 1.1rem;
+  background: linear-gradient(135deg, #fb923c, #f97316);
+  color: #111827;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  min-width: 90px;
+  box-shadow: 0 10px 25px rgba(249, 115, 22, 0.55);
+  white-space: nowrap;
+}
+
+.btn-join:hover {
+  filter: brightness(1.05);
+}
+
+.btn-join:active {
+  transform: translateY(1px) scale(0.98);
+}
+
+/* Kleine uitleg onder join */
+.tiny-text {
+  font-size: 0.8rem;
+  color: #6b7280;
+  margin: 0.2rem 0 0;
+}
