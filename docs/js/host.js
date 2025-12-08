@@ -21,6 +21,10 @@ const db = getFirestore();
 
 const params = new URLSearchParams(window.location.search);
 const gameId = params.get("game");
+const mode   = params.get("mode") || "host"; // "host" of "board"
+
+const isBoardOnly = mode === "board";
+
 
 // Basis host UI
 const gameInfo      = document.getElementById("gameInfo");
