@@ -22,10 +22,11 @@ function generateCode(length = 4) {
 }
 
 initAuth((user) => {
-  const hostBtn   = document.getElementById("hostGameBtn");
-  const joinBtn   = document.getElementById("joinGameBtn");
-  const nameInput = document.getElementById("playerName");
-  const codeInput = document.getElementById("joinCode");
+  const hostBtn      = document.getElementById("hostGameBtn");
+  const joinBtn      = document.getElementById("joinGameBtn");
+  const boardOnlyBtn = document.getElementById("boardOnlyBtn"); // NIEUW
+  const nameInput    = document.getElementById("playerName");
+  const codeInput    = document.getElementById("joinCode");
 
   // Safety-check: als de knoppen/inputs ontbreken, gewoon stoppen
   if (!hostBtn || !joinBtn || !nameInput || !codeInput) {
@@ -33,8 +34,7 @@ initAuth((user) => {
     return;
   }
 
-  // --- NIEUW: code uit URL (voor QR) uitlezen en invullen ---
-  // Voorbeeld-URL: .../join.html?code=ABCD
+  // --- code uit URL (voor QR) uitlezen en invullen ---
   try {
     const params = new URLSearchParams(window.location.search);
     const codeFromUrl = params.get("code");
@@ -46,8 +46,9 @@ initAuth((user) => {
   } catch (e) {
     console.warn("Kon querystring niet parsen:", e);
   }
-  // --- EINDE NIEUW ---
+  // --- EINDE URL-code ---
 
+  // 1) HOST SPEELT MEE ALS VOS
   hostBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();
     if (!name) {
@@ -88,10 +89,42 @@ initAuth((user) => {
       loot: [],
     });
 
-    // naar host-scherm met gameId
-    window.location.href = `host.html?game=${gameRef.id}`;
+    // naar host-scherm met gameId in "host"-modus
+    window.location.href = `host.html?game=${gameRef.id}&mode=host`;
   });
 
+  // 2) ALLEEN COMMUNITY BOARD (GEEN HOST-SPELER)
+  if (boardOnlyBtn) {
+    boardOnlyBtn.addEventListener("click", async () => {
+      const name = nameInput.value.trim();
+      if (!name) {
+        alert("Vul je naam in (voor de host)");
+        return;
+      }
+
+      const code = generateCode();
+
+      const gameRef = await addDoc(collection(db, "games"), {
+        code,
+        status: "lobby",
+        phase: "MOVE",
+        round: 0,
+        currentEventId: null,
+        createdAt: serverTimestamp(),
+        hostUid: user.uid,
+        raidStarted: false,
+        raidEndedByRooster: false,
+        roosterSeen: 0,
+      });
+
+      // LET OP: GEEN players-doc aanmaken hier!
+
+      // Community Board zonder host-speler
+      window.location.href = `host.html?game=${gameRef.id}&mode=board`;
+    });
+  }
+
+  // 3) NORMAAL JOINEN ALS SPELER
   joinBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();
     const inputCode = codeInput.value.trim().toUpperCase();
