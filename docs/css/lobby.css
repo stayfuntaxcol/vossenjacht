@@ -160,26 +160,43 @@ body.lobby-body {
   flex: 1 1 auto;
 }
 
-/* Oranje JOIN-knop, prominent */
+/* Oranje JOIN-knop, prominent en vet */
 .btn-join {
   border-radius: 999px;
-  padding: 0.65rem 1.1rem;
-  background: linear-gradient(135deg, #fb923c, #f97316);
+  padding: 0.7rem 1.3rem;
+  background: linear-gradient(135deg, #fed7aa, #fb923c, #f97316);
   color: #111827;
-  font-weight: 600;
-  border: none;
+  font-weight: 700;              /* dikgedrukt */
+  text-transform: uppercase;     /* iets meer “call to action” */
+  letter-spacing: 0.04em;
+  font-size: 0.9rem;
+  border: 1px solid #fed7aa;
   cursor: pointer;
-  min-width: 90px;
-  box-shadow: 0 10px 25px rgba(249, 115, 22, 0.55);
+  min-width: 100px;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.4),
+    0 10px 25px rgba(249, 115, 22, 0.6),
+    0 0 18px rgba(251, 146, 60, 0.9);
   white-space: nowrap;
+  transition:
+    transform 0.08s ease-out,
+    box-shadow 0.08s ease-out,
+    filter 0.08s ease-out;
 }
 
 .btn-join:hover {
   filter: brightness(1.05);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.5),
+    0 14px 30px rgba(249, 115, 22, 0.75),
+    0 0 22px rgba(251, 146, 60, 1);
 }
 
 .btn-join:active {
-  transform: translateY(1px) scale(0.98);
+  transform: translateY(1px) scale(0.97);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.6),
+    0 6px 14px rgba(249, 115, 22, 0.7);
 }
 
 /* Kleine uitleg onder join */
