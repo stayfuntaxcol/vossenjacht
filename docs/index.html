@@ -1,34 +1,546 @@
 <!DOCTYPE html>
 <html lang="nl">
-<head>
-  <meta charset="UTF-8" />
-  <title>Vossenjacht – Start</title>
-  <link rel="stylesheet" href="./css/style.css" />
-</head>
-<body>
-  <main class="screen">
-    <h1>Vossenjacht</h1>
-    <p>Multiplayer heist game – Foxes vs Coop.</p>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vossenjacht – Start</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <!-- Bestaande globale styles -->
+    <link rel="stylesheet" href="./css/style.css" />
 
-    <section class="panel">
-      <label>
-        Jouw naam:
-        <input id="playerName" type="text" placeholder="Larah Fae" />
-      </label>
+    <!-- Lobby-specifieke styling -->
+    <style>
+      body.lobby-body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        background: radial-gradient(circle at top, #020617 0, #020617 40%, #000);
+        color: #e5e7eb;
+        display: flex;
+        align-items: stretch;
+        justify-content: center;
+      }
 
-      <div class="row">
-        <button id="hostGameBtn">Nieuw spel hosten</button>
-      </div>
-      <button id="boardOnlyBtn" class="btn btn-secondary">
-      Alleen Community Board  
-      </button>
-      <div class="row">
-        <input id="joinCode" type="text" placeholder="Game code" />
-        <button id="joinGameBtn">Meedoen</button>
-      </div>
-    </section>
-  </main>
+      .lobby-shell {
+        width: 100%;
+        max-width: 1100px;
+        padding: 1.5rem 1.25rem 2rem;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+      }
 
-  <script type="module" src="./js/index.js"></script>
-</body>
+      .lobby-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+      }
+
+      .lobby-brand {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+      }
+
+      .lobby-logo {
+        width: 52px;
+        height: 52px;
+        border-radius: 999px;
+        border: 2px solid rgba(249, 115, 22, 0.5);
+        box-shadow: 0 0 18px rgba(249, 115, 22, 0.5);
+        overflow: hidden;
+        background: radial-gradient(circle at 30% 20%, #fb923c, #7c2d12);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .lobby-logo img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .lobby-title-block h1 {
+        margin: 0;
+        font-size: clamp(1.7rem, 3vw, 2.1rem);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .lobby-title-block p {
+        margin: 0.1rem 0 0;
+        font-size: 0.95rem;
+        color: #9ca3af;
+      }
+
+      .lobby-tagline {
+        text-align: right;
+        font-size: 0.9rem;
+        color: #9ca3af;
+      }
+
+      .lobby-main {
+        display: grid;
+        grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+        gap: 1.5rem;
+      }
+
+      @media (max-width: 840px) {
+        .lobby-main {
+          grid-template-columns: minmax(0, 1fr);
+        }
+
+        .lobby-tagline {
+          text-align: left;
+        }
+      }
+
+      .lobby-left {
+        background: radial-gradient(circle at top left, #0b1120, #020617);
+        border-radius: 1.25rem;
+        padding: 1.5rem 1.5rem 1.25rem;
+        box-shadow:
+          0 18px 45px rgba(15, 23, 42, 0.9),
+          0 0 0 1px rgba(148, 163, 184, 0.1);
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+      }
+
+      .intro-text h2 {
+        margin: 0;
+        font-size: 1.2rem;
+      }
+
+      .intro-text p {
+        margin: 0.25rem 0 0;
+        font-size: 0.95rem;
+        color: #9ca3af;
+      }
+
+      .intro-bullets {
+        margin: 0.75rem 0 0;
+        padding-left: 1.2rem;
+        font-size: 0.9rem;
+        color: #9ca3af;
+      }
+
+      .intro-bullets li + li {
+        margin-top: 0.25rem;
+      }
+
+      .lobby-form {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      .field-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+      }
+
+      .field-label {
+        font-size: 0.9rem;
+        color: #cbd5f5;
+      }
+
+      .field-input {
+        width: 100%;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.5);
+        background: rgba(15, 23, 42, 0.8);
+        color: #e5e7eb;
+        padding: 0.6rem 0.9rem;
+        font-size: 0.95rem;
+        outline: none;
+      }
+
+      .field-input::placeholder {
+        color: #6b7280;
+      }
+
+      .field-input:focus {
+        border-color: #fb923c;
+        box-shadow:
+          0 0 0 1px rgba(249, 115, 22, 0.5),
+          0 0 12px rgba(249, 115, 22, 0.45);
+      }
+
+      .cta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.25rem;
+      }
+
+      .btn-primary,
+      .btn-secondary,
+      .btn-ghost {
+        border-radius: 999px;
+        padding: 0.6rem 1.2rem;
+        font-size: 0.95rem;
+        border: none;
+        cursor: pointer;
+        font-weight: 500;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        white-space: nowrap;
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, #fb923c, #f97316);
+        color: #111827;
+        box-shadow:
+          0 12px 30px rgba(249, 115, 22, 0.5),
+          0 0 0 1px rgba(248, 250, 252, 0.08);
+      }
+      .btn-primary:hover {
+        filter: brightness(1.05);
+        transform: translateY(-1px);
+      }
+
+      .btn-secondary {
+        background: rgba(15, 23, 42, 0.9);
+        color: #e5e7eb;
+        border: 1px solid rgba(148, 163, 184, 0.6);
+      }
+      .btn-secondary:hover {
+        background: rgba(30, 64, 175, 0.6);
+      }
+
+      .btn-ghost {
+        background: transparent;
+        color: #9ca3af;
+        border: 1px dashed rgba(148, 163, 184, 0.6);
+      }
+      .btn-ghost:hover {
+        border-style: solid;
+        color: #e5e7eb;
+      }
+
+      .join-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      .join-row input {
+        flex: 1 1 120px;
+      }
+
+      .hint-text {
+        font-size: 0.85rem;
+        color: #9ca3af;
+      }
+
+      .small-caption {
+        font-size: 0.8rem;
+        color: #6b7280;
+      }
+
+      .lobby-right {
+        position: relative;
+        border-radius: 1.25rem;
+        overflow: hidden;
+        min-height: 240px;
+        background:
+          radial-gradient(circle at top left, rgba(248, 250, 252, 0.03), transparent),
+          radial-gradient(circle at bottom right, rgba(249, 115, 22, 0.10), #020617);
+        box-shadow:
+          0 18px 45px rgba(15, 23, 42, 0.9),
+          0 0 0 1px rgba(148, 163, 184, 0.1);
+        display: flex;
+        align-items: stretch;
+        justify-content: stretch;
+      }
+
+      .lobby-art {
+        position: relative;
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+      }
+
+      .lobby-art-inner {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        border-radius: 1rem;
+        background: radial-gradient(circle at top, #111827, #020617);
+        overflow: hidden;
+      }
+
+      .lobby-art-inner::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(
+          circle at 20% 0,
+          rgba(249, 115, 22, 0.55),
+          transparent 55%
+        );
+        opacity: 0.9;
+        mix-blend-mode: screen;
+      }
+
+      .lobby-art-img {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+
+      .lobby-art-placeholder {
+        position: relative;
+        height: 100%;
+        padding: 1.2rem 1.2rem 1rem;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        color: #e5e7eb;
+      }
+
+      .art-title {
+        font-size: 1rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: #fde68a;
+      }
+
+      .art-subtitle {
+        font-size: 0.92rem;
+        color: #e5e7eb;
+      }
+
+      .art-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        margin-top: 0.75rem;
+      }
+
+      .art-tag {
+        font-size: 0.78rem;
+        padding: 0.15rem 0.5rem;
+        border-radius: 999px;
+        border: 1px solid rgba(248, 250, 252, 0.15);
+        background: rgba(15, 23, 42, 0.6);
+      }
+
+      .art-footer {
+        font-size: 0.8rem;
+        color: #9ca3af;
+      }
+
+      .step-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        margin-top: 0.75rem;
+      }
+
+      .step-pill {
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.6);
+        background: rgba(15, 23, 42, 0.7);
+        padding: 0.4rem 0.75rem;
+        font-size: 0.8rem;
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+      }
+
+      .step-pill span {
+        font-size: 0.75rem;
+        color: #9ca3af;
+      }
+
+      .lobby-footer {
+        margin-top: 0.25rem;
+        font-size: 0.8rem;
+        color: #6b7280;
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+      }
+
+      .lobby-footer strong {
+        color: #9ca3af;
+      }
+    </style>
+  </head>
+  <body class="lobby-body">
+    <div class="lobby-shell">
+      <header class="lobby-header">
+        <div class="lobby-brand">
+          <div class="lobby-logo">
+            <!-- Optioneel: vervang door echt logo -->
+            <!-- <img src="./assets/logo_vossenjacht.png" alt="Vossenjacht logo" /> -->
+            🦊
+          </div>
+          <div class="lobby-title-block">
+            <h1>VOSSENJACHT</h1>
+            <p>Foxes vs Coop – snelle multiplayer heist game</p>
+          </div>
+        </div>
+        <div class="lobby-tagline">
+          <div>Speel met je telefoon, volg de raid op het grote scherm.</div>
+        </div>
+      </header>
+
+      <main class="lobby-main">
+        <!-- LINKERKANT: uitleg + formulier -->
+        <section class="lobby-left">
+          <div class="intro-text">
+            <h2>Kies je rol & spring de raid in</h2>
+            <p>
+              Verklede vossen sluipen rond de kippenren. Verzamel buit, ontwijk
+              de Rooster Crow en versla de andere teams.
+            </p>
+            <ul class="intro-bullets">
+              <li>📱 Iedereen speelt op zijn eigen telefoon.</li>
+              <li>📺 De Community Board toont het volledige spel op een groot scherm.</li>
+              <li>🦊 De vos met de meeste buit wint de raid.</li>
+            </ul>
+          </div>
+
+          <form class="lobby-form" onsubmit="return false;">
+            <div class="field-group">
+              <label class="field-label" for="playerName">Jouw naam</label>
+              <input
+                id="playerName"
+                class="field-input"
+                type="text"
+                placeholder="Larah Fae"
+                autocomplete="off"
+              />
+              <p class="hint-text">
+                Deze naam verschijnt op je spelerskaart en op het scorebord.
+              </p>
+            </div>
+
+            <div class="field-group">
+              <span class="field-label">Nieuw spel</span>
+              <div class="cta-row">
+                <button id="hostGameBtn" type="button" class="btn-primary">
+                  🦊 Nieuw spel hosten
+                </button>
+
+                <button
+                  id="boardOnlyBtn"
+                  type="button"
+                  class="btn-secondary"
+                  title="Alleen het Community Board starten zonder zelf mee te spelen"
+                >
+                  🖥️ Alleen Community Board
+                </button>
+              </div>
+              <p class="small-caption">
+                Host maakt de raid aan. Spelers scannen de QR-code op het scherm
+                of vullen de code hieronder in.
+              </p>
+            </div>
+
+            <div class="field-group">
+              <span class="field-label">Meedoen aan bestaand spel</span>
+              <div class="join-row">
+                <input
+                  id="joinCode"
+                  class="field-input"
+                  type="text"
+                  placeholder="Game code (bijv. F7RX)"
+                  autocomplete="off"
+                />
+                <button id="joinGameBtn" type="button" class="btn-secondary">
+                  Join
+                </button>
+              </div>
+              <p class="hint-text">
+                Je vindt de code op het grote scherm. Heb je de QR-code gescand?
+                Dan staat de code hier al voor je ingevuld.
+              </p>
+            </div>
+          </form>
+        </section>
+
+        <!-- RECHTERKANT: concept art / sfeer -->
+        <aside class="lobby-right">
+          <div class="lobby-art">
+            <div class="lobby-art-inner">
+              <!-- Als je een echte hero-afbeelding hebt, haal de placeholder-div weg
+                   en gebruik een <img> met jouw concept art: -->
+              <!--
+              <img
+                src="./assets/hero_fox_vs_coop.png"
+                alt="Foxes vs Coop – concept art"
+                class="lobby-art-img"
+              />
+              -->
+
+              <div class="lobby-art-placeholder">
+                <div>
+                  <div class="art-title">Fox Raid // Night Run</div>
+                  <div class="art-subtitle">
+                    Neon-verlichte vossen sluipen over het erf, kippen wakker,
+                    Rooster op scherp. De klok tikt...
+                  </div>
+                  <div class="art-tags">
+                    <div class="art-tag">Multiplayer</div>
+                    <div class="art-tag">Push your luck</div>
+                    <div class="art-tag">Hidden decisions</div>
+                    <div class="art-tag">Loot &amp; risk</div>
+                  </div>
+                </div>
+
+                <div>
+                  <div class="art-footer">
+                    Tip: laat tijdens het event alvast concept art en grote
+                    event-posters roteren op dit scherm.
+                  </div>
+                  <div class="step-strip">
+                    <div class="step-pill">
+                      🔑 <strong>Stap 1</strong>
+                      <span>Host maakt een raid aan</span>
+                    </div>
+                    <div class="step-pill">
+                      📱 <strong>Stap 2</strong>
+                      <span>Spelers joinen met code of QR</span>
+                    </div>
+                    <div class="step-pill">
+                      🥚 <strong>Stap 3</strong>
+                      <span>Verzamel loot & ontduik de Rooster</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </main>
+
+      <footer class="lobby-footer">
+        <div>
+          <strong>Vossenjacht-tip:</strong>
+          start het Community Board op een groot scherm, laat iedereen met de
+          code of QR joinen en begin pas als alle teams klaar zitten.
+        </div>
+        <div>Version: Fox Raid prototype • Host: web &amp; mobile friendly</div>
+      </footer>
+    </div>
+
+    <script type="module" src="./js/index.js"></script>
+  </body>
 </html>
