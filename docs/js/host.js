@@ -15,16 +15,24 @@ import {
   getDocs,
   orderBy,
   limit,
+  addDoc,           // ← toevoegen
+  serverTimestamp,  // ← toevoegen
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const db = getFirestore();
 
 const params = new URLSearchParams(window.location.search);
-const gameId = params.get("game");
-const mode   = params.get("mode") || "host"; // "host" of "board"
+let gameId = params.get("game");        // ← const → let maken
+const mode = params.get("mode") || "host"; // "host" of "board"
 
 const isBoardOnly = mode === "board";
+let gameRef = null;
+let playersColRef = null;
 
+if (gameId) {
+  gameRef = doc(db, "games", gameId);
+  playersColRef = collection(db, "games", gameId, "players");
+}
 
 // Basis host UI
 const gameInfo      = document.getElementById("gameInfo");
@@ -914,25 +922,12 @@ if (!gameId && gameInfo) {
 
 initAuth(async (authUser) => {
   if (!gameId) return;
-
-  const gameRef       = doc(db, "games", gameId);
-  const playersColRef = collection(db, "games", gameId, "players");
-
-  // ==== Community Board: Start nieuwe Raid & BOT toevoegen ====
-  const newRaidBtn = document.getElementById("newRaidBtn");
-  const addBotBtn  = document.getElementById("addBotBtn");
-
-  if (newRaidBtn) {
-    newRaidBtn.addEventListener("click", startNewRaidFromBoard);
-  }
-
-  if (addBotBtn) {
-    addBotBtn.addEventListener("click", addBotToCurrentGame);
-  }
-});
-  
+ 
   // ==== GAME SNAPSHOT ====
-  onSnapshot(gameRef, (snap) => {
+    
+    if (gameRef) {
+    onSnapshot(gameRef, (snap) => {
+
     if (!snap.exists()) {
       if (gameInfo) gameInfo.textContent = "Spel niet gevonden";
       return;
@@ -1171,7 +1166,8 @@ function renderPlayerZones() {
 }
 
 // ==== PLAYERS SNAPSHOT → alleen data, daarna renderPlayerZones ====
-onSnapshot(playersColRef, (snapshot) => {
+  if (playersColRef) {
+  onSnapshot(playersColRef, (snapshot) => {
   const players = [];
   snapshot.forEach((pDoc) => {
     players.push({ id: pDoc.id, ...pDoc.data() });
@@ -1183,6 +1179,7 @@ onSnapshot(playersColRef, (snapshot) => {
 
 
   // ==== LOGPANEL ====
+  if (gameId) {
   const logCol   = collection(db, "games", gameId, "log");
   const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
 
