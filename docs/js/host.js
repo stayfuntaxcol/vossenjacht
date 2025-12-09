@@ -38,6 +38,10 @@ if (gameId) {
 const gameInfo      = document.getElementById("gameInfo");
 const roundInfo     = document.getElementById("roundInfo");
 const logPanel      = document.getElementById("logPanel");
+// Logpaneel verbergen in Community Board modus
+if (isBoardOnly && logPanel) {
+  logPanel.style.display = "none";
+}
 const startBtn      = document.getElementById("startRoundBtn");
 const endBtn        = document.getElementById("endRoundBtn"); // oude testknop
 const nextPhaseBtn  = document.getElementById("nextPhaseBtn");
@@ -1237,30 +1241,32 @@ if (game.phase === "REVEAL" && game.currentEventId) {
   });
 
   // ==== LOGPANEL ====
-  const logCol   = collection(db, "games", gameId, "log");
-  const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
+  if (!isBoardOnly) {
+    const logCol   = collection(db, "games", gameId, "log");
+    const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
 
-  onSnapshot(logQuery, (snap) => {
-    const entries = [];
-    snap.forEach((docSnap) => entries.push(docSnap.data()));
-    entries.reverse();
+    onSnapshot(logQuery, (snap) => {
+      const entries = [];
+      snap.forEach((docSnap) => entries.push(docSnap.data()));
+      entries.reverse();
 
-    if (!logPanel) return;
-    logPanel.innerHTML = "";
-    const inner = document.createElement("div");
-    inner.className = "log-lines";
+      if (!logPanel) return;
+      logPanel.innerHTML = "";
+      const inner = document.createElement("div");
+      inner.className = "log-lines";
 
-    entries.forEach((e) => {
-      const div = document.createElement("div");
-      div.className = "log-line";
-      div.textContent =
-        `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${
-          e.message ?? ""
-        }`;
-      inner.appendChild(div);
+      entries.forEach((e) => {
+        const div = document.createElement("div");
+        div.className = "log-line";
+        div.textContent =
+          `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${
+            e.message ?? ""
+          }`;
+        inner.appendChild(div);
+      });
+      logPanel.appendChild(inner);
     });
-    logPanel.appendChild(inner);
-  });
+  }
 
   // ==== START ROUND (met Lead Fox rotatie) ====
   if (startBtn) {
