@@ -900,7 +900,7 @@ const colorOffset = Math.floor(Math.random() * DEN_COLORS.length);
     const updates = [];
 
   sorted.forEach((p, index) => {
-    const color = DEN_COLORS[index % DEN_COLORS.length];
+    const color = DEN_COLORS[(index + colorOffset) % DEN_COLORS.length];
     const hand = [];
     for (let k = 0; k < 3; k++) {
       if (actionDeck.length) hand.push(actionDeck.pop());
