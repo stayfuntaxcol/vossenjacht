@@ -92,6 +92,53 @@ const scoreOverlayContent = document.getElementById("scoreOverlayContent");
 const showScoreboardBtn   = document.getElementById("showScoreboardBtn");
 const scoreOverlayCloseBtn= document.getElementById("scoreOverlayCloseBtn");
 
+// Event poster overlay / controls
+const eventPosterOverlay  = document.getElementById("eventPosterOverlay");
+const eventPosterTitle    = document.getElementById("eventPosterTitle");
+const eventPosterImage    = document.getElementById("eventPosterImage");
+const eventPosterText     = document.getElementById("eventPosterText");
+const eventPosterCloseBtn = document.getElementById("eventPosterCloseBtn");
+
+// Laatste event dat we fullscreen hebben getoond
+let lastRevealedEventId = null;
+
+function openEventPoster(eventId) {
+  if (!eventPosterOverlay || !eventId) return;
+  const ev = getEventById(eventId);
+  if (!ev) return;
+
+  if (eventPosterTitle) {
+    eventPosterTitle.textContent = ev.title || "";
+  }
+  if (eventPosterText) {
+    eventPosterText.textContent = ev.text || "";
+  }
+  if (eventPosterImage) {
+    const src = ev.imagePoster || ev.imageFront || CARD_BACK;
+    eventPosterImage.src = src;
+  }
+
+  eventPosterOverlay.classList.remove("hidden");
+}
+
+function closeEventPoster() {
+  if (!eventPosterOverlay) return;
+  eventPosterOverlay.classList.add("hidden");
+}
+
+if (eventPosterCloseBtn && eventPosterOverlay) {
+  eventPosterCloseBtn.addEventListener("click", closeEventPoster);
+}
+
+// Klik op de donkere achtergrond sluit ook
+if (eventPosterOverlay) {
+  eventPosterOverlay.addEventListener("click", (e) => {
+    if (e.target === eventPosterOverlay) {
+      closeEventPoster();
+    }
+  });
+}
+
 // Verberg oude test-knop (endBtn)
 if (endBtn) {
   endBtn.style.display = "none";
@@ -203,12 +250,12 @@ function shuffleArray(array) {
 // Event track: precies 12 kaarten, met DOG_CHARGE altijd in de eerste helft
 // en SECOND_CHARGE altijd in de tweede helft.
 function buildEventTrack() {
+   const SAFE_FIRST_EVENT = "SHEEPDOG_PATROL";
   const others = [
     "DEN_RED",
     "DEN_BLUE",
     "DEN_GREEN",
     "DEN_YELLOW",
-    "SHEEPDOG_PATROL",
     "HIDDEN_NEST",
     "GATE_TOLL",
     "ROOSTER_CROW",
@@ -218,8 +265,10 @@ function buildEventTrack() {
   const pool = shuffleArray(others);
 
   const track = new Array(12).fill(null);
-
-  const firstHalfSlots  = [0, 1, 2, 3, 4, 5];
+  
+  track[0] = SAFE_FIRST_EVENT;
+  
+  const firstHalfSlots  = [1, 2, 3, 4, 5];
   const secondHalfSlots = [6, 7, 8, 9, 10, 11];
 
   const dogIndex =
@@ -327,7 +376,11 @@ function renderEventTrack(game) {
     idx.textContent = i + 1;
     slot.appendChild(idx);
 
-    // GEEN titel/tekst meer – artwork doet het werk
+    // Klikken op een onthulde kaart → fullscreen poster
+    slot.addEventListener("click", () => {
+      if (!isRevealed) return; // future cards blijven geheim
+      openEventPoster(eventId);
+    });
 
     grid.appendChild(slot);
   });
@@ -842,8 +895,9 @@ async function initRaidIfNeeded(gameRef) {
     followTail: {},
     scentChecks: [],
   };
-
-  const updates = [];
+  
+const colorOffset = Math.floor(Math.random() * DEN_COLORS.length);
+    const updates = [];
 
   sorted.forEach((p, index) => {
     const color = DEN_COLORS[index % DEN_COLORS.length];
@@ -1052,6 +1106,16 @@ initAuth(async (authUser) => {
       game.currentEventId && game.phase === "REVEAL"
         ? getEventById(game.currentEventId)
         : null;
+
+    // In REVEAL-fase: active event groot tonen
+if (game.phase === "REVEAL" && game.currentEventId) {
+  if (game.currentEventId !== lastRevealedEventId) {
+    lastRevealedEventId = game.currentEventId;
+    openEventPoster(game.currentEventId);
+  }
+} else {
+  lastRevealedEventId = null;
+}
 
     // game-state veranderd → zones opnieuw tekenen (Lead Fox kan wisselen)
     renderPlayerZones();
