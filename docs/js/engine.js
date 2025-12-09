@@ -27,6 +27,20 @@ function shuffleArray(array) {
   return arr;
 }
 
+// LOCKED (reeds onthuld) vs FUTURE (nog dicht)
+function splitTrackByStatus(game) {
+  const track = Array.isArray(game.eventTrack) ? [...game.eventTrack] : [];
+  const eventIndex =
+    typeof game.eventIndex === "number" ? game.eventIndex : 0;
+
+  return {
+    track,
+    eventIndex,
+    locked: track.slice(0, eventIndex),   // al gespeeld
+    future: track.slice(eventIndex),      // nog te komen
+  };
+}
+
 function isInYardForEvents(p) {
   return p.inYard !== false && !p.dashed;
 }
@@ -114,6 +128,73 @@ function applyHiddenNestEvent(players, lootDeck) {
     }
   }
   return results.length ? results : null;
+}
+
+// =======================================
+// Pack Tinker helper
+// =======================================
+export async function applyPackTinker(gameId, indexA, indexB) {
+  const gameRef = doc(db, "games", gameId);
+  const snap = await getDoc(gameRef);
+  if (!snap.exists()) return;
+  const game = snap.data();
+
+  const { track, eventIndex } = splitTrackByStatus(game);
+  const len = track.length;
+
+  if (len === 0) return;
+
+  // Alleen future-kaarten zijn toegestaan
+  if (
+    indexA < eventIndex ||
+    indexB < eventIndex ||
+    indexA >= len ||
+    indexB >= len
+  ) {
+    console.warn(
+      "Pack Tinker: poging om een al onthulde Event kaart te verplaatsen is geblokkeerd."
+    );
+    return;
+  }
+
+  // Swappen
+  [track[indexA], track[indexB]] = [track[indexB], track[indexA]];
+
+  await updateDoc(gameRef, { eventTrack: track });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: game.phase || "ACTIONS",
+    kind: "ACTION",
+    message: "Pack Tinker: twee toekomstige Event kaarten zijn verwisseld.",
+  });
+}
+
+// =======================================
+// Kick Up Dust helper
+// =======================================
+export async function applyKickUpDust(gameId) {
+  const gameRef = doc(db, "games", gameId);
+  const snap = await getDoc(gameRef);
+  if (!snap.exists()) return;
+  const game = snap.data();
+
+  const { locked, future, eventIndex } = splitTrackByStatus(game);
+  if (!future.length) return; // niets meer om te schudden
+
+  const shuffledFuture = shuffleArray(future);
+  const newTrack = [...locked, ...shuffledFuture];
+
+  await updateDoc(gameRef, {
+    eventTrack: newTrack,
+  });
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: game.phase || "ACTIONS",
+    kind: "ACTION",
+    message: "Kick Up Dust: toekomstige Event kaarten zijn opnieuw geschud.",
+  });
 }
 
 // =======================================
