@@ -22,6 +22,15 @@ const PLAYER_NAME_ART = {
   steve: "./assets/card_player_steve.png",
   meerjam: "./assets/card_player_meerjam.png",
   bill: "./assets/card_player_bill.png",
+  cary: "./assets/card_player_cary.png",
+  logan: "./assets/card_player_logan.png",
+  mirjam: "./assets/card_player_meerjam.png",
+  wim: "./assets/card_player_bill.png",
+  hans: "./assets/card_player_hans.png",
+  stephan: "./assets/card_player_steve.png",
+  quintin: "./assets/card_player_meerjam.png",
+  yannick: "./assets/card_player_bill.png",
+  
 };
 
 // Fallback art per seat / joinOrder (zoals je nu al gebruikt)
@@ -30,6 +39,7 @@ const PLAYER_SLOT_ART = [
   "./assets/card_player2.png",
   "./assets/card_player3.png",
   "./assets/card_player4.png",
+  "./assets/card_player5.png",
 ];
 
 // ==========================================
