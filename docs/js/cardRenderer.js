@@ -32,6 +32,9 @@ const PLAYER_NAME_ART = {
   yannick: "./assets/card_player_bill.png", 
   teun: "./assets/card_player_teun.png",
   dirk: "./assets/card_player_dirk.png",
+  janjacob: "./assets/card_player_jj.png",
+  steun: "./assets/card_player_steun.png",
+  jochem: "./assets/card_player_jochem.png",
 };
 
 // Fallback art per seat / joinOrder (zoals je nu al gebruikt)
