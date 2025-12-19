@@ -39,6 +39,10 @@ const PLAYER_NAME_ART = {
   gj: "./assets/card_player_gj.png",
   johanna: "./assets/card_player_johanna.png",
   matthias: "./assets/card_player_matthias.png",
+  vis: "./assets/card_player_vis.png",
+  hut: "./assets/card_player_hut.png",
+  joh: "./assets/card_player_joh.png",
+  mat: "./assets/card_player_mat.png",
   
 };
 
