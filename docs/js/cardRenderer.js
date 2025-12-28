@@ -27,6 +27,8 @@ const PLAYER_NAME_ART = {
   mirjam: "./assets/card_player_meerjam.png",
   wim: "./assets/card_player_bill.png",
   hans: "./assets/card_player_hans.png",
+  daan: "./assets/card_player_daan.png",
+  willy: "./assets/card_player_willy.png",
   stephan: "./assets/card_player_steve.png",
   quintin: "./assets/card_player_meerjam.png",
   yannick: "./assets/card_player_bill.png", 
@@ -44,9 +46,15 @@ const PLAYER_NAME_ART = {
   joh: "./assets/card_player_joh.png",
   mat: "./assets/card_player_mat.png",
   mitch: "./assets/card_player_mitch.png",
-  teagon: "./assets/card_player_teagon.png",
+  teagan: "./assets/card_player_teagan.png",
   willy: "./assets/card_player_willy.png",
-  
+  mica: "./assets/card_player_mica.png",
+  miranda: "./assets/card_player_miranda.png",
+  justin: "./assets/card_player_justin.png",
+  denzel: "./assets/card_player_denzel.png",
+  jacqueline: "./assets/card_player_jacqueline.png",
+  marcial: "./assets/card_player_marcial.png",
+   
 };
 
 // Fallback art per seat / joinOrder (zoals je nu al gebruikt)
