@@ -1,10 +1,5 @@
 // VOSSENJACHT player.js – nieuwe UI: fase-panels + loot-meter + Host/Coach
 
-import {
-  applyKickUpDust,
-  applyPackTinker,
-} from "./engine.js";
-
 import { initAuth } from "./firebase.js";
 import { renderPlayerSlotCard } from "./cardRenderer.js";
 
