@@ -1,3 +1,5 @@
+import "./firebase.js"; // zorgt dat initializeApp wordt uitgevoerd
+
 import {
   getFirestore,
   doc,
