@@ -1802,14 +1802,16 @@ async function performShift() {
   const playerSnap = await getDoc(playerRef);
   if (!gameSnap.exists() || !playerSnap.exists()) return;
 
-  const game = gameSnap.data();
+  const game   = gameSnap.data();
   const player = playerSnap.data();
 
+  // Alleen in MOVE-fase + juiste speler
   if (!canMoveNow(game, player)) {
     alert("Je kunt nu geen MOVE doen.");
     return;
   }
 
+  // Burrow Beacon / lockEvents blokkeert elke wijziging
   const flags = mergeRoundFlags(game);
   if (flags.lockEvents) {
     alert(
@@ -1818,16 +1820,31 @@ async function performShift() {
     return;
   }
 
-  const track = game.eventTrack ? [...game.eventTrack] : [];
+  // Gebruik dezelfde helper als bij Kick Up Dust
+  const { track, eventIndex } = splitEventTrackByStatus(game);
   if (!track.length) {
     alert("Geen Event Track beschikbaar.");
     return;
   }
 
+  const futureCount = track.length - eventIndex;
+  if (futureCount <= 1) {
+    alert(
+      "SHIFT heeft geen effect – er zijn te weinig toekomstige Events om te verschuiven."
+    );
+    return;
+  }
+
   const maxPos = track.length;
-  const pos1Str = prompt(`SHIFT – eerste positie (1-${maxPos})`);
+
+  const pos1Str = prompt(
+    `SHIFT – eerste positie (alleen toekomstige events: ${eventIndex + 1}-${maxPos})`
+  );
   if (!pos1Str) return;
-  const pos2Str = prompt(`SHIFT – tweede positie (1-${maxPos})`);
+
+  const pos2Str = prompt(
+    `SHIFT – tweede positie (alleen toekomstige events: ${eventIndex + 1}-${maxPos})`
+  );
   if (!pos2Str) return;
 
   const pos1 = parseInt(pos1Str, 10);
@@ -1848,10 +1865,33 @@ async function performShift() {
 
   const i1 = pos1 - 1;
   const i2 = pos2 - 1;
+
+  // blokkeren als hij een al-onthulde kaart probeert te verplaatsen
+  if (i1 < eventIndex || i2 < eventIndex) {
+    alert(
+      `Je kunt geen Events verschuiven die al onthuld zijn. Kies alleen posities vanaf ${eventIndex + 1}.`
+    );
+    return;
+  }
+
+  // swap alleen future-kaarten
   [track[i1], track[i2]] = [track[i2], track[i1]];
 
-  await updateDoc(gameRef, { eventTrack: track, movedPlayerIds: arrayUnion(playerId) });
-  await logMoveAction(game, player, `MOVE_SHIFT_${pos1}<->${pos2}`, "MOVE");
+  await updateDoc(gameRef, {
+    eventTrack: track,
+    movedPlayerIds: arrayUnion(playerId),
+  });
+
+  await logMoveAction(
+    game,
+    player,
+    `MOVE_SHIFT_${pos1}<->${pos2}`,
+    "MOVE"
+  );
+
+  setActionFeedback(
+    `SHIFT: je hebt toekomstige Events op posities ${pos1} en ${pos2} gewisseld.`
+  );
 }
 
 // ===== DECISION ACTIES =====
