@@ -62,6 +62,11 @@ const PLAYER_NAME_ART = {
   kiss: "./assets/card_player_kiss.png",
   queen: "./assets/card_player_queen.png",
   alien: "./assets/card_player_alien.png",
+  monroe: "./assets/card_player_mj.png",
+  starwalker: "./assets/card_player_starwalker.png",
+  empress: "./assets/card_player_empress.png",
+  prowler: "./assets/card_player_prowler.png",
+  astronaut: "./assets/card_player_astronaut.png",
    
 };
 
