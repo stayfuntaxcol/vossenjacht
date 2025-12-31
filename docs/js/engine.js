@@ -133,58 +133,6 @@ function applyHiddenNestEvent(players, lootDeck) {
 }
 
 // =======================================
-// Kick Up Dust helper
-// =======================================
-export async function applyKickUpDust(gameId) {
-  const gameRef = doc(db, "games", gameId);
-  const snap = await getDoc(gameRef);
-  if (!snap.exists()) return;
-  const game = snap.data();
-
-  // 1) Burrow Beacon / lockEvents → track mag niet meer veranderen
-  const flags = game.flagsRound || {};
-  if (flags.lockEvents) {
-    await addLog(gameId, {
-      round: game.round || 0,
-      phase: game.phase || "ACTIONS",
-      kind: "ACTION",
-      message:
-        "Kick Up Dust had geen effect – Burrow Beacon is actief, de Event Track is gelocked.",
-    });
-    return;
-  }
-
-  // 2) LOCKED vs FUTURE via eventIndex
-  const { locked, future } = splitTrackByStatus(game);
-
-  // minder dan 2 toekomstige kaarten → niks te schudden
-  if (future.length <= 1) {
-    await addLog(gameId, {
-      round: game.round || 0,
-      phase: game.phase || "ACTIONS",
-      kind: "ACTION",
-      message:
-        "Kick Up Dust had nauwelijks effect – er zijn te weinig toekomstige Event kaarten om te schudden.",
-    });
-    return;
-  }
-
-  // 3) Alleen de FUTURE shuffelen, locked kaarten blijven staan
-  const shuffledFuture = shuffleArray(future);
-  const newTrack = [...locked, ...shuffledFuture];
-
-  await updateDoc(gameRef, { eventTrack: newTrack });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: game.phase || "ACTIONS",
-    kind: "ACTION",
-    message:
-      "Kick Up Dust: de toekomstige Event kaarten zijn opnieuw geschud. Onthulde kaarten blijven op hun plek.",
-  });
-}
-
-// =======================================
 // Pack Tinker helper
 // =======================================
 export async function applyPackTinker(gameId, indexA, indexB) {
