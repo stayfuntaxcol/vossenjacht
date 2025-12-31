@@ -284,6 +284,27 @@ export function hostSay(trigger, text) {
   _hostGate = { until: now + 2000, prior };
 }
 
+function splitEventTrackByStatus(game) {
+  const track = Array.isArray(game.eventTrack) ? [...game.eventTrack] : [];
+  const eventIndex =
+    typeof game.eventIndex === "number" ? game.eventIndex : 0;
+
+  return {
+    track,
+    eventIndex,
+    locked: track.slice(0, eventIndex),   // AL onthuld → LOCKED
+    future: track.slice(eventIndex),      // nog dicht → FUTURE
+  };
+}
+function shuffleArray(arr) {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
 // Kleine init-helper voor host-balk (voor nu alleen tekst/reset)
 function hostInitUI() {
   ensureHostCoachMount();
@@ -2125,6 +2146,7 @@ async function playNoGoZone(game, player) {
 }
 
 async function playKickUpDust(game, player) {
+  // 1) Burrow Beacon / Hold Still etc. via flags
   const flags = mergeRoundFlags(game);
   if (flags.lockEvents) {
     alert(
@@ -2133,29 +2155,12 @@ async function playKickUpDust(game, player) {
     return false;
   }
 
-  const track = game.eventTrack ? [...game.eventTrack] : [];
-  if (track.length < 2) {
-    alert("Te weinig events om te shuffelen.");
-    return false;
-  }
+  // 2) Laat de engine-helper alles doen (incl. log + locks)
+  await applyKickUpDust(gameId);
 
-  let i1 = Math.floor(Math.random() * track.length);
-  let i2 = Math.floor(Math.random() * track.length);
-  if (i2 === i1) i2 = (i2 + 1) % track.length;
-  [track[i1], track[i2]] = [track[i2], track[i1]];
-
-  await updateDoc(gameRef, { eventTrack: track });
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${
-      player.name || "Speler"
-    } speelt Kick Up Dust – twee events wisselen willekeurig van plek.`,
-  });
+  // 3) Alleen visuele / UX feedback vanuit de player-klant
   setActionFeedback(
-    "Kick Up Dust: twee Event Cards hebben van positie gewisseld."
+    "Kick Up Dust: de toekomstige Event kaarten zijn door elkaar geschud. Onthulde kaarten blijven op hun plek."
   );
   return true;
 }
@@ -2406,8 +2411,8 @@ async function playAlphaCall(game, player) {
   );
   return true;
 }
-
 async function playPackTinker(game, player) {
+  // 1) Flags van deze ronde (incl. Burrow Beacon)
   const flags = mergeRoundFlags(game);
   if (flags.lockEvents) {
     alert(
@@ -2416,20 +2421,32 @@ async function playPackTinker(game, player) {
     return false;
   }
 
-  const track = game.eventTrack ? [...game.eventTrack] : [];
+  // 2) Huidige Event Track + index van al onthulde kaarten
+  const track = Array.isArray(game.eventTrack) ? [...game.eventTrack] : [];
   if (!track.length) {
     alert("Geen Event Track beschikbaar.");
     return false;
   }
 
+  const eventIndex =
+    typeof game.eventIndex === "number" ? game.eventIndex : 0; 
+  // alles < eventIndex = al onthuld/gelocked
   const maxPos = track.length;
-  const p1Str = prompt(`Pack Tinker – eerste eventpositie (1-${maxPos})`);
+
+  // 3) Posities vragen aan de speler
+  const p1Str = prompt(
+    `Pack Tinker – eerste eventpositie (1–${maxPos}). Let op: posities 1–${eventIndex} zijn al onthuld en gelocked.`
+  );
   if (!p1Str) return false;
-  const p2Str = prompt(`Pack Tinker – tweede eventpositie (1-${maxPos})`);
+
+  const p2Str = prompt(
+    `Pack Tinker – tweede eventpositie (1–${maxPos}). Kies opnieuw een kaart die nog gesloten ligt.`
+  );
   if (!p2Str) return false;
 
   const pos1 = parseInt(p1Str, 10);
   const pos2 = parseInt(p2Str, 10);
+
   if (
     Number.isNaN(pos1) ||
     Number.isNaN(pos2) ||
@@ -2445,24 +2462,25 @@ async function playPackTinker(game, player) {
 
   const i1 = pos1 - 1;
   const i2 = pos2 - 1;
-  [track[i1], track[i2]] = [track[i2], track[i1]];
 
-  await updateDoc(gameRef, { eventTrack: track });
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${
-      player.name || "Speler"
-    } speelt Pack Tinker – events op posities ${pos1} en ${pos2} wisselen van plek.`,
-  });
+  // 4) EXTRA GUARD: niet aan gelockte (reeds onthulde) kaarten komen
+  if (i1 < eventIndex || i2 < eventIndex) {
+    alert(
+      "Je kunt geen Event kaarten verschuiven die al zijn onthuld. Kies twee kaarten die nog gesloten liggen."
+    );
+    return false;
+  }
+
+  // 5) Laat engine.js het echte werk doen (incl. server-side safety + log)
+  await applyPackTinker(gameId, i1, i2);
+
+  // 6) Alleen UI-feedback hier
   setActionFeedback(
-    `Pack Tinker: je hebt events op posities ${pos1} en ${pos2} gewisseld.`
+    `Pack Tinker: je hebt toekomstige events op posities ${pos1} en ${pos2} gewisseld.`
   );
+
   return true;
 }
-
 async function playMaskSwap(game, player) {
   const players = await fetchPlayersForGame();
   const inYard = players.filter(isInYardLocal);
