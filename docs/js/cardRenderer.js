@@ -54,6 +54,14 @@ const PLAYER_NAME_ART = {
   denzel: "./assets/card_player_denzel.png",
   jacqueline: "./assets/card_player_jacqueline.png",
   marcial: "./assets/card_player_marcial.png",
+  max: "./assets/card_player_max.png",
+  donald: "./assets/card_player_donald.png",
+  elon: "./assets/card_player_elon.png",
+  michael: "./assets/card_player_mj.png",
+  prince: "./assets/card_player_prince.png",
+  kiss: "./assets/card_player_kiss.png",
+  queen: "./assets/card_player_queen.png",
+  alien: "./assets/card_player_alien.png",
    
 };
 
