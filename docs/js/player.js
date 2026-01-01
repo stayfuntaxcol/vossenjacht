@@ -231,6 +231,15 @@ function setHostFeedback(text) {
   if (el) el.textContent = text || "";
 }
 
+// Action Cards
+function getActionCardImage(card) {
+  if (!card || !card.name) return null;
+  const key = String(card.name).trim();
+  // eventueel later ook card.art ondersteunen:
+  if (card.art) return card.art;
+  return ACTION_CARD_IMAGES[key] || null;
+}
+
 // Legacy shim
 window.msg = function (text, kind = "status") {
   if (kind === "feedback") setHostFeedback(text);
