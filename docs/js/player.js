@@ -1309,8 +1309,8 @@ hand.forEach((card, idx) => {
 
   tile.addEventListener("click", () => openHandCardDetail(idx));
   handCardsGrid.appendChild(tile);
-});
-
+ });
+}
 
 // ===== ACTION CARD INFO (voor spelersuitleg in HAND-modal) =====
 
