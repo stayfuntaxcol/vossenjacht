@@ -6,7 +6,7 @@ import {
 } from "./engine.js";
 
 import { initAuth } from "./firebase.js";
-import { renderPlayerSlotCard } from "./cardRenderer.js";
+import { renderPlayerSlotCard, renderActionCard } from "./cardRenderer.js";
 
 // pas ./cardRenderer.js aan als jouw bestand anders heet
 import { addLog } from "./log.js";
@@ -54,7 +54,7 @@ const ACTION_CARD_IMAGES = {
   "Hold Still": "card_action_hold_still.png",
   "Nose for Trouble": "card_action_nose_for_trouble.png",
   "Scent Check": "card_action_scent_check.png",
-  "Follow the Tail": "card_action_follow_the_tail.png",
+  "Follow the Tail": "card_action_follow_tail.png",
   "Alpha Call": "card_action_alpha_call.png",
   "Pack Tinker": "card_action_pack_tinker.png",
   "Mask Swap": "card_action_mask_swap.png",
@@ -1281,25 +1281,36 @@ function renderHandGrid() {
     return;
   }
 
-  hand.forEach((card, idx) => {
-    const tile = document.createElement("button");
-    tile.type = "button";
-    tile.className = "hand-card-tile";
+hand.forEach((card, idx) => {
+  const tile = document.createElement("button");
+  tile.type = "button";
+  tile.className = "hand-card-tile";
 
-    const cardDiv = document.createElement("div");
-    cardDiv.className = "vj-card hand-card";
+  // Gebruik de centrale renderer met je imageFront uit ACTION_DEFS
+  const cardEl = renderActionCard(card, {
+    size: "medium",
+    noOverlay: true,      // geen extra UI-overlay erbovenop
+    footer: "",           // geen "Action Card" footer
+  });
 
+  if (cardEl) {
+    cardEl.classList.add("hand-card"); // zodat je bestaande CSS blijft werken
+    tile.appendChild(cardEl);
+  } else {
+    // fallback als er iets misgaat
+    const fallback = document.createElement("div");
+    fallback.className = "vj-card hand-card";
     const label = document.createElement("div");
     label.className = "hand-card-label";
     label.textContent = card.name || `Kaart #${idx + 1}`;
+    fallback.appendChild(label);
+    tile.appendChild(fallback);
+  }
 
-    cardDiv.appendChild(label);
-    tile.appendChild(cardDiv);
+  tile.addEventListener("click", () => openHandCardDetail(idx));
+  handCardsGrid.appendChild(tile);
+});
 
-    tile.addEventListener("click", () => openHandCardDetail(idx));
-    handCardsGrid.appendChild(tile);
-  });
-}
 
 // ===== ACTION CARD INFO (voor spelersuitleg in HAND-modal) =====
 
