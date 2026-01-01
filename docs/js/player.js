@@ -10,7 +10,7 @@ import { renderPlayerSlotCard, renderActionCard } from "./cardRenderer.js";
 
 // pas ./cardRenderer.js aan als jouw bestand anders heet
 import { addLog } from "./log.js";
-import { getEventById } from "./cards.js";
+import { getEventById, getActionDefByName } from "./cards.js";
 import {
   getFirestore,
   doc,
@@ -1436,6 +1436,10 @@ function openHandCardDetail(index) {
   const bigCard = document.createElement("div");
   bigCard.className = "vj-card hand-card hand-card-large";
 
+  const def = getActionDefByName(card.name || card.id);
+if (def && def.imageFront) {
+  bigCard.style.backgroundImage = `url('${def.imageFront}')`;
+}
   const label = document.createElement("div");
   label.className = "hand-card-label";
   label.textContent = card.name || `Kaart #${index + 1}`;
