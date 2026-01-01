@@ -43,6 +43,23 @@ const leadCommandModalOverlay = document.getElementById("leadCommandModalOverlay
 const leadCommandModalClose   = document.getElementById("leadCommandModalClose");
 const leadCommandContent      = document.getElementById("leadCommandContent");
 
+// Koppeling van Action Card naam -> asset-bestand in /assets
+const ACTION_CARD_IMAGES = {
+  "Scatter!": "card_action_scatter.png",
+  "Den Signal": "card_action_den_signal.png",
+  "No-Go Zone": "card_action_no_go_zone.png",
+  "Kick Up Dust": "card_action_kick_up_dust.png",
+  "Burrow Beacon": "card_action_burrow_beacon.png",
+  "Molting Mask": "card_action_molting_mask.png",
+  "Hold Still": "card_action_hold_still.png",
+  "Nose for Trouble": "card_action_nose_for_trouble.png",
+  "Scent Check": "card_action_scent_check.png",
+  "Follow the Tail": "card_action_follow_the_tail.png",
+  "Alpha Call": "card_action_alpha_call.png",
+  "Pack Tinker": "card_action_pack_tinker.png",
+  "Mask Swap": "card_action_mask_swap.png",
+};
+
 // Hero / spelerkaart
 const playerAvatarEl = document.getElementById("playerAvatar");
 const playerCardArtEl = document.getElementById("playerCardArt");
