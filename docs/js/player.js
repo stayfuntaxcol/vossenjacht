@@ -1,5 +1,15 @@
 // VOSSENJACHT player.js – nieuwe UI: fase-panels + loot-meter + Host/Coach
 
+// BOTS HINTS
+import { getAdvisorHint } from "./bots/advisor/advisorBot.js";
+import { showHint } from "./ui/hintOverlay.js";
+
+let lastGame = null;
+let lastMe = null;
+let lastPlayers = [];
+
+
+// LOCK REVEALED EVENT CARDS IN PLACE TO LIMIT ACTION CARDS 
 import {
   applyKickUpDust,
   applyPackTinker,
@@ -2800,6 +2810,7 @@ initAuth(async () => {
 
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
+      
       if (gameStatusDiv) gameStatusDiv.textContent = "Spel niet gevonden.";
       return;
     }
