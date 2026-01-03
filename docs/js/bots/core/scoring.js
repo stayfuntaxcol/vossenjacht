@@ -76,87 +76,114 @@ export function scoreDecisions({ view, upcoming, profile }) {
 // --------------------
 // OPS scoring (SNATCH / FORRAGE / SCOUT / SHIFT)
 // --------------------
-// Aannames (MVP):
-// - FORRAGE = veilige loot
-// - SNATCH = loot swing (beter als tegenstander veel loot heeft)
-// - SCOUT = info voordeel (beter bij onzekere/upcoming gevaarlijke events)
-// - SHIFT = track manipuleren (nul als lockEvents true)
+// Regels (jij):
+// - SNATCH: pak 1 loot card (Egg=1, Hen=2, Prize Hen=3). Meeste loot aan einde Raid wint.
+// - FORRAGE: pak 2 Action Cards (strategisch voordeel in OPS).
+// - SCOUT: bekijk 1 Event Card naar keuze.
+// - SHIFT: verplaats 2 verborgen Event Cards naar keuze (geen extra info), verboden bij lockEvents.
 
+function clamp01(x) {
+  return Math.max(0, Math.min(1, x));
+}
+
+function riskLabel(r) {
+  if (r < 0.35) return "LOW";
+  if (r < 0.65) return "MED";
+  return "HIGH";
+}
+
+// Verwachte punten van 1 loot card.
+// Zonder deck-distributie nemen we een veilige default (gemiddeld ~2).
+// Als jij later deck counts toevoegt aan game/view, kunnen we dit exact maken.
+function expectedLootCardPoints(view) {
+  const ev = Number(view?.lootModel?.ev);
+  if (Number.isFinite(ev)) return ev;
+  return 2.0;
+}
+
+// Hoeveel “intel” heb jij al? (optioneel; werkt ook als het niet bestaat)
+function intelCount(view) {
+  const known = view?.me?.knownEvents;
+  const knownPos = view?.me?.knownEventPositions;
+  const a = Array.isArray(known) ? known.length : 0;
+  const b = Array.isArray(knownPos) ? knownPos.length : 0;
+  return a + b;
+}
+
+// Doelwit voor SNATCH (als SNATCH een target heeft in jouw regels, kun je dit gebruiken)
+// Jouw uitleg zegt alleen "pak 1 loot kaart", dus target = null.
 function bestSnatchTarget(view) {
-  const list = view.playersPublic || [];
-  let best = null;
-  for (const p of list) {
-    const loot = Number(p.loot);
-    if (!Number.isFinite(loot)) continue;
-    if (!best || loot > best.loot) best = { id: p.id, name: p.name, loot };
-  }
-  return best;
+  return null;
 }
 
 export function scoreOpsMoves({ view, upcoming, profile }) {
   const w = profile?.weights || {};
   const lock = !!view.flags?.lockEvents;
 
-  const target = bestSnatchTarget(view);
-  const targetLoot = target?.loot ?? 0;
+  const evLoot = expectedLootCardPoints(view);
+  const intel = intelCount(view);
 
-  const candidates = ["FORRAGE", "SNATCH", "SCOUT", "SHIFT"].map((move) => {
-    let loot = 0, risk = 0.15, info = 0, control = 0;
+  const candidates = ["SNATCH", "FORRAGE", "SCOUT", "SHIFT"].map((move) => {
+    let lootPts = 0;     // directe punten
+    let future = 0;      // toekomstige waarde (actions/control)
+    let info = 0;        // kenniswaarde
+    let control = 0;     // event-manipulatie waarde
+    let risk = 0.05;     // OPS acties zijn meestal low-risk
     const bullets = [];
 
-    if (move === "FORRAGE") {
-      loot = 0.7;
-      risk += 0.05;
-      bullets.push("FORRAGE is stabiel: je pakt value zonder veel gedoe.");
+    if (move === "SNATCH") {
+      lootPts = evLoot; // 1 loot kaart = EV punten
+      bullets.push(`SNATCH geeft direct punten (+~${evLoot.toFixed(1)} verwacht).`);
+      bullets.push("Omdat meeste loot wint, is dit vaak de veiligste value-pick.");
     }
 
-    if (move === "SNATCH") {
-      loot = 0.4 + clamp01(targetLoot / 6); // schaal met target loot
-      risk += 0.20;
-      bullets.push(target ? `SNATCH is interessant: ${target.name} heeft veel loot.` : "SNATCH is swingy: kies een target met veel loot.");
+    if (move === "FORRAGE") {
+      // 2 action cards: geen directe punten, wel future voordeel.
+      // Als hand al groot is, kan waarde iets lager (optioneel).
+      const handSize = Array.isArray(view?.me?.hand) ? view.me.hand.length : 0;
+      future = 1.1 - Math.min(0.4, handSize * 0.08);
+      bullets.push("FORRAGE geeft 2 Action Cards (sterk voor tactische opties).");
+      if (handSize < 2) bullets.push("Extra nuttig: je hand is nog klein.");
     }
 
     if (move === "SCOUT") {
-      info = 0.9;
-      risk += 0.05;
-      bullets.push("SCOUT geeft info-voordeel: beter beslissen later deze ronde.");
-      if (hasTag(upcoming, "CATCH_DASHERS") || hasTag(upcoming, "CATCH_ALL_YARD")) {
-        info += 0.3;
-        bullets.push("Extra waarde: er komen mogelijk gevaarlijke events aan → info is goud.");
-      }
+      // Kennis is heel waardevol vóór Decision. Vooral als je nog weinig intel hebt.
+      info = 1.0 + (intel === 0 ? 0.35 : 0.0);
+      bullets.push("SCOUT laat je 1 Event Card naar keuze zien (heel waardevol).");
+      if (intel === 0) bullets.push("Extra waarde: je hebt nog geen intel opgebouwd.");
     }
 
     if (move === "SHIFT") {
       if (lock) {
         control = 0;
-        risk = 0.05;
         bullets.push("SHIFT kan nu niet: Events zijn gelocked.");
+        risk = 0.01;
       } else {
-        control = 0.9;
-        risk += 0.10;
-        bullets.push("SHIFT kan het event-verloop verbeteren (of anderen in verwarring brengen).");
-        if (hasTag(upcoming, "CATCH_DASHERS") || hasTag(upcoming, "CATCH_ALL_YARD")) {
-          control += 0.3;
-          bullets.push("Extra waarde: je kunt een gevaarlijk event-window proberen te verplaatsen.");
-        }
+        // SHIFT is pas echt sterk als je weet waar iets ligt (via SCOUT).
+        control = 0.35 + Math.min(0.65, intel * 0.18);
+        bullets.push("SHIFT verplaatst 2 verborgen Events (controle zonder extra info).");
+        if (intel === 0) bullets.push("Let op: zonder intel is SHIFT vaak gokken.");
+        else bullets.push("Met jouw intel kun je events strategisch herpositioneren.");
       }
     }
 
-    // simpele score: loot + info + control minus risk
+    // Score: direct punten zwaar laten wegen (win-conditie).
+    // future/info/control wegen ook mee, maar minder dan lootPts.
     const score =
-      (w.loot ?? 1) * loot +
+      (w.loot ?? 1.2) * (lootPts / 3) +     // normaliseer naar 0..1 (max 3)
+      0.8 * future +
       0.9 * info +
       0.9 * control -
-      (w.risk ?? 1) * risk;
+      (w.risk ?? 1.0) * risk;
 
     return {
       type: "OPS",
       move,
       score,
       riskLabel: riskLabel(clamp01(risk)),
-      confidence: 0.68,
+      confidence: 0.7,
       bullets: bullets.slice(0, 4),
-      target: move === "SNATCH" ? target : null,
+      target: move === "SNATCH" ? bestSnatchTarget(view) : null,
     };
   });
 
