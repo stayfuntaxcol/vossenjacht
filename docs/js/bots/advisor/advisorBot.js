@@ -16,8 +16,9 @@ function confidenceFromGap(best, second) {
 function buildExplanation(best, upcoming) {
   const bullets = [];
 
-  if (best.decision === "BURROW") {
-    bullets.push("BURROW houdt je veilig én flexibel deze ronde.");
+if (best.decision === "BURROW" && (view.me?.burrowRemaining ?? 1) === 1) {
+  bullets.unshift("Let op: Je kunt BURROW maar 1 keer gebruiken per Raid. Dus alleen doen als het echt nodig is.");
+}
   }
   if (best.decision === "DASH") {
     bullets.push("DASH kan veel opleveren, maar is vaak het meest riskant.");
