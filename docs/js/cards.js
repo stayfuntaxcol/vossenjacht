@@ -194,186 +194,380 @@ export function getEventsByCategory(category) {
 // ACTION CARDS
 // ======================
 //
+// Doel:
+// - 1 bron van waarheid voor UI + Advisor + Engine
+// - vaste velden: id, name, type, phase, timing, tags, description, choice, effect, note
+// - robuuste lookup: werkt met "Molting Mask", "MOLTING_MASK", "molting-mask", etc.
+//
 // EXTRA VELDEN:
 // - type: "INFO" | "DEFENSE" | "MOVEMENT" | "TRICK" | "UTILITY"
+// - phase: "OPS" | "MOVE" | "DECISION" | "ANY"  (wanneer speelbaar)
 // - timing: "before_event" | "after_event" | "anytime"
-// - description: korte uitleg voor UI
-// - tags: labels voor engine-logica
+// - tags: labels voor bot/engine logica
+// - choice/effect/note: UI uitleg (komt uit jouw ACTION_CARD_INFO)
 
+function normalizeKey(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/[^\p{L}\p{N} ]+/gu, "") // verwijder punctuatie, houdt spaties
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function makeIdFromName(name) {
+  return String(name || "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+// UI-uitleg (jouw object uit player.js) — NU centraal in cards.js
+export const ACTION_CARD_INFO = {
+  "Scatter!": {
+    choice: null,
+    effect:
+      "Tot het einde van deze ronde mag geen enkele vos de MOVE ‘SCOUT’ gebruiken.",
+    note: "Gebruik deze kaart bij voorkeur voordat andere vossen hun MOVE kiezen.",
+  },
+  "Den Signal": {
+    choice: "Kies één Den-kleur: RED, BLUE, GREEN of YELLOW.",
+    effect:
+      "Alle vossen met die Den-kleur zijn deze ronde immuun voor vang-events vanuit de Event Track (bijv. Dog Charge).",
+    note:
+      "Geldt alleen voor deze ronde en alleen tegen Event-gedreven vangacties.",
+  },
+  "No-Go Zone": {
+    choice: "Kies één positie op de Event Track (bijv. 3 voor het 3e event).",
+    effect:
+      "Die positie wordt een No-Go Zone: niemand mag daar deze ronde op SCOUTen.",
+    note:
+      "Het event blijft liggen; alleen SCOUT-moves naar die positie zijn verboden.",
+  },
+  "Kick Up Dust": {
+    choice: "Geen keuze nodig; het spel kiest willekeurig twee Event-posities.",
+    effect: "Twee Event Cards op de Event Track wisselen willekeurig van plek.",
+    note: "Werkt niet als Burrow Beacon (Event Track gelocked) al actief is.",
+  },
+  "Burrow Beacon": {
+    choice: null,
+    effect:
+      "De Event Track wordt gelocked: deze ronde kan de volgorde van Events niet meer veranderen.",
+    note:
+      "Blokkeert o.a. SHIFT, Kick Up Dust en Pack Tinker voor de rest van de ronde.",
+  },
+  "Molting Mask": {
+    choice: null,
+    effect:
+      "Verander jouw Den-kleur in een andere willekeurige kleur (RED / BLUE / GREEN / YELLOW), anders dan je huidige.",
+    note:
+      "Vanaf nu val je onder de Den-events en Dog-/Sheepdog-effects van je nieuwe kleur, niet meer van je oude.",
+  },
+  "Hold Still": {
+    choice: null,
+    effect:
+      "Vanaf nu mogen deze ronde geen nieuwe Action Cards meer worden gespeeld; spelers mogen alleen nog PASS kiezen in de OPS-fase.",
+    note:
+      "Gebruik deze kaart als je de OPS-chaos wilt stoppen en de situatie wilt bevriezen.",
+  },
+  "Nose for Trouble": {
+    choice:
+      "Kies één Event uit de lijst waarvan jij denkt dat het als volgende wordt onthuld.",
+    effect:
+      "Je voorspelt welk Event als volgende uitkomt. De voorspelling wordt gelogd in deze ronde.",
+    note:
+      "Beloning/straffen voor juiste of foute voorspellingen horen bij de uitgebreide (fysieke) spelregels of jullie huisregels.",
+  },
+  "Scent Check": {
+    choice: "Kies één andere vos die nog in de Yard zit.",
+    effect:
+      "Je ziet direct de huidige DECISION van die vos (LURK/BURROW/DASH of nog geen keuze). Later, zodra jij jouw DECISION kiest, krijg je opnieuw een pop-up met hun actuele keuze.",
+    note:
+      "Je kopieert hun keuze niet; je krijgt alleen extra informatie over hun gedrag.",
+  },
+  "Follow the Tail": {
+    choice: "Kies één andere vos die nog in de Yard zit.",
+    effect:
+      "Aan het einde van de DECISION-fase wordt jouw definitieve DECISION automatisch gelijk aan die van de gekozen vos.",
+    note:
+      "Je mag zelf een DECISION kiezen, maar bij de reveal telt uiteindelijk wat jouw ‘staart-leider’ gekozen heeft.",
+  },
+  "Alpha Call": {
+    choice: "Kies één vos als nieuwe Lead Fox.",
+    effect:
+      "De gekozen vos wordt de nieuwe Lead Fox (neonkaart, rol in de raid volgens jullie spelvariant).",
+    note:
+      "De exacte speciale rechten van de Lead Fox staan verder uitgewerkt in de spelregels.",
+  },
+  "Pack Tinker": {
+    choice:
+      "Kies twee posities op de Event Track (bijv. posities 2 en 5) om te wisselen.",
+    effect: "De Event Cards op die twee posities wisselen van plek.",
+    note:
+      "Werkt niet als Burrow Beacon al actief is (Event Track gelocked).",
+  },
+  "Mask Swap": {
+    choice:
+      "Geen keuze nodig; alle vossen die nog in de Yard zitten doen automatisch mee.",
+    effect:
+      "Alle Den-kleuren van vossen in de Yard worden gehusseld en opnieuw uitgedeeld.",
+    note:
+      "Je weet niet welke kleur je terugkrijgt. Vang-events kunnen hierdoor plots heel anders uitpakken.",
+  },
+};
+
+// Centrale Action Card defs (metadata + tags)
+// Let op: phase = wanneer speelbaar. Jij zei: OPS fase = action cards om de beurt.
+// Dus default: phase:"OPS" (tenzij je bewust iets anders wil).
 export const ACTION_DEFS = {
   "Molting Mask": {
+    id: "MOLTING_MASK",
     name: "Molting Mask",
     imageFront: "./assets/card_action_molting_mask.png",
     imageBack: CARD_BACK,
     type: "TRICK",
+    phase: "OPS",
     timing: "before_event",
-    description: "Wissel van Den-kleur met een andere vos of verberg tijdelijk je Den.",
     tags: ["swap_den", "den_trick"],
+    description: "Verander jouw Den-kleur (willekeurig).",
   },
+
   "Scent Check": {
+    id: "SCENT_CHECK",
     name: "Scent Check",
     imageFront: "./assets/card_action_scent_check.png",
     imageBack: CARD_BACK,
     type: "INFO",
+    phase: "OPS",
     timing: "before_event",
-    description: "Bekijk de decision van een speler naar keuze, voordat jij jouw decision maakt.",
-    tags: ["peek", "info"],
+    tags: ["peek", "info", "peek_decision"],
+    description: "Bekijk de decision van een andere speler (info voordeel).",
   },
+
   "Follow the Tail": {
+    id: "FOLLOW_THE_TAIL",
     name: "Follow the Tail",
     imageFront: "./assets/card_action_follow_tail.png",
     imageBack: CARD_BACK,
     type: "MOVEMENT",
+    phase: "OPS",
     timing: "before_event",
-    description: "Beweeg mee met een speler naar keuze en volg automatisch zijn/haar decision.",
-    tags: ["move_with_lead"],
+    tags: ["copy_decision_later"],
+    description: "Jouw decision wordt later gelijk aan die van een gekozen speler.",
   },
+
   "Scatter!": {
+    id: "SCATTER",
     name: "Scatter!",
     imageFront: "./assets/card_action_scatter.png",
     fallbackFront: "./assets/card_scatter.png",
     imageBack: CARD_BACK,
-    type: "MOVEMENT",
+    type: "TRICK",
+    phase: "OPS",
     timing: "before_event",
-    description: "Event Cards mogen deze ronde niet meer verwisseld worden.",
-    tags: ["escape", "events_freeze"],
+    tags: ["block_scout_move", "events_freeze"],
+    description: "Blokkeert SCOUT move voor de rest van de ronde.",
   },
+
   "Den Signal": {
+    id: "DEN_SIGNAL",
     name: "Den Signal",
     imageFront: "./assets/card_action_den_signal.png",
     imageBack: CARD_BACK,
     type: "DEFENSE",
+    phase: "OPS",
     timing: "before_event",
-    description: "Geeft bescherming aan vossen in dezelfde Den tegen bepaalde events.",
     tags: ["protect_den", "group_defense"],
+    description: "Bescherming voor vossen in een gekozen Den-kleur.",
   },
+
   "Alpha Call": {
+    id: "ALPHA_CALL",
     name: "Alpha Call",
     imageFront: "./assets/card_action_alpha_call.png",
     imageBack: CARD_BACK,
     type: "UTILITY",
+    phase: "OPS",
     timing: "before_event",
-    description: "Wijs een nieuwe Lead Fox aan. Dit heeft direct invloed op het spel.",
-    tags: ["lead_control", "reorder"],
+    tags: ["lead_control"],
+    description: "Wijs een nieuwe Lead Fox aan.",
   },
+
   "No-Go Zone": {
+    id: "NO_GO_ZONE",
     name: "No-Go Zone",
     imageFront: "./assets/card_action_no_go_zone.png",
     imageBack: CARD_BACK,
     type: "TRICK",
+    phase: "OPS",
     timing: "before_event",
-    description: "Markeer een Event Card die deze ronde niet verwisseld mag worden.",
-    tags: ["event_control"],
+    tags: ["block_scout_position", "zone_control"],
+    description: "Kies een Event Track positie waar niet gescout mag worden.",
   },
+
   "Countermove": {
+    id: "COUNTERMOVE",
     name: "Countermove",
     imageFront: "./assets/card_action_countermove.png",
     imageBack: CARD_BACK,
     type: "DEFENSE",
+    phase: "OPS",
     timing: "after_event",
-    description: "Reageer op een Event of Action om het effect om te buigen.",
     tags: ["counter", "reaction"],
+    description: "Reageer om een effect om te buigen.",
   },
+
   "Hold Still": {
+    id: "HOLD_STILL",
     name: "Hold Still",
     imageFront: "./assets/card_action_hold_still.png",
     imageBack: CARD_BACK,
     type: "DEFENSE",
+    phase: "OPS",
     timing: "before_event",
-    description: "Er mogen deze ronde geen Actions Cards meer gespeeld worden.",
-    tags: ["block_actions", "stay_put"],
+    tags: ["block_actions"],
+    description: "Vanaf nu: alleen PASS in OPS deze ronde.",
   },
+
   "Kick Up Dust": {
+    id: "KICK_UP_DUST",
     name: "Kick Up Dust",
     imageFront: "./assets/card_action_kick_up_dust.png",
     imageBack: CARD_BACK,
     type: "TRICK",
+    phase: "OPS",
     timing: "before_event",
-    description: "Twee verborgen Event Cards worden willekeurig omgewisseld.",
-    tags: ["obscure", "confuse"],
+    tags: ["swap_events_random", "track_manip"],
+    description: "Wissel willekeurig twee Event Track posities.",
   },
+
   "Pack Tinker": {
+    id: "PACK_TINKER",
     name: "Pack Tinker",
     imageFront: "./assets/card_action_pack_tinker.png",
     imageBack: CARD_BACK,
     type: "UTILITY",
+    phase: "OPS",
     timing: "anytime",
-    description: "Verwissel twee verborgen event kaarten met elkaar.",
-    tags: ["swap_events", "rearrange"],
+    tags: ["swap_events_chosen", "track_manip"],
+    description: "Wissel twee gekozen Event Track posities.",
   },
+
   "Mask Swap": {
+    id: "MASK_SWAP",
     name: "Mask Swap",
     imageFront: "./assets/card_action_mask_swap.png",
     imageBack: CARD_BACK,
     type: "TRICK",
+    phase: "OPS",
     timing: "before_event",
-    description: "Wissel identiteit met een andere vos.",
-    tags: ["swap_identity"],
+    tags: ["shuffle_den_yard"],
+    description: "Hussel Den-kleuren van alle vossen in de Yard.",
   },
+
   "Nose for Trouble": {
+    id: "NOSE_FOR_TROUBLE",
     name: "Nose for Trouble",
     imageFront: "./assets/card_action_nose_for_trouble.png",
     imageBack: CARD_BACK,
     type: "INFO",
+    phase: "OPS",
     timing: "before_event",
-    description: "Ruik gevaar en kijk vooruit in de Event Rack.",
     tags: ["peek_event", "warn"],
+    description: "Voorspel het volgende Event (intel/psychologische druk).",
   },
+
   "Burrow Beacon": {
+    id: "BURROW_BEACON",
     name: "Burrow Beacon",
-    // je hebt al card_beacon.png
     imageFront: "./assets/card_action_burrow_beacon.png",
     fallbackFront: "./assets/card_beacon.png",
     imageBack: CARD_BACK,
     type: "DEFENSE",
+    phase: "OPS",
     timing: "before_event",
-    description: "Event Cards mogen deze ronde niet meer bekeken worden.",
-    tags: ["blind_events", "dark_night"],
+    tags: ["lock_events"],
+    description: "Lock de Event Track: geen swaps/shifts meer deze ronde.",
   },
 
-  // ---- Nieuwe actiekaarten ----
+  // ---- Nieuwe kaarten (optioneel; laat staan als je ze echt gebruikt) ----
   "Shadow Step": {
+    id: "SHADOW_STEP",
     name: "Shadow Step",
     imageFront: "./assets/card_action_shadow_step.png",
     imageBack: CARD_BACK,
     type: "MOVEMENT",
+    phase: "OPS",
     timing: "before_event",
-    description: "Verplaats jezelf van Yard naar Den zonder door honden geraakt te worden, maar je kunt deze ronde geen buit pakken.",
     tags: ["escape", "no_loot_this_round"],
+    description: "Ga veilig naar Den, maar je pakt geen loot deze ronde.",
   },
+
   "Decoy Trail": {
+    id: "DECOY_TRAIL",
     name: "Decoy Trail",
     imageFront: "./assets/card_action_decoy_trail.png",
     imageBack: CARD_BACK,
     type: "TRICK",
+    phase: "OPS",
     timing: "before_event",
-    description: "Leid de honden om: behandel een andere speler als Lead Fox voor dit Event.",
     tags: ["redirect_danger", "target_player"],
+    description: "Leid gevaar om naar een andere speler (tijdelijk).",
   },
+
   "False Alarm": {
+    id: "FALSE_ALARM",
     name: "False Alarm",
     imageFront: "./assets/card_action_false_alarm.png",
     imageBack: CARD_BACK,
     type: "TRICK",
+    phase: "OPS",
     timing: "after_event",
-    description: "Negeer het huidige Event en trek een nieuwe (volgens de tafelregels).",
     tags: ["cancel_event", "redraw"],
+    description: "Negeer huidig Event en trek een nieuwe (huisregels).",
   },
 };
 
-export function getActionDefByName(name) {
-  const def = ACTION_DEFS[name];
+// ------------- helpers -------------
+const ACTION_INDEX = (() => {
+  const map = new Map();
+  for (const [key, def] of Object.entries(ACTION_DEFS)) {
+    map.set(normalizeKey(key), def);
+    if (def?.name) map.set(normalizeKey(def.name), def);
+    if (def?.id) map.set(normalizeKey(def.id), def);
+    map.set(normalizeKey(makeIdFromName(def.name)), def);
+  }
+  return map;
+})();
+
+export function getActionDefByName(nameOrId) {
+  const key = normalizeKey(nameOrId);
+  if (!key) return null;
+
+  const def = ACTION_INDEX.get(key) || null;
   if (!def) return null;
-  // als imageFront niet bestaat maar fallbackFront wel, gebruik die als front path
+
   if (!def.imageFront && def.fallbackFront) {
     return { ...def, imageFront: def.fallbackFront };
   }
   return def;
 }
 
+export function getActionInfoByName(nameOrId) {
+  const def = getActionDefByName(nameOrId);
+  if (!def) return null;
+  return ACTION_CARD_INFO[def.name] || null;
+}
+
 // Optioneel: alle actions van een bepaald type
 export function getActionsByType(type) {
   return Object.values(ACTION_DEFS).filter((a) => a.type === type);
+}
+
+// Optioneel: alle actions die speelbaar zijn in een fase
+export function getActionsByPhase(phase) {
+  const p = String(phase || "").toUpperCase();
+  return Object.values(ACTION_DEFS).filter((a) => (a.phase || "ANY") === "ANY" || a.phase === p);
 }
 
 // ======================
