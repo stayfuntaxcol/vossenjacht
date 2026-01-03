@@ -22,16 +22,16 @@ function pickActionRaid(a) {
 }
 
 function pickActionType(a) {
-  // probeer meerdere velden
-  return upper(a.type ?? a.kind ?? a.actionType ?? a.action ?? a.move ?? "");
+  return upper(a.type ?? a.kind ?? a.actionType ?? a.action ?? "");
+}
+
+function pickMoveName(a) {
+  // move-fase keuze
+  return upper(a.move ?? a.value ?? a.choice ?? a.payload?.move ?? "");
 }
 
 function pickDecision(a) {
   return upper(a.decision ?? a.value ?? a.choice ?? a.payload?.decision ?? "");
-}
-
-function pickOpsMove(a) {
-  return upper(a.move ?? a.ops ?? a.value ?? a.choice ?? a.payload?.move ?? "");
 }
 
 function pickScoutPayload(a) {
@@ -47,68 +47,65 @@ export function buildPlayerView({ game = {}, me = {}, players = [], actions = []
   const round = num(game.round ?? game.roundIndex ?? game.roundNo, 0);
 
   const eventTrack = Array.isArray(game.eventTrack) ? game.eventTrack : [];
-  const eventCursor = num(game.eventCursor ?? game.eventIndex ?? game.roundEventIndex ?? 0, 0);
+  const eventCursor = num(
+    game.eventCursor ?? game.eventIndex ?? game.roundEventIndex ?? 0,
+    0
+  );
 
   const flags = game.flags ?? {};
 
-  // --- identify raid key if available ---
   const raidKey = game.raidId ?? game.raid ?? game.raidIndex ?? game.raidNo ?? null;
 
-  // --- filter my actions ---
   const myId = me.id;
-  const myActions = (actions || []).filter(a => pickActionPlayerId(a) === myId);
+  const myActions = (actions || []).filter((a) => pickActionPlayerId(a) === myId);
 
-  // --- ops taken this round ---
-  const opsTakenThisRound = [];
+  // --- MOVE keuze deze ronde (SNATCH/SCOUT/FORRAGE/SHIFT) ---
+  let moveChosenThisRound = null;
+
+  // --- SCOUT intel (deze ronde) ---
+  const knownEvents = [];
+  const knownEventPositions = [];
+
   for (const a of myActions) {
     const aRound = pickActionRound(a);
     if (aRound !== null && num(aRound, -1) !== round) continue;
 
     const t = pickActionType(a);
-    const move = pickOpsMove(a);
-    // detecteer OPS acties op basis van type of move
-    const isOps =
-      t.includes("OPS") ||
-      ["SNATCH", "FORRAGE", "SCOUT", "SHIFT"].includes(move);
+    const move = pickMoveName(a);
 
-    if (isOps && ["SNATCH", "FORRAGE", "SCOUT", "SHIFT"].includes(move)) {
-      if (!opsTakenThisRound.includes(move)) opsTakenThisRound.push(move);
+    // MOVE detectie: type bevat MOVE of move is één van de moves
+    const isMove =
+      t.includes("MOVE") ||
+      ["SNATCH", "SCOUT", "FORRAGE", "SHIFT"].includes(move);
+
+    if (isMove && !moveChosenThisRound && ["SNATCH", "SCOUT", "FORRAGE", "SHIFT"].includes(move)) {
+      moveChosenThisRound = move;
     }
-  }
 
-  // --- burrow used this raid (afgeleid uit actions) ---
-  let burrowUsedThisRaid = 0;
-  for (const a of myActions) {
-    // match raid als mogelijk
-    const aRaid = pickActionRaid(a);
-    if (raidKey !== null && aRaid !== null && String(aRaid) !== String(raidKey)) continue;
-
-    const t = pickActionType(a);
-    const d = pickDecision(a);
-
-    const isDecision = t.includes("DEC") || t.includes("DECISION") || d.length > 0;
-    if (isDecision && d === "BURROW") burrowUsedThisRaid++;
-  }
-
-  // limit: default 1x per Raid
-  const burrowLimitThisRaid = num(me.burrowLimitThisRaid ?? me.burrowLimitRaid ?? me.burrowLimit ?? 1, 1);
-  const burrowRemaining = Math.max(0, burrowLimitThisRaid - burrowUsedThisRaid);
-
-  // --- SCOUT intel count (afgeleid) ---
-  const knownEvents = [];
-  const knownEventPositions = [];
-  for (const a of myActions) {
-    const aRound = pickActionRound(a);
-    if (aRound !== null && num(aRound, -1) !== round) continue; // alleen deze ronde (MVP)
-
-    const t = pickActionType(a);
-    const move = pickOpsMove(a);
-    if (t.includes("SCOUT") || move === "SCOUT") {
+    if (move === "SCOUT" || t.includes("SCOUT")) {
       const { eventId, pos } = pickScoutPayload(a);
       if (eventId) knownEvents.push(eventId);
       if (pos !== null && pos !== undefined) knownEventPositions.push(pos);
     }
   }
+
+  // --- BURROW used this raid (afgeleid uit Decision actions) ---
+  let burrowUsedThisRaid = 0;
+  for (const a of myActions) {
+    const aRaid = pickActionRaid(a);
+    if (raidKey !== null && aRaid !== null && String(aRaid) !== String(raidKey)) continue;
+
+    const t = pickActionType(a);
+    const d = pickDecision(a);
+    const isDecision = t.includes("DEC") || t.includes("DECISION") || ["LURK", "BURROW", "DASH"].includes(d);
+    if (isDecision && d === "BURROW") burrowUsedThisRaid++;
+  }
+
+  const burrowLimitThisRaid = num(
+    me.burrowLimitThisRaid ?? me.burrowLimitRaid ?? me.burrowLimit ?? 1,
+    1
+  );
+  const burrowRemaining = Math.max(0, burrowLimitThisRaid - burrowUsedThisRaid);
 
   return {
     phase,
@@ -126,14 +123,14 @@ export function buildPlayerView({ game = {}, me = {}, players = [], actions = []
       hand: Array.isArray(me.hand) ? me.hand : [],
       status: me.status ?? null,
 
-      // derived (uit actions)
+      // derived:
+      moveChosenThisRound, // "SNATCH"|"SCOUT"|"FORRAGE"|"SHIFT"|null
+      knownEvents,
+      knownEventPositions,
+
       burrowUsedThisRaid,
       burrowLimitThisRaid,
       burrowRemaining,
-
-      opsTakenThisRound,
-      knownEvents,
-      knownEventPositions,
     },
 
     playersPublic: (players || []).map((p) => ({
