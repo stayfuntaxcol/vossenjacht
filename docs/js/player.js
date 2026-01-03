@@ -8,6 +8,25 @@ let lastGame = null;
 let lastMe = null;
 let lastPlayers = [];
 
+import {
+  collection,
+  query,
+  orderBy,
+  limit,
+  onSnapshot,
+} from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
+
+let lastActions = [];
+
+const actionsRef = collection(db, "games", gameId, "actions");
+
+// kies het juiste veld: createdAt / ts / serverTimestamp
+const actionsQ = query(actionsRef, orderBy("createdAt", "desc"), limit(250));
+
+onSnapshot(actionsQ, (qs) => {
+  lastActions = qs.docs.map(d => ({ id: d.id, ...d.data() }));
+});
+
 
 // LOCK REVEALED EVENT CARDS IN PLACE TO LIMIT ACTION CARDS 
 import {
@@ -2892,6 +2911,7 @@ if (btnHint) {
         game: lastGame,
         me: lastMe,
         players: lastPlayers || [],
+        actions: lastActions,
         profileKey: "BEGINNER_COACH",
       });
 
