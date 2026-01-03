@@ -2872,14 +2872,42 @@ onSnapshot(playerRef, (snap) => {
   if (btnHand) btnHand.addEventListener("click", openHandModal);
   if (btnLoot) btnLoot.addEventListener("click", openLootModal);
   if (btnLead) btnLead.addEventListener("click", openLeadCommandCenter);
-
-  if (btnHint) {
-    btnHint.addEventListener("click", () => {
-      alert(
-        "Hint-bot volgt later. Voor nu: maximaliseer je buit zonder te lang in de Yard te blijven…"
-      );
+  
+if (btnHint) {
+  btnHint.addEventListener("click", () => {
+    console.log("[HINT] clicked", {
+      hasGame: !!lastGame,
+      hasMe: !!lastMe,
+      gameId: lastGame?.id,
+      meId: lastMe?.id,
     });
-  }
+
+    try {
+      if (!lastGame || !lastMe) {
+        alert("Hint: game/player state nog niet geladen.");
+        return;
+      }
+
+      const hint = getAdvisorHint({
+        game: lastGame,
+        me: lastMe,
+        players: lastPlayers || [],
+        profileKey: "BEGINNER_COACH",
+      });
+
+      // 1) popup overlay
+      showHint(hint);
+
+      // 2) fallback (als overlay stuk is)
+      // alert([hint.title, ...(hint.bullets || [])].join("\n"));
+    } catch (err) {
+      console.error("[HINT] crashed:", err);
+      alert("Hint crash: " + (err?.message || err));
+    }
+  });
+} else {
+  console.warn("[HINT] btnHint niet gevonden in DOM");
+}
 
   // Modals sluiten
   if (handModalClose) handModalClose.addEventListener("click", closeHandModal);
