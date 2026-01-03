@@ -1,5 +1,7 @@
 // cardRenderer.js
 // Centrale renderer voor alle kaart-achtige elementen in Vossenjacht.
+// FIX: renderActionCard accepteert nu óók een string ("Scatter!") i.p.v. alleen {name,id}.
+// Daardoor ziet de HAND-grid nu de juiste front-art i.p.v. alleen CARD_BACK.
 
 import {
   CARD_BACK,
@@ -12,7 +14,6 @@ import {
 
 // ==========================================
 //  VASTE ART PER SPELER-NAAM
-//  (maak deze bestanden in /assets)
 // ==========================================
 
 const PLAYER_NAME_ART = {
@@ -31,7 +32,7 @@ const PLAYER_NAME_ART = {
   willy: "./assets/card_player_willy.png",
   stephan: "./assets/card_player_steve.png",
   quintin: "./assets/card_player_meerjam.png",
-  yannick: "./assets/card_player_bill.png", 
+  yannick: "./assets/card_player_bill.png",
   teun: "./assets/card_player_teun.png",
   dirk: "./assets/card_player_dirk.png",
   janjacob: "./assets/card_player_jj.png",
@@ -47,7 +48,6 @@ const PLAYER_NAME_ART = {
   mat: "./assets/card_player_mat.png",
   mitch: "./assets/card_player_mitch.png",
   teagan: "./assets/card_player_teagan.png",
-  willy: "./assets/card_player_willy.png",
   mica: "./assets/card_player_mica.png",
   miranda: "./assets/card_player_miranda.png",
   justin: "./assets/card_player_justin.png",
@@ -67,10 +67,9 @@ const PLAYER_NAME_ART = {
   empress: "./assets/card_player_empress.png",
   prowler: "./assets/card_player_prowler.png",
   astronaut: "./assets/card_player_astronaut.png",
-   
 };
 
-// Fallback art per seat / joinOrder (zoals je nu al gebruikt)
+// Fallback art per seat / joinOrder
 const PLAYER_SLOT_ART = [
   "./assets/card_player1.png",
   "./assets/card_player2.png",
@@ -80,20 +79,55 @@ const PLAYER_SLOT_ART = [
 ];
 
 // ==========================================
-//  HELPER: veilige achtergrond zetten
+//  HELPERS
 // ==========================================
 
-function applySafeBackground(cardElem, imageUrl) {
-  const url = imageUrl || CARD_BACK;
-  const img = new Image();
+function resolveUrl(p) {
+  if (!p) return CARD_BACK;
 
+  const s = String(p).trim();
+
+  // laat bekende URL-vormen met rust
+  if (
+    s.startsWith("./") ||
+    s.startsWith("/") ||
+    s.startsWith("http://") ||
+    s.startsWith("https://") ||
+    s.startsWith("data:")
+  ) {
+    return s;
+  }
+
+  // anders aannemen: asset filename
+  return `./assets/${s}`;
+}
+
+function getNameKey(input) {
+  if (!input) return "";
+
+  // string
+  if (typeof input === "string") return input.trim();
+
+  // object (Firestore)
+  if (typeof input === "object") {
+    return String(input.name || input.id || "").trim();
+  }
+
+  return "";
+}
+
+// veilige achtergrond zetten met fallback
+function applySafeBackground(cardElem, imageUrl) {
+  const url = resolveUrl(imageUrl || CARD_BACK);
+  const fallback = resolveUrl(CARD_BACK);
+
+  const img = new Image();
   img.onload = () => {
-    cardElem.style.backgroundImage = `url(${url})`;
+    cardElem.style.backgroundImage = `url('${url}')`;
   };
   img.onerror = () => {
-    cardElem.style.backgroundImage = `url(${CARD_BACK})`;
+    cardElem.style.backgroundImage = `url('${fallback}')`;
   };
-
   img.src = url;
 }
 
@@ -101,13 +135,6 @@ function applySafeBackground(cardElem, imageUrl) {
 //  GENERIEKE KAART-FACTORY
 // ==========================================
 
-/**
- * Maakt een basiskaart-div:
- * - variant: "event" | "action" | "loot" | "player" | "activity"
- * - size: "small" | "medium" | "large"
- * - extraClasses: extra CSS-klassen (bv. vj-card--den-red, vj-card--lead)
- * - noOverlay: true → alleen full-art image, geen tekst-overlay
- */
 function createBaseCard({
   imageUrl,
   title,
@@ -125,10 +152,8 @@ function createBaseCard({
   if (size) classes.push(`vj-card--${size}`);
   card.className = classes.join(" ");
 
-  // veilige achtergrond met fallback
   applySafeBackground(card, imageUrl);
 
-  // Tekst-overlay alleen als noOverlay === false
   if (!noOverlay) {
     const overlay = document.createElement("div");
     overlay.className = "vj-card__overlay";
@@ -163,8 +188,7 @@ function createBaseCard({
     card.appendChild(overlay);
   }
 
-  // extra klassen (bv. glow per Den-kleur, lead indicator)
-  extraClasses.forEach((cls) => {
+  (extraClasses || []).forEach((cls) => {
     if (cls) card.classList.add(cls);
   });
 
@@ -175,10 +199,6 @@ function createBaseCard({
 //  EVENT CARDS
 // ==========================================
 
-/**
- * Render een Event Card op basis van eventId.
- * Gebruikt EVENT_DEFS via getEventById.
- */
 export function renderEventCard(eventId, opts = {}) {
   const ev = getEventById(eventId);
   if (!ev) return null;
@@ -200,22 +220,20 @@ export function renderEventCard(eventId, opts = {}) {
 // ==========================================
 
 /**
- * Render een Action Card uit de hand.
- * actionCard = { id, name, ... } (zoals in Firestore)
+ * actionCard kan zijn:
+ * - string: "Scatter!"
+ * - object: { name:"Scatter!" } of { id:"Scatter!" }
  */
-export function renderActionCard(actionCard, opts = {}) {
-  if (!actionCard) return null;
-
-  const key = actionCard.name || actionCard.id || "Action";
+export function renderActionCard(actionCardOrName, opts = {}) {
+  const key = getNameKey(actionCardOrName) || "Action";
   const def = getActionDefByName(key);
 
   const imageUrl =
     (def && (def.imageFront || def.fallbackFront)) || CARD_BACK;
 
   const title = def?.name || key;
-  const subtitle =
-    opts.subtitle || def?.description || def?.text || "";
-  const footer = opts.footer || "Action Card";
+  const subtitle = opts.subtitle || def?.description || def?.text || "";
+  const footer = opts.footer ?? "Action Card"; // let op: opts.footer kan "" zijn
 
   return createBaseCard({
     imageUrl,
@@ -233,10 +251,6 @@ export function renderActionCard(actionCard, opts = {}) {
 //  LOOT CARDS
 // ==========================================
 
-/**
- * Render een Loot Card.
- * lootCard = { t: "Egg"|"Hen"|"Prize Hen", v: 1|2|3, ... }
- */
 export function renderLootCard(lootCard, opts = {}) {
   if (!lootCard) return null;
 
@@ -261,19 +275,9 @@ export function renderLootCard(lootCard, opts = {}) {
 //  PLAYER SLOT CARDS (COMMUNITY BOARD, ETC.)
 // ==========================================
 
-/**
- * Render een spelerkaart voor scoreboard / community board.
- * Regels:
- * 1. Als player.name matcht met een entry in PLAYER_NAME_ART:
- *    → gebruik die afbeelding (blijft constant hele game).
- * 2. Anders: fallback naar PLAYER_SLOT_ART op basis van slotIndex/joinOrder.
- * 3. Den-kleur beïnvloedt alleen CSS-glow (vj-card--den-red, etc.), niet de art.
- * 4. Lead Fox krijgt extra class vj-card--lead (neon).
- */
 export function renderPlayerSlotCard(player, opts = {}) {
   if (!player) return null;
 
-  // --- 1) Probeer eerst art op basis van spelernaam ---
   let imageUrl = CARD_BACK;
 
   const rawName = (player.name || "").trim();
@@ -282,7 +286,6 @@ export function renderPlayerSlotCard(player, opts = {}) {
   if (nameKey && PLAYER_NAME_ART[nameKey]) {
     imageUrl = PLAYER_NAME_ART[nameKey];
   } else {
-    // --- 2) Fallback: seat / joinOrder art ---
     let slotIndex = 0;
 
     if (typeof opts.slotIndex === "number") {
@@ -297,34 +300,21 @@ export function renderPlayerSlotCard(player, opts = {}) {
     const hasArtList = PLAYER_SLOT_ART && PLAYER_SLOT_ART.length > 0;
     const artIndex = hasArtList ? slotIndex % PLAYER_SLOT_ART.length : 0;
 
-    imageUrl =
-      (hasArtList && PLAYER_SLOT_ART[artIndex]) || CARD_BACK;
+    imageUrl = (hasArtList && PLAYER_SLOT_ART[artIndex]) || CARD_BACK;
   }
 
-  // --- 3) Den-kleur → alleen CSS-classes (glow) ---
   let denColor = "";
-  if (player.color) {
-    denColor = String(player.color).toUpperCase();
-  } else if (player.denColor) {
-    denColor = String(player.denColor).toUpperCase();
-  } else if (player.den) {
-    denColor = String(player.den).toUpperCase();
-  }
+  if (player.color) denColor = String(player.color).toUpperCase();
+  else if (player.denColor) denColor = String(player.denColor).toUpperCase();
+  else if (player.den) denColor = String(player.den).toUpperCase();
 
   const isLead = Boolean(player.isLead || opts.isLead);
 
-  const extraClasses = opts.extraClasses
-    ? [...opts.extraClasses]
-    : [];
+  const extraClasses = opts.extraClasses ? [...opts.extraClasses] : [];
 
-  if (denColor) {
-    extraClasses.push("vj-card--den-" + denColor.toLowerCase());
-  }
-  if (isLead) {
-    extraClasses.push("vj-card--lead");
-  }
+  if (denColor) extraClasses.push("vj-card--den-" + denColor.toLowerCase());
+  if (isLead) extraClasses.push("vj-card--lead");
 
-  // Geen tekst-overlay: alleen full-art + glow/icoon
   return createBaseCard({
     imageUrl,
     title: "",
@@ -341,10 +331,6 @@ export function renderPlayerSlotCard(player, opts = {}) {
 //  PLAYER PROFILE CARDS
 // ==========================================
 
-/**
- * Lange-termijn rol / ability kaart.
- * profileId = "SCOUT" | "MUSCLE" | "TRICKSTER" | ...
- */
 export function renderPlayerProfileCard(profileId, opts = {}) {
   const profile = getPlayerProfileById(profileId);
   if (!profile) return null;
@@ -364,10 +350,6 @@ export function renderPlayerProfileCard(profileId, opts = {}) {
 //  SPECIAL ACTIVITY CARDS
 // ==========================================
 
-/**
- * Special Activity Card.
- * activityId = "CAMPFIRE_STORY" | "TRAINING_DRILL" | ...
- */
 export function renderActivityCard(activityId, opts = {}) {
   const activity = getActivityById(activityId);
   if (!activity) return null;
