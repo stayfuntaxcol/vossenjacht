@@ -1300,16 +1300,6 @@ function getActionCardInfo(cardOrName) {
   return getActionInfoByName(name) || null;
 }
 
-function getActionCardInfo(cardOrName) {
-  const name =
-    typeof cardOrName === "string"
-      ? cardOrName
-      : (cardOrName?.name || cardOrName?.id || "");
-
-  if (!name) return null;
-  return getActionInfoByName(name) || null;
-}
-
 function openHandCardDetail(index) {
   if (!handCardsGrid) return;
   if (!currentGame || !currentPlayer) return;
