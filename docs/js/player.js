@@ -1225,66 +1225,61 @@ function updateDecisionButtonsState() {
 
 // ===== HAND UI (ACTIONS) =====
 
-function renderHandGrid() {
-  if (!handCardsGrid) return;
+function renderHand() {
+  if (!actionsStateText) return;
 
-  handCardsGrid.innerHTML = "";
+  if (!currentPlayer || !currentGame) {
+    actionsStateText.textContent = "Geen hand geladen.";
+    if (btnHand) btnHand.disabled = true;
+    if (btnPass) btnPass.disabled = true;
+    return;
+  }
 
   const g = currentGame;
   const p = currentPlayer;
-  if (!g || !p) {
-    const msg = document.createElement("p");
-    msg.textContent = "Game of speler niet geladen.";
-    msg.style.fontSize = "0.85rem";
-    msg.style.opacity = "0.85";
-    handCardsGrid.appendChild(msg);
-    return;
-  }
-
   const hand = Array.isArray(p.hand) ? p.hand : [];
 
+  const canPlayOverall = canPlayActionNow(g, p);
+  const myTurnOverall = isMyOpsTurn(g);
+
   if (!hand.length) {
-    const msg = document.createElement("p");
-    msg.textContent = "Je hebt geen Action Cards in je hand.";
-    msg.style.fontSize = "0.85rem";
-    msg.style.opacity = "0.85";
-    handCardsGrid.appendChild(msg);
+    if (g.status === "finished" || g.phase === "END") {
+      actionsStateText.textContent =
+        "Het spel is afgelopen – je kunt geen Action Cards meer spelen.";
+    } else {
+      actionsStateText.textContent = "Je hebt geen Action Cards in je hand.";
+    }
+    if (btnHand) btnHand.disabled = true;
+    if (btnPass) btnPass.disabled = !(canPlayOverall && myTurnOverall);
     return;
   }
 
-  hand.forEach((card, idx) => {
-    const tile = document.createElement("button");
-    tile.type = "button";
-    tile.className = "hand-card-tile";
+  if (btnHand) btnHand.disabled = !canPlayOverall;
 
-    // kaart kan string zijn ("Molting Mask") of object ({name:"Molting Mask"})
-    const cardName = typeof card === "string" ? card : (card?.name || card?.id || "");
-    const renderInput = cardName || card; // geef voorkeur aan naam-string
+  if (g.phase !== "ACTIONS") {
+    actionsStateText.textContent = `ACTIONS-fase is nu niet actief. Je hebt ${hand.length} kaart(en) klaarstaan.`;
+  } else if (!canPlayOverall) {
+    actionsStateText.textContent =
+      "Je kunt nu geen Action Cards spelen (niet in de Yard of al DASHED).";
+  } else if (!myTurnOverall) {
+    actionsStateText.textContent = `Je hebt ${hand.length} kaart(en), maar het is nu niet jouw beurt.`;
+  } else {
+    actionsStateText.textContent = `Jij bent aan de beurt – kies een kaart via HAND of kies PASS. Je hebt ${hand.length} kaart(en).`;
+  }
 
-    // Gebruik centrale renderer
-    const cardEl = renderActionCard(renderInput, {
-      size: "medium",
-      noOverlay: true,
-      footer: "",
-    });
+  if (btnPass) btnPass.disabled = !(canPlayOverall && myTurnOverall);
+}
 
-    if (cardEl) {
-      cardEl.classList.add("hand-card");
-      tile.appendChild(cardEl);
-    } else {
-      // fallback als er iets misgaat
-      const fallback = document.createElement("div");
-      fallback.className = "vj-card hand-card";
-      const label = document.createElement("div");
-      label.className = "hand-card-label";
-      label.textContent = cardName || `Kaart #${idx + 1}`;
-      fallback.appendChild(label);
-      tile.appendChild(fallback);
-    }
+function openHandModal() {
+  if (!handModalOverlay || !handCardsGrid) return;
+  if (!currentGame || !currentPlayer) return;
+  renderHandGrid();
+  handModalOverlay.classList.remove("hidden");
+}
 
-    tile.addEventListener("click", () => openHandCardDetail(idx));
-    handCardsGrid.appendChild(tile);
-  });
+function closeHandModal() {
+  if (!handModalOverlay) return;
+  handModalOverlay.classList.add("hidden");
 }
 
 // ===== ACTION CARD INFO (voor spelersuitleg in HAND-modal) =====
@@ -1309,12 +1304,14 @@ function openHandCardDetail(index) {
   const hand = Array.isArray(p.hand) ? p.hand : [];
   if (index < 0 || index >= hand.length) return;
 
-  const card = hand[index];
-
-  // card kan string of object zijn → maak altijd een naam
-  const cardName =
-    typeof card === "string" ? card : (card?.name || card?.id || "");
-
+ const card = hand[index];
+ const cardName =
+  typeof card === "string" ? card : (card?.name || card?.id || "");
+if (!cardName) {
+  alert("Onbekende kaart in je hand (geen name/id).");
+  return;
+}
+  
   handCardsGrid.innerHTML = "";
 
   const wrapper = document.createElement("div");
