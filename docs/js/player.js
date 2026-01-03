@@ -7,15 +7,6 @@ import { showHint } from "./ui/hintOverlay.js";
 let lastGame = null;
 let lastMe = null;
 let lastPlayers = [];
-
-import {
-  collection,
-  query,
-  orderBy,
-  limit,
-  onSnapshot,
-} from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
-
 let lastActions = [];
 
 const actionsRef = collection(db, "games", gameId, "actions");
@@ -52,6 +43,9 @@ import {
   arrayUnion,
   getDocs,
   setDoc,
+  query,
+  orderBy,
+  limit,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const db = getFirestore();
