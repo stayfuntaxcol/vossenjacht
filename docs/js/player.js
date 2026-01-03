@@ -1224,6 +1224,7 @@ function updateDecisionButtonsState() {
 }
 
 // ===== HAND UI (ACTIONS) =====
+// Let op: renderHand() is de "statusregel + buttons" en renderHandGrid() is de modal grid.
 
 function renderHand() {
   if (!actionsStateText) return;
@@ -1257,14 +1258,17 @@ function renderHand() {
   if (btnHand) btnHand.disabled = !canPlayOverall;
 
   if (g.phase !== "ACTIONS") {
-    actionsStateText.textContent = `ACTIONS-fase is nu niet actief. Je hebt ${hand.length} kaart(en) klaarstaan.`;
+    actionsStateText.textContent =
+      `ACTIONS-fase is nu niet actief. Je hebt ${hand.length} kaart(en) klaarstaan.`;
   } else if (!canPlayOverall) {
     actionsStateText.textContent =
       "Je kunt nu geen Action Cards spelen (niet in de Yard of al DASHED).";
   } else if (!myTurnOverall) {
-    actionsStateText.textContent = `Je hebt ${hand.length} kaart(en), maar het is nu niet jouw beurt.`;
+    actionsStateText.textContent =
+      `Je hebt ${hand.length} kaart(en), maar het is nu niet jouw beurt.`;
   } else {
-    actionsStateText.textContent = `Jij bent aan de beurt – kies een kaart via HAND of kies PASS. Je hebt ${hand.length} kaart(en).`;
+    actionsStateText.textContent =
+      `Jij bent aan de beurt – kies een kaart via HAND of kies PASS. Je hebt ${hand.length} kaart(en).`;
   }
 
   if (btnPass) btnPass.disabled = !(canPlayOverall && myTurnOverall);
@@ -1282,8 +1286,68 @@ function closeHandModal() {
   handModalOverlay.classList.add("hidden");
 }
 
+function renderHandGrid() {
+  if (!handCardsGrid) return;
+
+  handCardsGrid.innerHTML = "";
+
+  const g = currentGame;
+  const p = currentPlayer;
+  if (!g || !p) {
+    const msg = document.createElement("p");
+    msg.textContent = "Game of speler niet geladen.";
+    msg.style.fontSize = "0.85rem";
+    msg.style.opacity = "0.85";
+    handCardsGrid.appendChild(msg);
+    return;
+  }
+
+  const hand = Array.isArray(p.hand) ? p.hand : [];
+  if (!hand.length) {
+    const msg = document.createElement("p");
+    msg.textContent = "Je hebt geen Action Cards in je hand.";
+    msg.style.fontSize = "0.85rem";
+    msg.style.opacity = "0.85";
+    handCardsGrid.appendChild(msg);
+    return;
+  }
+
+  hand.forEach((card, idx) => {
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "hand-card-tile";
+
+    // card kan string zijn ("Molting Mask") of object ({name:"Molting Mask"})
+    const cardName =
+      typeof card === "string" ? card : (card?.name || card?.id || "");
+
+    // Centrale renderer verwacht meestal naam/id string
+    const cardEl = renderActionCard(cardName || card, {
+      size: "medium",
+      noOverlay: true,
+      footer: "",
+    });
+
+    if (cardEl) {
+      cardEl.classList.add("hand-card");
+      tile.appendChild(cardEl);
+    } else {
+      const fallback = document.createElement("div");
+      fallback.className = "vj-card hand-card";
+      const label = document.createElement("div");
+      label.className = "hand-card-label";
+      label.textContent = cardName || `Kaart #${idx + 1}`;
+      fallback.appendChild(label);
+      tile.appendChild(fallback);
+    }
+
+    tile.addEventListener("click", () => openHandCardDetail(idx));
+    handCardsGrid.appendChild(tile);
+  });
+}
+
 // ===== ACTION CARD INFO (voor spelersuitleg in HAND-modal) =====
-// Komt nu uit cards.js (1 bron van waarheid)
+// 1 bron van waarheid: cards.js → getActionInfoByName()
 
 function getActionCardInfo(cardOrName) {
   const name =
@@ -1304,14 +1368,10 @@ function openHandCardDetail(index) {
   const hand = Array.isArray(p.hand) ? p.hand : [];
   if (index < 0 || index >= hand.length) return;
 
- const card = hand[index];
- const cardName =
-  typeof card === "string" ? card : (card?.name || card?.id || "");
-if (!cardName) {
-  alert("Onbekende kaart in je hand (geen name/id).");
-  return;
-}
-  
+  const card = hand[index];
+  const cardName =
+    typeof card === "string" ? card : (card?.name || card?.id || "");
+
   handCardsGrid.innerHTML = "";
 
   const wrapper = document.createElement("div");
@@ -1325,7 +1385,6 @@ if (!cardName) {
     bigCard.style.backgroundImage = `url('${def.imageFront}')`;
   }
 
-  // (optioneel) label overlay — laat staan als je CSS dit verwacht
   const label = document.createElement("div");
   label.className = "hand-card-label";
   label.textContent = def?.name || cardName || `Kaart #${index + 1}`;
@@ -1338,10 +1397,9 @@ if (!cardName) {
   titleEl.textContent = def?.name || cardName || "Onbekende kaart";
   textBox.appendChild(titleEl);
 
-  // INFO uit cards.js
   const info = getActionCardInfo(cardName);
 
-  // “Moment” kun je beter uit def halen (phase/timing), want info heeft dat meestal niet
+  // Moment: liever uit def (phase/timing) dan uit info
   if (def?.phase || def?.timing) {
     const pMoment = document.createElement("p");
     const phaseTxt = def?.phase ? String(def.phase) : "";
@@ -1371,7 +1429,7 @@ if (!cardName) {
     const descEl = document.createElement("p");
     descEl.textContent =
       def?.description ||
-      (typeof card === "object" && (card.desc || card.text)) ||
+      (typeof card === "object" && (card?.desc || card?.text)) ||
       "Deze kaart heeft nog geen digitale beschrijving.";
     textBox.appendChild(descEl);
   }
@@ -1384,10 +1442,20 @@ if (!cardName) {
   playBtn.className = "phase-btn phase-btn-primary";
   playBtn.textContent = "Speel deze kaart";
 
-  const canPlayNow = canPlayActionNow(g, p) && isMyOpsTurn(g);
-  playBtn.disabled = !canPlayNow;
+  const canPlayNow =
+    typeof window.playActionCard === "function"
+      ? (canPlayActionNow(g, p) && isMyOpsTurn(g))
+      : (canPlayActionNow(g, p) && isMyOpsTurn(g)); // playActionCard zit later in je file
+
+  // Extra guard: opsLocked = alleen PASS
+  const opsLocked = !!(g?.flagsRound?.opsLocked);
+  playBtn.disabled = !canPlayNow || opsLocked;
 
   playBtn.addEventListener("click", async () => {
+    if (typeof playActionCard !== "function") {
+      alert("playActionCard() staat later in player.js — niet gevonden.");
+      return;
+    }
     await playActionCard(index);
     closeHandModal();
   });
