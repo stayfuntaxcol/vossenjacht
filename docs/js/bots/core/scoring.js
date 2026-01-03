@@ -117,9 +117,9 @@ function bestSnatchTarget(view) {
 }
 
 export function scoreOpsMoves({ view, upcoming, profile }) {
+  const already = view?.me?.opsTakenThisRound || [];
   const w = profile?.weights || {};
   const lock = !!view.flags?.lockEvents;
-
   const evLoot = expectedLootCardPoints(view);
   const intel = intelCount(view);
 
@@ -167,6 +167,17 @@ export function scoreOpsMoves({ view, upcoming, profile }) {
       }
     }
 
+    if (already.includes(move)) {
+  return {
+    type: "OPS",
+    move,
+    score: -999,
+    riskLabel: "LOW",
+    confidence: 0.6,
+    bullets: ["Deze actie heb je al gedaan deze ronde."],
+  };
+}
+  
     // Score: direct punten zwaar laten wegen (win-conditie).
     // future/info/control wegen ook mee, maar minder dan lootPts.
     const score =
