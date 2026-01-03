@@ -1290,8 +1290,6 @@ function renderHandGrid() {
 // ===== ACTION CARD INFO (voor spelersuitleg in HAND-modal) =====
 // Komt nu uit cards.js (1 bron van waarheid)
 
-import { getActionInfoByName } from "./cards.js";
-
 function getActionCardInfo(cardOrName) {
   const name =
     typeof cardOrName === "string"
