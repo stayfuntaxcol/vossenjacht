@@ -1,36 +1,21 @@
 // VOSSENJACHT player.js – nieuwe UI: fase-panels + loot-meter + Host/Coach
 
+// ===== IMPORTS (eerst alles) =====
+
 // BOTS HINTS
 import { getAdvisorHint } from "./bots/advisor/advisorBot.js";
 import { showHint } from "./ui/hintOverlay.js";
 
-let lastGame = null;
-let lastMe = null;
-let lastPlayers = [];
-let lastActions = [];
+// Engine hooks
+import { applyKickUpDust, applyPackTinker } from "./engine.js";
 
-const actionsRef = collection(db, "games", gameId, "actions");
-
-// kies het juiste veld: createdAt / ts / serverTimestamp
-const actionsQ = query(actionsRef, orderBy("createdAt", "desc"), limit(250));
-
-onSnapshot(actionsQ, (qs) => {
-  lastActions = qs.docs.map(d => ({ id: d.id, ...d.data() }));
-});
-
-
-// LOCK REVEALED EVENT CARDS IN PLACE TO LIMIT ACTION CARDS 
-import {
-  applyKickUpDust,
-  applyPackTinker,
-} from "./engine.js";
-
+// App helpers
 import { initAuth } from "./firebase.js";
 import { renderPlayerSlotCard, renderActionCard } from "./cardRenderer.js";
-
-// pas ./cardRenderer.js aan als jouw bestand anders heet
 import { addLog } from "./log.js";
 import { getEventById, getActionDefByName } from "./cards.js";
+
+// Firestore (alles in 1 import, nergens dubbel)
 import {
   getFirestore,
   doc,
@@ -48,11 +33,31 @@ import {
   limit,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
+// ===== INIT (dan pas db/params/refs) =====
 const db = getFirestore();
 
 const params = new URLSearchParams(window.location.search);
 const gameId = params.get("game");
 const playerId = params.get("player");
+
+// ===== BOT STATE CACHES =====
+let lastGame = null;
+let lastMe = null;
+let lastPlayers = [];
+let lastActions = [];
+
+// ===== ACTIONS LISTENER (NA db + gameId) =====
+if (gameId) {
+  const actionsRef = collection(db, "games", gameId, "actions");
+  // kies het juiste veld: createdAt / ts / serverTimestamp
+  const actionsQ = query(actionsRef, orderBy("createdAt", "desc"), limit(250));
+
+  onSnapshot(actionsQ, (qs) => {
+    lastActions = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+  });
+} else {
+  console.warn("[ACTIONS] gameId ontbreekt in URL (?game=...)");
+}
 
 // ===== DOM ELEMENTS – nieuwe player.html =====
 
