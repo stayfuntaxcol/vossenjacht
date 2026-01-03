@@ -199,6 +199,72 @@ export function getEventsByCategory(category) {
 // - vaste velden: id, name, type, phase, timing, tags, description, choice, effect, note
 // - robuuste lookup: werkt met "Molting Mask", "MOLTING_MASK", "molting-mask", etc.
 //
+// cards.js
+
+const ACTION_ALIASES = {
+  "MOLTING_MASK": "Molting Mask",
+  "ACTION_MOLTING_MASK": "Molting Mask",
+
+  "SCENT_CHECK": "Scent Check",
+  "ACTION_SCENT_CHECK": "Scent Check",
+
+  "FOLLOW_THE_TAIL": "Follow the Tail",
+  "ACTION_FOLLOW_THE_TAIL": "Follow the Tail",
+
+  "PACK_TINKER": "Pack Tinker",
+  "ACTION_PACK_TINKER": "Pack Tinker",
+
+  "BURROW_BEACON": "Burrow Beacon",
+  "ACTION_BURROW_BEACON": "Burrow Beacon",
+
+  "KICK_UP_DUST": "Kick Up Dust",
+  "ACTION_KICK_UP_DUST": "Kick Up Dust",
+
+  "NO_GO_ZONE": "No-Go Zone",
+  "ACTION_NO_GO_ZONE": "No-Go Zone",
+
+  "DEN_SIGNAL": "Den Signal",
+  "ACTION_DEN_SIGNAL": "Den Signal",
+
+  "MASK_SWAP": "Mask Swap",
+  "ACTION_MASK_SWAP": "Mask Swap",
+
+  "HOLD_STILL": "Hold Still",
+  "ACTION_HOLD_STILL": "Hold Still",
+
+  "SCATTER": "Scatter!",
+  "ACTION_SCATTER": "Scatter!",
+
+  "ALPHA_CALL": "Alpha Call",
+  "ACTION_ALPHA_CALL": "Alpha Call",
+
+  "NOSE_FOR_TROUBLE": "Nose for Trouble",
+  "ACTION_NOSE_FOR_TROUBLE": "Nose for Trouble",
+};
+
+function normalizeActionKey(x) {
+  if (!x) return "";
+  const s = String(x).trim();
+  return ACTION_ALIASES[s] || s;
+}
+
+export function getActionDefByName(nameOrId) {
+  const key = normalizeActionKey(nameOrId);
+  const def = ACTION_DEFS[key];
+  if (!def) return null;
+
+  // fallbackFront support
+  if ((!def.imageFront || def.imageFront === "") && def.fallbackFront) {
+    return { ...def, imageFront: def.fallbackFront };
+  }
+  return def;
+}
+
+export function getActionInfoByName(nameOrId) {
+  const key = normalizeActionKey(nameOrId);
+  return ACTION_CARD_INFO[key] || null;
+}
+
 // EXTRA VELDEN:
 // - type: "INFO" | "DEFENSE" | "MOVEMENT" | "TRICK" | "UTILITY"
 // - phase: "OPS" | "MOVE" | "DECISION" | "ANY"  (wanneer speelbaar)
