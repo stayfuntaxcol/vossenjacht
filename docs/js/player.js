@@ -2808,38 +2808,47 @@ initAuth(async () => {
   await ensurePlayerDoc();
   hostInitUI();
 
-  onSnapshot(gameRef, (snap) => {
-    if (!snap.exists()) {
-      
-      if (gameStatusDiv) gameStatusDiv.textContent = "Spel niet gevonden.";
-      return;
-    }
-    const newGame = { id: snap.id, ...snap.data() };
+onSnapshot(gameRef, (snap) => {
+  if (!snap.exists()) {
+    currentGame = null;
+    lastGame = null;
+    if (gameStatusDiv) gameStatusDiv.textContent = "Spel niet gevonden.";
+    return;
+  }
 
-    if (prevGame && prevGame.leadIndex !== newGame.leadIndex) {
-      resetLeadCache();
-    }
+  const newGame = { id: snap.id, ...snap.data() };
 
-    applyHostHooks(prevGame, newGame, prevPlayer, currentPlayer, null);
+  if (prevGame && prevGame.leadIndex !== newGame.leadIndex) {
+    resetLeadCache();
+  }
 
-    currentGame = newGame;
-    prevGame = newGame;
-    renderGame();
-  });
+  applyHostHooks(prevGame, newGame, prevPlayer, currentPlayer, null);
 
-  onSnapshot(playerRef, (snap) => {
-    if (!snap.exists()) {
-      if (playerNameEl) playerNameEl.textContent = "Speler niet gevonden.";
-      return;
-    }
-    const newPlayer = { id: snap.id, ...snap.data() };
+  currentGame = newGame;
+  prevGame = newGame;
+  lastGame = newGame; // <- hint-bot kan dit gebruiken
 
-    applyHostHooks(currentGame, currentGame, prevPlayer, newPlayer, null);
+  renderGame();
+});
 
-    currentPlayer = newPlayer;
-    prevPlayer = newPlayer;
-    renderPlayer();
-  });
+onSnapshot(playerRef, (snap) => {
+  if (!snap.exists()) {
+    currentPlayer = null;
+    lastMe = null;
+    if (playerNameEl) playerNameEl.textContent = "Speler niet gevonden.";
+    return;
+  }
+
+  const newPlayer = { id: snap.id, ...snap.data() };
+
+  applyHostHooks(currentGame, currentGame, prevPlayer, newPlayer, null);
+
+  currentPlayer = newPlayer;
+  prevPlayer = newPlayer;
+  lastMe = newPlayer; // <- hint-bot kan dit gebruiken
+
+  renderPlayer();
+});
 
 // MOVE
   if (btnSnatch) btnSnatch.addEventListener("click", performSnatch);
