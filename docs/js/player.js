@@ -13,7 +13,7 @@ import { applyKickUpDust, applyPackTinker } from "./engine.js";
 import { initAuth } from "./firebase.js";
 import { renderPlayerSlotCard, renderActionCard } from "./cardRenderer.js";
 import { addLog } from "./log.js";
-import { getEventById, getActionDefByName } from "./cards.js";
+import { getEventById, getActionDefByName, getActionInfoByName } from "./cards.js";
 
 // Firestore (alles in 1 import, nergens dubbel)
 import {
@@ -1225,63 +1225,6 @@ function updateDecisionButtonsState() {
 
 // ===== HAND UI (ACTIONS) =====
 
-function renderHand() {
-  if (!actionsStateText) return;
-
-  if (!currentPlayer || !currentGame) {
-    actionsStateText.textContent = "Geen hand geladen.";
-    if (btnHand) btnHand.disabled = true;
-    if (btnPass) btnPass.disabled = true;
-    return;
-  }
-
-  const g = currentGame;
-  const p = currentPlayer;
-  const hand = Array.isArray(p.hand) ? p.hand : [];
-
-  const canPlayOverall = canPlayActionNow(g, p);
-  const myTurnOverall = isMyOpsTurn(g);
-
-  if (!hand.length) {
-    if (g.status === "finished" || g.phase === "END") {
-      actionsStateText.textContent =
-        "Het spel is afgelopen – je kunt geen Action Cards meer spelen.";
-    } else {
-      actionsStateText.textContent = "Je hebt geen Action Cards in je hand.";
-    }
-    if (btnHand) btnHand.disabled = true;
-    if (btnPass) btnPass.disabled = !(canPlayOverall && myTurnOverall);
-    return;
-  }
-
-  if (btnHand) btnHand.disabled = !canPlayOverall;
-
-  if (g.phase !== "ACTIONS") {
-    actionsStateText.textContent = `ACTIONS-fase is nu niet actief. Je hebt ${hand.length} kaart(en) klaarstaan.`;
-  } else if (!canPlayOverall) {
-    actionsStateText.textContent =
-      "Je kunt nu geen Action Cards spelen (niet in de Yard of al DASHED).";
-  } else if (!myTurnOverall) {
-    actionsStateText.textContent = `Je hebt ${hand.length} kaart(en), maar het is nu niet jouw beurt.`;
-  } else {
-    actionsStateText.textContent = `Jij bent aan de beurt – kies een kaart via HAND of kies PASS. Je hebt ${hand.length} kaart(en).`;
-  }
-
-  if (btnPass) btnPass.disabled = !(canPlayOverall && myTurnOverall);
-}
-
-function openHandModal() {
-  if (!handModalOverlay || !handCardsGrid) return;
-  if (!currentGame || !currentPlayer) return;
-  renderHandGrid();
-  handModalOverlay.classList.remove("hidden");
-}
-
-function closeHandModal() {
-  if (!handModalOverlay) return;
-  handModalOverlay.classList.add("hidden");
-}
-
 function renderHandGrid() {
   if (!handCardsGrid) return;
 
@@ -1309,41 +1252,55 @@ function renderHandGrid() {
     return;
   }
 
-hand.forEach((card, idx) => {
-  const tile = document.createElement("button");
-  tile.type = "button";
-  tile.className = "hand-card-tile";
+  hand.forEach((card, idx) => {
+    const tile = document.createElement("button");
+    tile.type = "button";
+    tile.className = "hand-card-tile";
 
-  // Gebruik de centrale renderer met je imageFront uit ACTION_DEFS
-  const cardEl = renderActionCard(card, {
-    size: "medium",
-    noOverlay: true,      // geen extra UI-overlay erbovenop
-    footer: "",           // geen "Action Card" footer
+    // kaart kan string zijn ("Molting Mask") of object ({name:"Molting Mask"})
+    const cardName = typeof card === "string" ? card : (card?.name || card?.id || "");
+    const renderInput = cardName || card; // geef voorkeur aan naam-string
+
+    // Gebruik centrale renderer
+    const cardEl = renderActionCard(renderInput, {
+      size: "medium",
+      noOverlay: true,
+      footer: "",
+    });
+
+    if (cardEl) {
+      cardEl.classList.add("hand-card");
+      tile.appendChild(cardEl);
+    } else {
+      // fallback als er iets misgaat
+      const fallback = document.createElement("div");
+      fallback.className = "vj-card hand-card";
+      const label = document.createElement("div");
+      label.className = "hand-card-label";
+      label.textContent = cardName || `Kaart #${idx + 1}`;
+      fallback.appendChild(label);
+      tile.appendChild(fallback);
+    }
+
+    tile.addEventListener("click", () => openHandCardDetail(idx));
+    handCardsGrid.appendChild(tile);
   });
-
-  if (cardEl) {
-    cardEl.classList.add("hand-card"); // zodat je bestaande CSS blijft werken
-    tile.appendChild(cardEl);
-  } else {
-    // fallback als er iets misgaat
-    const fallback = document.createElement("div");
-    fallback.className = "vj-card hand-card";
-    const label = document.createElement("div");
-    label.className = "hand-card-label";
-    label.textContent = card.name || `Kaart #${idx + 1}`;
-    fallback.appendChild(label);
-    tile.appendChild(fallback);
-  }
-
-  tile.addEventListener("click", () => openHandCardDetail(idx));
-  handCardsGrid.appendChild(tile);
- });
 }
 
 // ===== ACTION CARD INFO (voor spelersuitleg in HAND-modal) =====
 // Komt nu uit cards.js (1 bron van waarheid)
 
 import { getActionInfoByName } from "./cards.js";
+
+function getActionCardInfo(cardOrName) {
+  const name =
+    typeof cardOrName === "string"
+      ? cardOrName
+      : (cardOrName?.name || cardOrName?.id || "");
+
+  if (!name) return null;
+  return getActionInfoByName(name) || null;
+}
 
 function getActionCardInfo(cardOrName) {
   const name =
@@ -1366,6 +1323,10 @@ function openHandCardDetail(index) {
 
   const card = hand[index];
 
+  // card kan string of object zijn → maak altijd een naam
+  const cardName =
+    typeof card === "string" ? card : (card?.name || card?.id || "");
+
   handCardsGrid.innerHTML = "";
 
   const wrapper = document.createElement("div");
@@ -1374,30 +1335,38 @@ function openHandCardDetail(index) {
   const bigCard = document.createElement("div");
   bigCard.className = "vj-card hand-card hand-card-large";
 
-  const def = getActionDefByName(card.name || card.id);
-if (def && def.imageFront) {
-  bigCard.style.backgroundImage = `url('${def.imageFront}')`;
-}
+  const def = cardName ? getActionDefByName(cardName) : null;
+  if (def?.imageFront) {
+    bigCard.style.backgroundImage = `url('${def.imageFront}')`;
+  }
+
+  // (optioneel) label overlay — laat staan als je CSS dit verwacht
   const label = document.createElement("div");
   label.className = "hand-card-label";
-  label.textContent = card.name || `Kaart #${index + 1}`;
+  label.textContent = def?.name || cardName || `Kaart #${index + 1}`;
   bigCard.appendChild(label);
 
   const textBox = document.createElement("div");
   textBox.className = "hand-card-detail-text";
 
   const titleEl = document.createElement("h3");
-  titleEl.textContent = card.name || "Onbekende kaart";
+  titleEl.textContent = def?.name || cardName || "Onbekende kaart";
   textBox.appendChild(titleEl);
 
-  const info = getActionCardInfo(card);
+  // INFO uit cards.js
+  const info = getActionCardInfo(cardName);
+
+  // “Moment” kun je beter uit def halen (phase/timing), want info heeft dat meestal niet
+  if (def?.phase || def?.timing) {
+    const pMoment = document.createElement("p");
+    const phaseTxt = def?.phase ? String(def.phase) : "";
+    const timingTxt = def?.timing ? String(def.timing) : "";
+    const joined = [phaseTxt, timingTxt].filter(Boolean).join(" • ");
+    pMoment.innerHTML = `<strong>Moment:</strong> ${joined}`;
+    textBox.appendChild(pMoment);
+  }
 
   if (info) {
-    if (info.moment) {
-      const pMoment = document.createElement("p");
-      pMoment.innerHTML = `<strong>Moment:</strong> ${info.moment}`;
-      textBox.appendChild(pMoment);
-    }
     if (info.choice) {
       const pChoice = document.createElement("p");
       pChoice.innerHTML = `<strong>Kies:</strong> ${info.choice}`;
@@ -1415,11 +1384,10 @@ if (def && def.imageFront) {
     }
   } else {
     const descEl = document.createElement("p");
-    const desc =
-      card.desc ||
-      card.text ||
-      "Deze kaart heeft nog geen digitale beschrijving. Gebruik de fysieke spelregels of speel hem op gevoel.";
-    descEl.textContent = desc;
+    descEl.textContent =
+      def?.description ||
+      (typeof card === "object" && (card.desc || card.text)) ||
+      "Deze kaart heeft nog geen digitale beschrijving.";
     textBox.appendChild(descEl);
   }
 
@@ -1443,9 +1411,7 @@ if (def && def.imageFront) {
   backBtn.type = "button";
   backBtn.className = "phase-btn phase-btn-secondary";
   backBtn.textContent = "Terug naar hand";
-  backBtn.addEventListener("click", () => {
-    renderHandGrid();
-  });
+  backBtn.addEventListener("click", () => renderHandGrid());
 
   actions.appendChild(playBtn);
   actions.appendChild(backBtn);
