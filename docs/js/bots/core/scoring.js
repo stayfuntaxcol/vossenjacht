@@ -29,6 +29,22 @@ function baseRisk(decision, view, upcoming) {
     if (decision === "LURK") risk += 0.15;
   }
 
+  // BURROW BEPERKING
+  function conservePenalty(decision, view) {
+  if (decision !== "BURROW") return 0;
+
+  const rem = view.me?.burrowRemaining ?? 1;
+
+  // Als BURROW op is: maak het praktisch onmogelijk
+  if (rem <= 0) return 999;
+
+  // Als je nog maar 1 BURROW hebt, is die “kostbaar”
+  // penalty zorgt dat hij niet standaard in ronde 1 geroepen wordt
+  if (rem === 1) return 0.55;
+
+  return 0.25; // meerdere charges: kleine penalty
+}
+
   // Voorbeeld: lockEvents betekent vaak dat SHIFT/peek niet kan; voor decision is dat indirect.
   if (view.flags?.lockEvents && decision === "DASH") risk += 0.10;
 
@@ -47,6 +63,15 @@ function riskLabel(risk01) {
   if (risk01 < 0.65) return "MED";
   return "HIGH";
 }
+
+const conserve = conservePenalty(decision, view);
+
+const score =
+  w.loot * loot -
+  w.risk * risk +
+  w.flexibility * flex -
+  (w.conserve || 0) * conserve +
+  w.synergy * 0.0;
 
 export function scoreDecisions({ view, upcoming, profile }) {
   const w = profile.weights;
