@@ -80,7 +80,7 @@ export const EVENT_DEFS = {
     imageFront: "./assets/card_event_sheepdog_patrol.png",
     imageBack: CARD_BACK,
     category: "DOG",
-    tags: ["dog_attack", "targets_dashers", "ignores_burrow"],
+    tags: ["dog_attack", "targets_dashers", "ignores_burrow", "ignores_yard"],
   },
   SECOND_CHARGE: {
     id: "SECOND_CHARGE",
@@ -216,7 +216,7 @@ export const ACTION_DEFS = {
     imageBack: CARD_BACK,
     type: "INFO",
     timing: "before_event",
-    description: "Bekijk een handkaart of Event-kaart, afhankelijk van de variant.",
+    description: "Bekijk de decision van een speler naar keuze, voordat jij jouw decision maakt.",
     tags: ["peek", "info"],
   },
   "Follow the Tail": {
@@ -225,19 +225,18 @@ export const ACTION_DEFS = {
     imageBack: CARD_BACK,
     type: "MOVEMENT",
     timing: "before_event",
-    description: "Beweeg mee met de Lead Fox naar zijn positie.",
+    description: "Beweeg mee met een speler naar keuze en volg automatisch zijn/haar decision.",
     tags: ["move_with_lead"],
   },
   "Scatter!": {
     name: "Scatter!",
-    // je hebt al card_scatter.png – beide mogen naar hetzelfde wijzen
     imageFront: "./assets/card_action_scatter.png",
     fallbackFront: "./assets/card_scatter.png",
     imageBack: CARD_BACK,
     type: "MOVEMENT",
     timing: "before_event",
-    description: "Iedereen rent een andere kant op. Vermindert groepsrisico, maar kan co-op bonussen breken.",
-    tags: ["escape", "split_group"],
+    description: "Event Cards mogen deze ronde niet meer verwisseld worden.",
+    tags: ["escape", "events_freeze"],
   },
   "Den Signal": {
     name: "Den Signal",
@@ -254,7 +253,7 @@ export const ACTION_DEFS = {
     imageBack: CARD_BACK,
     type: "UTILITY",
     timing: "before_event",
-    description: "Lead Fox kan de positie of volgorde van vossen beïnvloeden.",
+    description: "Wijs een nieuwe Lead Fox aan. Dit heeft direct invloed op het spel.",
     tags: ["lead_control", "reorder"],
   },
   "No-Go Zone": {
@@ -263,8 +262,8 @@ export const ACTION_DEFS = {
     imageBack: CARD_BACK,
     type: "TRICK",
     timing: "before_event",
-    description: "Markeer een zone waar een Event minder effect heeft.",
-    tags: ["zone_control"],
+    description: "Markeer een Event Card die deze ronde niet verwisseld mag worden.",
+    tags: ["event_control"],
   },
   "Countermove": {
     name: "Countermove",
@@ -281,8 +280,8 @@ export const ACTION_DEFS = {
     imageBack: CARD_BACK,
     type: "DEFENSE",
     timing: "before_event",
-    description: "Blijf stokstijf staan; sommige Dog-events missen je.",
-    tags: ["avoid_dog", "stay_put"],
+    description: "Er mogen deze ronde geen Actions Cards meer gespeeld worden.",
+    tags: ["block_actions", "stay_put"],
   },
   "Kick Up Dust": {
     name: "Kick Up Dust",
@@ -290,7 +289,7 @@ export const ACTION_DEFS = {
     imageBack: CARD_BACK,
     type: "TRICK",
     timing: "before_event",
-    description: "Maakt het zicht slecht; beïnvloedt wie geraakt wordt.",
+    description: "Twee verborgen Event Cards worden willekeurig omgewisseld.",
     tags: ["obscure", "confuse"],
   },
   "Pack Tinker": {
@@ -299,8 +298,8 @@ export const ACTION_DEFS = {
     imageBack: CARD_BACK,
     type: "UTILITY",
     timing: "anytime",
-    description: "Ruil buitkaarten in je eigen pack of met de Sack.",
-    tags: ["swap_loot", "rearrange"],
+    description: "Verwissel twee verborgen event kaarten met elkaar.",
+    tags: ["swap_events", "rearrange"],
   },
   "Mask Swap": {
     name: "Mask Swap",
@@ -308,7 +307,7 @@ export const ACTION_DEFS = {
     imageBack: CARD_BACK,
     type: "TRICK",
     timing: "before_event",
-    description: "Wissel tijdelijk identiteit of Den-informatie met een andere vos.",
+    description: "Wissel identiteit met een andere vos.",
     tags: ["swap_identity"],
   },
   "Nose for Trouble": {
@@ -317,7 +316,7 @@ export const ACTION_DEFS = {
     imageBack: CARD_BACK,
     type: "INFO",
     timing: "before_event",
-    description: "Ruik gevaar en kijk vooruit in de Event Deck.",
+    description: "Ruik gevaar en kijk vooruit in de Event Rack.",
     tags: ["peek_event", "warn"],
   },
   "Burrow Beacon": {
@@ -328,8 +327,8 @@ export const ACTION_DEFS = {
     imageBack: CARD_BACK,
     type: "DEFENSE",
     timing: "before_event",
-    description: "Versterkt BURROW-effecten voor jou en eventueel bondgenoten.",
-    tags: ["boost_burrow", "group_defense"],
+    description: "Event Cards mogen deze ronde niet meer bekeken worden.",
+    tags: ["blind_events", "dark_night"],
   },
 
   // ---- Nieuwe actiekaarten ----
