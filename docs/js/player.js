@@ -1975,8 +1975,13 @@ async function playActionCard(index) {
   if (index < 0 || index >= hand.length) return;
 
   const card = hand[index];
-  const cardName = card.name;
+const cardName =
+  typeof card === "string" ? card.trim() : String(card?.name || card?.id || "").trim();
 
+if (!cardName) {
+  alert("Onbekende Action Card in je hand (geen name/id).");
+  return;
+}
   const flagsBefore = mergeRoundFlags(game);
   if (flagsBefore.opsLocked) {
     alert(
