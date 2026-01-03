@@ -6,6 +6,8 @@ export const ADVISOR_PROFILES = {
       risk: 1.6,
       flexibility: 1.0,
       synergy: 0.6,
+      conserve: 1.2,
+
     },
     randomness: 0.02,
   },
@@ -16,6 +18,8 @@ export const ADVISOR_PROFILES = {
       risk: 1.2,
       flexibility: 0.7,
       synergy: 1.0,
+      conserve: 0.7,
+
     },
     randomness: 0.05,
   },
