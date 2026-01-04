@@ -11,6 +11,8 @@ import {
 
 // Action defs + info (1 bron: cards.js)
 import { getActionDefByName, getActionInfoByName } from "../../cards.js";
+const meta = def.meta || { role:"utility", affects:[], attackValue:0, defenseValue:0, triggers:[], counters:[] };
+return { ...def, imageFront, meta };
 
 // ------------------------------
 // Phase normalisatie
