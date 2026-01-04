@@ -1117,3 +1117,250 @@ body.player-body {
     font-size: 1rem;
   }
 }
+/* ==========================================
+   ADVISOR HINT OVERLAY — Lead Fox style
+   Plak dit onderaan player.css
+   ========================================== */
+
+/* Overlay (zelfde vibe als Lead Command Center) */
+#hintOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 5, 10, 0.85);
+  backdrop-filter: blur(4px);
+}
+
+#hintOverlay.hidden {
+  display: none !important;
+}
+
+/* Panel */
+#hintOverlay .hint-panel {
+  background: #05060a;
+  border-radius: 1.25rem;
+  padding: 1.25rem 1.4rem 1.1rem;
+  width: 95%;
+  max-width: 960px;
+  max-height: 85vh;
+  overflow: auto;
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  position: relative;
+}
+
+/* Subtiele rand-glow */
+#hintOverlay .hint-panel::before {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border-radius: 1.05rem;
+  pointer-events: none;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 0 26px rgba(59, 130, 246, 0.12);
+  opacity: 0.9;
+}
+
+/* Close */
+#hintOverlay .hint-close {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 1.5rem;
+  cursor: pointer;
+  position: sticky;
+  top: 0;
+  float: right;
+  margin-left: 0.5rem;
+  z-index: 2;
+}
+
+#hintOverlay .hint-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.9rem;
+}
+
+#hintOverlay .hint-kicker {
+  font-size: 0.75rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: rgba(250, 204, 21, 0.95);
+  opacity: 0.95;
+}
+
+#hintOverlay .hint-title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 800;
+  line-height: 1.15;
+}
+
+#hintOverlay .hint-sub {
+  margin: 0;
+  font-size: 0.88rem;
+  opacity: 0.8;
+}
+
+/* Mini status pills (Yard / Caught / Loot) */
+#hintOverlay .hint-mini {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+}
+
+#hintOverlay .hint-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: rgba(255, 255, 255, 0.88);
+}
+
+#hintOverlay .hint-pill strong {
+  font-weight: 800;
+  color: #fff;
+}
+
+#hintOverlay .hint-pill--danger {
+  border-color: rgba(248, 113, 113, 0.55);
+  box-shadow: 0 0 14px rgba(248, 113, 113, 0.18);
+}
+
+#hintOverlay .hint-pill--safe {
+  border-color: rgba(52, 211, 153, 0.55);
+  box-shadow: 0 0 14px rgba(52, 211, 153, 0.18);
+}
+
+#hintOverlay .hint-pill--info {
+  border-color: rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 14px rgba(59, 130, 246, 0.18);
+}
+
+/* 2 kolommen (Def/Agg) */
+#hintOverlay .hint-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+@media (max-width: 760px) {
+  #hintOverlay .hint-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Advice cards */
+#hintOverlay .hint-card {
+  border-radius: 0.9rem;
+  padding: 0.85rem 0.95rem;
+  background: radial-gradient(circle at top left, rgba(255,255,255,0.08), rgba(10,10,20,0.92));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+#hintOverlay .hint-card--def {
+  box-shadow:
+    0 0 0 1px rgba(59, 130, 246, 0.28),
+    0 0 18px rgba(59, 130, 246, 0.18);
+}
+
+#hintOverlay .hint-card--agg {
+  box-shadow:
+    0 0 0 1px rgba(234, 179, 8, 0.25),
+    0 0 18px rgba(234, 179, 8, 0.16);
+}
+
+#hintOverlay .hint-card-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+}
+
+#hintOverlay .hint-card-label {
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+#hintOverlay .hint-card-pick {
+  font-weight: 800;
+  font-size: 1rem;
+}
+
+#hintOverlay .hint-card-meta {
+  font-size: 0.8rem;
+  opacity: 0.8;
+  margin: 0 0 0.55rem;
+}
+
+/* bullets */
+#hintOverlay .hint-bullets {
+  margin: 0;
+  padding-left: 1.05rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+#hintOverlay .hint-bullets li {
+  line-height: 1.35;
+  opacity: 0.92;
+}
+
+/* “Why this” collapsible */
+#hintOverlay .hint-why {
+  margin-top: 0.85rem;
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+#hintOverlay .hint-why summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0.65rem 0.8rem;
+  font-weight: 700;
+  opacity: 0.9;
+}
+
+#hintOverlay .hint-why summary::-webkit-details-marker {
+  display: none;
+}
+
+#hintOverlay .hint-why-body {
+  padding: 0.6rem 0.8rem 0.8rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.82rem;
+  opacity: 0.88;
+  display: grid;
+  gap: 0.35rem;
+}
+
+#hintOverlay .hint-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+#hintOverlay .hint-tag {
+  font-size: 0.75rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  opacity: 0.92;
+}
