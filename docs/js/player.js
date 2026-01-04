@@ -1567,6 +1567,256 @@ function closeLootModal() {
   lootModalOverlay.classList.add("hidden");
 }
 
+// ==========================================
+// Advisor Hint Overlay — Lead Fox style
+// ==========================================
+
+import { getActionDefByName } from "./cards.js"; // pas pad aan als nodig
+
+let _hintOverlayEl = null;
+let _hintPanelEl = null;
+
+function ensureHintOverlayDom() {
+  if (_hintOverlayEl && _hintPanelEl) return;
+
+  let overlay = document.getElementById("hintOverlay");
+  if (!overlay) {
+    overlay = document.createElement("div");
+    overlay.id = "hintOverlay";
+    overlay.className = "hidden";
+    document.body.appendChild(overlay);
+  }
+
+  overlay.innerHTML = `
+    <div class="hint-panel" role="dialog" aria-modal="true">
+      <button class="hint-close" type="button" aria-label="Sluit">×</button>
+      <div class="hint-header">
+        <div class="hint-kicker">LEAD FOX ADVISOR</div>
+        <h2 class="hint-title">Hint</h2>
+        <p class="hint-sub">—</p>
+        <div class="hint-mini"></div>
+      </div>
+
+      <div class="hint-grid"></div>
+
+      <details class="hint-why">
+        <summary>Why this</summary>
+        <div class="hint-why-body"></div>
+      </details>
+    </div>
+  `;
+
+  const panel = overlay.querySelector(".hint-panel");
+  const closeBtn = overlay.querySelector(".hint-close");
+
+  closeBtn.addEventListener("click", () => closeAdvisorHintOverlay());
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeAdvisorHintOverlay();
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !_hintOverlayEl?.classList.contains("hidden")) {
+      closeAdvisorHintOverlay();
+    }
+  });
+
+  _hintOverlayEl = overlay;
+  _hintPanelEl = panel;
+}
+
+function pct01(x) {
+  const n = Number(x);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(Math.max(0, Math.min(1, n)) * 100);
+}
+
+function safeArr(x) {
+  return Array.isArray(x) ? x : [];
+}
+
+function pickLineFromBest(best) {
+  if (!best) return "—";
+  if (best.play === "PASS") return "PASS";
+  if (best.cardId) return `Speel: ${best.cardId}`;
+  if (best.move) return best.move;
+  if (best.decision) return best.decision;
+  return best.play || "—";
+}
+
+function miniStatusPills(ctx) {
+  // probeert meerdere veldnamen (want jouw data evolueert)
+  const me = ctx?.me || {};
+  const pills = [];
+
+  const statusRaw = String(me.status || me.state || "").toUpperCase();
+  const isCaught = me.isCaught === true || statusRaw.includes("CAUGHT");
+  const isDashed = me.isDashed === true || statusRaw.includes("DASH");
+  const inYard =
+    typeof me.inYard === "boolean"
+      ? me.inYard
+      : (!isCaught && !isDashed);
+
+  const loot =
+    me.lootPoints ?? me.lootTotal ?? me.score ?? me.points ?? null;
+
+  // Yard / Caught
+  pills.push({
+    cls: inYard ? "hint-pill--safe" : "hint-pill--danger",
+    html: `Yard: <strong>${inYard ? "YES" : "NO"}</strong>`,
+  });
+
+  pills.push({
+    cls: isCaught ? "hint-pill--danger" : "hint-pill--info",
+    html: `Caught: <strong>${isCaught ? "YES" : "NO"}</strong>`,
+  });
+
+  if (loot !== null && loot !== undefined && loot !== "") {
+    pills.push({
+      cls: "hint-pill--info",
+      html: `Loot: <strong>${loot}</strong>`,
+    });
+  }
+
+  return pills;
+}
+
+function renderAdviceCard({ modeLabel, variantClass, best, bullets }) {
+  const pick = pickLineFromBest(best);
+  const risk = best?.riskLabel || "—";
+  const conf = pct01(best?.confidence) ?? null;
+
+  const list = safeArr(bullets).slice(0, 6);
+
+  return `
+    <div class="hint-card ${variantClass}">
+      <div class="hint-card-top">
+        <div class="hint-card-label">${modeLabel}</div>
+        <div class="hint-card-pick">${pick}</div>
+      </div>
+      <p class="hint-card-meta">Risico: <strong>${risk}</strong>${conf !== null ? ` • Zekerheid: <strong>${conf}%</strong>` : ""}</p>
+      <ul class="hint-bullets">
+        ${list.map((b) => `<li>${b}</li>`).join("")}
+      </ul>
+    </div>
+  `;
+}
+
+function buildWhyThis(hint, ctx) {
+  // toon leerzame “waarom”: events + (als het een action is) tags/meta
+  const upcomingLine = safeArr(hint?.bullets).find((x) => String(x).startsWith("Opkomend:"));
+  const phaseLine = safeArr(hint?.bullets).find((x) => String(x).includes("Fase:"));
+
+  // probeer def/agg picks te vinden
+  const bestDef = hint?.debug?.bestDef || null;
+  const bestAgg = hint?.debug?.bestAgg || null;
+
+  const defPick = bestDef?.cardId || null;
+  const aggPick = bestAgg?.cardId || null;
+
+  const defDef = defPick ? getActionDefByName(defPick) : null;
+  const aggDef = aggPick ? getActionDefByName(aggPick) : null;
+
+  function tagsBlock(def) {
+    const tags = safeArr(def?.tags);
+    const meta = def?.meta || null;
+
+    const tagHtml = tags.length
+      ? `<div class="hint-tags">${tags.map(t => `<span class="hint-tag">${t}</span>`).join("")}</div>`
+      : `<div class="hint-tags"><span class="hint-tag">no tags</span></div>`;
+
+    const metaLines = [];
+    if (meta?.role) metaLines.push(`role: ${meta.role}`);
+    if (safeArr(meta?.affects).length) metaLines.push(`affects: ${safeArr(meta.affects).join(", ")}`);
+    if (Number.isFinite(meta?.attackValue)) metaLines.push(`attackValue: ${meta.attackValue}`);
+    if (Number.isFinite(meta?.defenseValue)) metaLines.push(`defenseValue: ${meta.defenseValue}`);
+
+    return `
+      ${tagHtml}
+      ${metaLines.length ? `<div>${metaLines.join(" • ")}</div>` : ""}
+    `;
+  }
+
+  const pills = miniStatusPills(ctx);
+
+  return `
+    ${phaseLine ? `<div>${phaseLine}</div>` : ""}
+    ${upcomingLine ? `<div>${upcomingLine}</div>` : ""}
+    <div class="hint-tags">
+      ${pills.map(p => `<span class="hint-tag">${p.html.replace(/<strong>|<\/strong>/g, "")}</span>`).join("")}
+    </div>
+    ${defDef ? `<div><strong>DEF pick tags/meta:</strong>${tagsBlock(defDef)}</div>` : ""}
+    ${aggDef ? `<div><strong>AGG pick tags/meta:</strong>${tagsBlock(aggDef)}</div>` : ""}
+  `;
+}
+
+export function openAdvisorHintOverlay(hint, ctx = {}) {
+  ensureHintOverlayDom();
+
+  const titleEl = _hintOverlayEl.querySelector(".hint-title");
+  const subEl = _hintOverlayEl.querySelector(".hint-sub");
+  const miniEl = _hintOverlayEl.querySelector(".hint-mini");
+  const gridEl = _hintOverlayEl.querySelector(".hint-grid");
+  const whyBody = _hintOverlayEl.querySelector(".hint-why-body");
+
+  // Header
+  const conf = pct01(hint?.confidence);
+  titleEl.textContent = hint?.title || "Hint";
+  subEl.textContent = `Risico: ${hint?.risk || "—"}${conf !== null ? ` • Zekerheid: ${conf}%` : ""}`;
+
+  // Mini status
+  const pills = miniStatusPills(ctx);
+  miniEl.innerHTML = pills
+    .map((p) => `<span class="hint-pill ${p.cls}">${p.html}</span>`)
+    .join("");
+
+  // Content: dual als debug bestDef/bestAgg bestaat, anders 1 kaart + lege “Agg”
+  const bestDef = hint?.debug?.bestDef || null;
+  const bestAgg = hint?.debug?.bestAgg || null;
+
+  if (bestDef && bestAgg) {
+    gridEl.innerHTML = `
+      ${renderAdviceCard({
+        modeLabel: "DEFENSIEF",
+        variantClass: "hint-card--def",
+        best: bestDef,
+        bullets: bestDef.bullets || hint.bullets || [],
+      })}
+      ${renderAdviceCard({
+        modeLabel: "AANVALLEND",
+        variantClass: "hint-card--agg",
+        best: bestAgg,
+        bullets: bestAgg.bullets || hint.bullets || [],
+      })}
+    `;
+  } else {
+    // fallback: 1 kaart met huidige bullets
+    gridEl.innerHTML = `
+      ${renderAdviceCard({
+        modeLabel: "ADVIES",
+        variantClass: "hint-card--def",
+        best: hint,
+        bullets: hint?.bullets || [],
+      })}
+      ${renderAdviceCard({
+        modeLabel: "AANVALLEND",
+        variantClass: "hint-card--agg",
+        best: null,
+        bullets: ["(Nog geen Agg variant — maak scoring dual voor MOVE/DECISION)"],
+      })}
+    `;
+  }
+
+  // Why this
+  whyBody.innerHTML = buildWhyThis(hint, ctx);
+
+  _hintOverlayEl.classList.remove("hidden");
+}
+
+export function closeAdvisorHintOverlay() {
+  ensureHintOverlayDom();
+  _hintOverlayEl.classList.add("hidden");
+}
+
 // ===== LOGGING HELPER =====
 
 async function logMoveAction(
@@ -2848,18 +3098,31 @@ if (btnHint) {
         profileKey: "BEGINNER_COACH",
       });
 
-      // 1) popup overlay
-      showHint(hint);
+    try {
+  // NEW overlay (Lead Fox style)
+  if (typeof openAdvisorHintOverlay === "function") {
+    openAdvisorHintOverlay(hint, { game, me });
+  } else {
+    // fallback als de nieuwe renderer niet geladen is
+    showHint?.(hint);
+  }
 
-      // 2) fallback (als overlay stuk is)
-      // alert([hint.title, ...(hint.bullets || [])].join("\n"));
-    } catch (err) {
-      console.error("[HINT] crashed:", err);
-      alert("Hint crash: " + (err?.message || err));
+  // optional: oude alert fallback uit (laat commented)
+  // alert([hint.title, ...(hint.bullets || [])].join("\n"));
+
+} catch (err) {
+  console.error("[HINT] crashed:", err);
+
+  // fallback 1: oude overlay
+  try {
+    if (typeof showHint === "function") {
+      showHint(hint);
+      return;
     }
-  });
-} else {
-  console.warn("[HINT] btnHint niet gevonden in DOM");
+  } catch (e) {}
+
+  // fallback 2: alert
+  alert("Hint crash: " + (err?.message || err));
 }
 
   // Modals sluiten
