@@ -1116,8 +1116,6 @@ initAuth(async (authUser) => {
         ? getEventById(game.currentEventId)
         : null;
     
-    scheduleBotTick();
-    
     // In REVEAL-fase: active event groot tonen
 if (game.phase === "REVEAL" && game.currentEventId) {
   if (game.currentEventId !== lastRevealedEventId) {
