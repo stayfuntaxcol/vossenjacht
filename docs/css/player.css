@@ -1,12 +1,10 @@
-
 /* ==========================================
    VOSSENJACHT – PLAYER SCREEN LAYOUT
    ========================================== */
 
 body.player-body {
   margin: 0;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background: radial-gradient(circle at top, #020617, #020617 40%, #000);
   color: #e5e7eb;
 }
@@ -74,6 +72,7 @@ body.player-body {
   opacity: 0.7;
   text-align: right;
 }
+
 /* ==========================================
    PLACEHOLDER ART VOOR SPELERSCHERM-KAARTEN
    ========================================== */
@@ -84,13 +83,11 @@ body.player-body {
 .event-card,
 .hand-card,
 .loot-card {
-  /* zelfde afbeelding als de globale vj-card */
   background-image: url("../assets/card_placeholder.png");
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
 }
-
 
 /* ==========================================
    MAIN GRID
@@ -149,13 +146,12 @@ body.player-body {
 .hero-avatar {
   flex: 0 0 auto;
   width: 120px;
-  aspect-ratio: 2 / 3; /* 2:3 verhouding */
+  aspect-ratio: 2 / 3;
   border-radius: 16px;
   overflow: hidden;
   position: relative;
   background: radial-gradient(circle at top, #020617, #020617);
-  box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.6),
-    0 10px 20px rgba(0, 0, 0, 0.9);
+  box-shadow: 0 0 0 2px rgba(148, 163, 184, 0.6), 0 10px 20px rgba(0, 0, 0, 0.9);
   transition: box-shadow 0.18s ease, transform 0.12s ease;
 }
 
@@ -165,7 +161,6 @@ body.player-body {
   }
 }
 
-/* Binnenkant van de kaart: art-beeld (placeholder nu) */
 .hero-card-art {
   position: absolute;
   inset: 0;
@@ -175,63 +170,46 @@ body.player-body {
   background-repeat: no-repeat;
 }
 
-/* Als er ooit een vj-card in wordt gerenderd, blijft hij passend */
 .hero-avatar .vj-card {
   width: 100%;
   height: 100%;
 }
+
 /* Neon rand per Den-kleur */
 .hero-avatar.den-red {
-  box-shadow: 0 0 0 2px #fecaca,
-    0 0 18px rgba(248, 113, 113, 0.9),
-    0 0 32px rgba(248, 113, 113, 0.6);
+  box-shadow: 0 0 0 2px #fecaca, 0 0 18px rgba(248, 113, 113, 0.9), 0 0 32px rgba(248, 113, 113, 0.6);
 }
 
 .hero-avatar.den-blue {
-  box-shadow: 0 0 0 2px #bfdbfe,
-    0 0 18px rgba(59, 130, 246, 0.9),
-    0 0 32px rgba(59, 130, 246, 0.6);
+  box-shadow: 0 0 0 2px #bfdbfe, 0 0 18px rgba(59, 130, 246, 0.9), 0 0 32px rgba(59, 130, 246, 0.6);
 }
 
 .hero-avatar.den-green {
-  box-shadow: 0 0 0 2px #bbf7d0,
-    0 0 18px rgba(34, 197, 94, 0.9),
-    0 0 32px rgba(34, 197, 94, 0.6);
+  box-shadow: 0 0 0 2px #bbf7d0, 0 0 18px rgba(34, 197, 94, 0.9), 0 0 32px rgba(34, 197, 94, 0.6);
 }
 
 .hero-avatar.den-yellow {
-  box-shadow: 0 0 0 2px #fef08a,
-    0 0 18px rgba(234, 179, 8, 0.9),
-    0 0 32px rgba(234, 179, 8, 0.6);
+  box-shadow: 0 0 0 2px #fef08a, 0 0 18px rgba(234, 179, 8, 0.9), 0 0 32px rgba(234, 179, 8, 0.6);
 }
 
 /* Lead Fox = dubbele neon-ring */
 .hero-avatar.is-lead-fox.den-red {
-  box-shadow: 0 0 0 2px #fee2e2,
-    0 0 0 6px rgba(248, 113, 113, 0.9),
-    0 0 32px rgba(248, 113, 113, 1);
+  box-shadow: 0 0 0 2px #fee2e2, 0 0 0 6px rgba(248, 113, 113, 0.9), 0 0 32px rgba(248, 113, 113, 1);
 }
 
 .hero-avatar.is-lead-fox.den-blue {
-  box-shadow: 0 0 0 2px #dbeafe,
-    0 0 0 6px rgba(59, 130, 246, 0.9),
-    0 0 32px rgba(59, 130, 246, 1);
+  box-shadow: 0 0 0 2px #dbeafe, 0 0 0 6px rgba(59, 130, 246, 0.9), 0 0 32px rgba(59, 130, 246, 1);
 }
 
 .hero-avatar.is-lead-fox.den-green {
-  box-shadow: 0 0 0 2px #dcfce7,
-    0 0 0 6px rgba(34, 197, 94, 0.9),
-    0 0 32px rgba(34, 197, 94, 1);
+  box-shadow: 0 0 0 2px #dcfce7, 0 0 0 6px rgba(34, 197, 94, 0.9), 0 0 32px rgba(34, 197, 94, 1);
 }
 
 .hero-avatar.is-lead-fox.den-yellow {
-  box-shadow: 0 0 0 2px #fef9c3,
-    0 0 0 6px rgba(234, 179, 8, 0.9),
-    0 0 32px rgba(234, 179, 8, 1);
+  box-shadow: 0 0 0 2px #fef9c3, 0 0 0 6px rgba(234, 179, 8, 0.9), 0 0 32px rgba(234, 179, 8, 1);
 }
 
-/* Status-overlays op de kaart: CAUGHT / DASHED
-   → vervangen door status-kaarten uit /assets */
+/* Status-overlays op de kaart */
 .hero-avatar.status-caught::after,
 .hero-avatar.status-dashed::after {
   position: absolute;
@@ -243,12 +221,10 @@ body.player-body {
   background-repeat: no-repeat;
 }
 
-/* CAUGHT gebruikt card_player_status_caught.png */
 .hero-avatar.status-caught::after {
   background-image: url("../assets/card_player_status_caught.png");
 }
 
-/* DASHED gebruikt card_status_player_dashed.png */
 .hero-avatar.status-dashed::after {
   background-image: url("../assets/card_status_player_dashed.png");
 }
@@ -279,7 +255,6 @@ body.player-body {
 }
 
 /* Loot-meter onderin hero */
-
 .hero-bottom {
   display: flex;
   flex-direction: column;
@@ -300,7 +275,7 @@ body.player-body {
   width: 0%;
   height: 100%;
   border-radius: 999px;
-  background: #f97316;              /* effen oranje */
+  background: #f97316;
   box-shadow: 0 0 10px rgba(249, 115, 22, 0.9);
   transition: width 0.25s ease-out;
 }
@@ -360,7 +335,6 @@ body.player-body {
   margin-top: 0.15rem;
 }
 
-/* chips voor ronde-flags (Scatter, Burrow Beacon, etc.) */
 .event-flag-chip {
   font-size: 0.7rem;
   padding: 0.1rem 0.45rem;
@@ -372,8 +346,6 @@ body.player-body {
   gap: 0.2rem;
 }
 
-/* Kleurvarianten kun je vanuit JS toevoegen:
-   .event-flag-chip--danger, --safe, --info, etc. */
 .event-flag-chip--danger {
   border-color: rgba(248, 113, 113, 0.9);
   background: rgba(127, 29, 29, 0.8);
@@ -413,7 +385,6 @@ body.player-body {
   flex-shrink: 0;
 }
 
-/* emoji uitzetten als je de echte stickers gebruikt */
 .host-avatar::after {
   content: "";
 }
@@ -425,10 +396,8 @@ body.player-body {
   object-fit: cover;
 }
 
-/* kleine flash-animatie als hostSay/setHost wordt aangeroepen */
 #hostBar.flash {
-  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.9),
-    0 0 18px rgba(250, 204, 21, 0.9);
+  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.9), 0 0 18px rgba(250, 204, 21, 0.9);
   transition: box-shadow 0.25s ease-out;
 }
 
@@ -469,16 +438,13 @@ body.player-body {
   box-shadow: 0 10px 22px rgba(0, 0, 0, 0.8);
   opacity: 0.6;
   transform: translateY(0);
-  transition: opacity 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease,
-    transform 0.12s ease;
+  transition: opacity 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, transform 0.12s ease;
 }
 
-/* Actieve fase highlight */
 .phase-panel.active {
   opacity: 1;
   border-color: rgba(129, 140, 248, 0.9);
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.8),
-    0 14px 28px rgba(37, 99, 235, 0.6);
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.8), 0 14px 28px rgba(37, 99, 235, 0.6);
   transform: translateY(-1px);
 }
 
@@ -503,7 +469,6 @@ body.player-body {
   margin-top: 0.5rem;
 }
 
-/* Op small screens 2 knoppen per rij */
 .phase-btn {
   flex: 1 1 calc(50% - 0.4rem);
   border-radius: 999px;
@@ -516,8 +481,7 @@ body.player-body {
   line-height: 1.2;
   white-space: normal;
   word-break: keep-all;
-  transition: transform 0.08s ease, box-shadow 0.08s ease,
-    background 0.12s ease, opacity 0.12s ease;
+  transition: transform 0.08s ease, box-shadow 0.08s ease, background 0.12s ease, opacity 0.12s ease;
 }
 
 @media (min-width: 700px) {
@@ -532,8 +496,6 @@ body.player-body {
   font-size: 0.7rem;
   opacity: 0.8;
 }
-
-/* Kleurvarianten */
 
 .phase-btn-primary {
   background: linear-gradient(135deg, #4f46e5, #22c55e);
@@ -568,16 +530,12 @@ body.player-body {
   transform: translateY(-1px);
 }
 
-/* Disabled state */
-
 .phase-btn:disabled {
   opacity: 0.45;
   cursor: default;
   box-shadow: none;
   transform: none;
 }
-
-/* Fase-status tekst onder knoppen */
 
 .phase-state-text {
   margin: 0.45rem 0 0;
@@ -644,8 +602,6 @@ body.player-body {
   overflow-y: auto;
 }
 
-/* Grid voor kaarten in modals */
-
 #handCardsGrid,
 #lootCardsGrid {
   display: flex;
@@ -653,8 +609,6 @@ body.player-body {
   gap: 0.6rem;
   justify-content: flex-start;
 }
-
-/* GEEN width/height hier meer – dat deed de 'stipjes' */
 
 /* Zorg dat de overlay standaard niet zichtbaar is via JS-class .hidden */
 .hidden {
@@ -665,7 +619,6 @@ body.player-body {
    HAND & LOOT KAARTEN IN MODALS
    ========================================== */
 
-/* Tegels in HAND/LOOT: één tegel per kaart */
 .hand-card-tile,
 .loot-card-tile {
   display: flex;
@@ -678,15 +631,12 @@ body.player-body {
   cursor: pointer;
 }
 
-/* Zorg dat de tegel zelf nooit helemaal inklapt */
 .hand-card-tile,
 .loot-card-tile {
-  /* vaste maat, onafhankelijk van --card-w/-h */
   min-width: 120px;
-  min-height: 210px; /* kaart + labelruimte */
+  min-height: 210px;
 }
 
-/* Kaarten in grid: 2:3 formaat, goed zichtbaar */
 .vj-card.hand-card,
 .vj-card.loot-card {
   width: 120px;
@@ -700,7 +650,6 @@ body.player-body {
   background-repeat: no-repeat;
 }
 
-/* Label onderaan OP de kaart */
 .hand-card-label,
 .loot-card-label {
   position: absolute;
@@ -716,7 +665,6 @@ body.player-body {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
 }
 
-/* DETAIL-VIEW voor één Action Card */
 .hand-card-detail {
   width: 100%;
   display: flex;
@@ -726,13 +674,11 @@ body.player-body {
   padding: 0.5rem 0.25rem 0.75rem;
 }
 
-/* Grote variant van de kaart in detail-mode */
 .vj-card.hand-card.hand-card-large {
   width: 180px;
   height: 270px;
 }
 
-/* Tekstblok naast/onder de kaart */
 .hand-card-detail-text {
   max-width: 360px;
   text-align: left;
@@ -750,7 +696,6 @@ body.player-body {
   line-height: 1.4;
 }
 
-/* Actieknoppen in detail-view */
 .hand-card-detail-actions {
   display: flex;
   gap: 0.5rem;
@@ -763,7 +708,9 @@ body.player-body {
   padding-inline: 0.9rem;
 }
 
-/* ===== LEAD FOX COMMAND CENTER ===== */
+/* ==========================================
+   LEAD FOX COMMAND CENTER (bestaand)
+   ========================================== */
 
 .vj-modal-overlay {
   position: fixed;
@@ -818,8 +765,6 @@ body.player-body {
   gap: 0.75rem;
 }
 
-/* Per speler blok */
-
 .lead-player-block {
   border-radius: 0.9rem;
   padding: 0.75rem 0.9rem;
@@ -848,38 +793,21 @@ body.player-body {
   text-transform: uppercase;
 }
 
-/* Den-kleuren als rand-glow om het blok
-   → zelfde palette als .hero-avatar.den-* */
-
 .lead-player-block.den-red {
-  box-shadow:
-    0 0 0 1px #fecaca,
-    0 0 14px rgba(248, 113, 113, 0.9),
-    0 0 26px rgba(248, 113, 113, 0.5);
+  box-shadow: 0 0 0 1px #fecaca, 0 0 14px rgba(248, 113, 113, 0.9), 0 0 26px rgba(248, 113, 113, 0.5);
 }
 
 .lead-player-block.den-blue {
-  box-shadow:
-    0 0 0 1px #bfdbfe,
-    0 0 14px rgba(59, 130, 246, 0.9),
-    0 0 26px rgba(59, 130, 246, 0.5);
+  box-shadow: 0 0 0 1px #bfdbfe, 0 0 14px rgba(59, 130, 246, 0.9), 0 0 26px rgba(59, 130, 246, 0.5);
 }
 
 .lead-player-block.den-green {
-  box-shadow:
-    0 0 0 1px #bbf7d0,
-    0 0 14px rgba(34, 197, 94, 0.9),
-    0 0 26px rgba(34, 197, 94, 0.5);
+  box-shadow: 0 0 0 1px #bbf7d0, 0 0 14px rgba(34, 197, 94, 0.9), 0 0 26px rgba(34, 197, 94, 0.5);
 }
 
 .lead-player-block.den-yellow {
-  box-shadow:
-    0 0 0 1px #fef08a,
-    0 0 14px rgba(234, 179, 8, 0.9),
-    0 0 26px rgba(234, 179, 8, 0.5);
+  box-shadow: 0 0 0 1px #fef08a, 0 0 14px rgba(234, 179, 8, 0.9), 0 0 26px rgba(234, 179, 8, 0.5);
 }
-
-/* Fase-overzicht */
 
 .lead-phase-grid {
   display: grid;
@@ -910,12 +838,248 @@ body.player-body {
 .lead-phase-empty {
   font-size: 0.75rem;
   opacity: 0.6;
-  font-Style: italic;
+  font-style: italic;
 }
 
-/* Kleine extra: highlight voor Lead Fox zelf in de lijst (optioneel) */
 .lead-player-block.is-self-lead {
   border-width: 2px;
+}
+
+/* ==========================================
+   ADVISOR HINT OVERLAY — Lead Fox Command Center (NIEUW)
+   Gebruik met jouw JS: #advisorOverlay + .hidden toggle
+   ========================================== */
+
+#advisorOverlay.vj-modal-overlay {
+  z-index: 1400; /* boven hand/loot modals */
+  background: rgba(5, 5, 10, 0.88);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Panel: zelfde basis als lead-command-panel, maar compacter */
+#advisorOverlay .vj-modal-panel.lead-command-panel {
+  padding: 1.1rem 1.2rem 1.2rem;
+  max-width: 980px;
+  width: min(980px, 95%);
+  border: 1px solid rgba(250, 204, 21, 0.18);
+  box-shadow: 0 0 0 1px rgba(250, 204, 21, 0.10), 0 0 44px rgba(0, 0, 0, 0.7);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Subtle neon sweep */
+#advisorOverlay .vj-modal-panel.lead-command-panel::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  background: radial-gradient(900px 420px at 15% 0%, rgba(250,204,21,0.14), transparent 60%),
+              radial-gradient(900px 420px at 85% 0%, rgba(59,130,246,0.12), transparent 55%);
+  pointer-events: none;
+  opacity: 0.9;
+}
+
+/* Header */
+.advisor-hint-header {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.8rem;
+}
+
+.advisor-hint-titlewrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.advisor-hint-title {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #f9fafb;
+  text-shadow: 0 0 12px rgba(250, 204, 21, 0.16);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.advisor-hint-subtitle {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.78;
+  color: #e5e7eb;
+}
+
+/* Close knop: strak */
+#adviserClose,
+#adviserClose:visited {
+  color: #fff;
+}
+
+.advisor-hint-close {
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.06);
+  color: #fff;
+  width: 38px;
+  height: 38px;
+  border-radius: 14px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+}
+
+.advisor-hint-close:hover {
+  transform: translateY(-1px);
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(250,204,21,0.28);
+}
+
+/* Context box (ronde/fase + upcoming) */
+.advisor-hint-context {
+  position: relative;
+  border-radius: 14px;
+  padding: 0.65rem 0.75rem;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.08);
+  margin-bottom: 0.8rem;
+}
+
+.advisor-hint-context-line {
+  font-size: 0.82rem;
+  line-height: 1.35;
+  opacity: 0.85;
+}
+
+/* Grid: DEF / AGG */
+.advisor-hint-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+@media (min-width: 860px) {
+  .advisor-hint-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Reco card */
+.advisor-reco {
+  border-radius: 16px;
+  padding: 0.85rem 0.9rem;
+  background: radial-gradient(circle at top left, rgba(255,255,255,0.08), rgba(10,10,20,0.88));
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 16px 34px rgba(0,0,0,0.55);
+  position: relative;
+  overflow: hidden;
+}
+
+.advisor-reco::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  background: linear-gradient(90deg, rgba(250,204,21,0.20), rgba(59,130,246,0.12));
+  opacity: 0.65;
+  pointer-events: none;
+  mask: linear-gradient(#000, #000) content-box, linear-gradient(#000, #000);
+  -webkit-mask: linear-gradient(#000, #000) content-box, linear-gradient(#000, #000);
+  padding: 1px;
+  mask-composite: exclude;
+  -webkit-mask-composite: xor;
+  border-radius: 16px;
+}
+
+.advisor-reco-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.65rem;
+  margin-bottom: 0.65rem;
+}
+
+.advisor-reco-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(229,231,235,0.70);
+  font-weight: 800;
+}
+
+.advisor-reco-main {
+  margin-top: 0.25rem;
+  font-size: 1.05rem;
+  font-weight: 900;
+  color: #f9fafb;
+  line-height: 1.15;
+}
+
+.advisor-pill {
+  font-size: 0.72rem;
+  font-weight: 900;
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.06);
+  color: #f9fafb;
+  white-space: nowrap;
+}
+
+.advisor-pill.risk-LOW { border-color: rgba(34,197,94,0.35); }
+.advisor-pill.risk-MED { border-color: rgba(250,204,21,0.35); }
+.advisor-pill.risk-HIGH { border-color: rgba(248,113,113,0.40); }
+
+/* Confidence meter */
+.advisor-meter {
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+  margin-bottom: 0.65rem;
+}
+
+.advisor-meter > div {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, rgba(250,204,21,0.95), rgba(59,130,246,0.85));
+  transition: width 0.25s ease;
+}
+
+/* Bullets */
+.advisor-bullets {
+  margin: 0;
+  padding-left: 1.05rem;
+  color: rgba(229,231,235,0.78);
+  font-size: 0.85rem;
+  line-height: 1.35;
+}
+
+.advisor-bullets li {
+  margin: 0.35rem 0;
+}
+
+/* Alternatives chips */
+.advisor-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+}
+
+.advisor-chip {
+  font-size: 0.72rem;
+  padding: 0.35rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+  color: rgba(249,250,251,0.92);
 }
 
 /* ==========================================
@@ -941,7 +1105,15 @@ body.player-body {
 
   .hero-avatar {
     width: 100%;
-    max-width: 380px;   /* bijna volle breedte telefoon */
+    max-width: 380px;
     aspect-ratio: 2 / 3;
+  }
+
+  #advisorOverlay .vj-modal-panel.lead-command-panel {
+    padding: 0.95rem 0.95rem 1.05rem;
+  }
+
+  .advisor-reco-main {
+    font-size: 1rem;
   }
 }
