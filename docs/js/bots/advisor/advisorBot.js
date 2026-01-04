@@ -122,8 +122,32 @@ export function getAdvisorHint({
 
   // OPS (Action Cards / PASS)
   if (phase === "OPS") {
-    const ranked = scoreOpsPlays({ view, upcoming, profile }) || [];
-    const best = ranked[0];
+const defRanked = scoreOpsPlays({ view, upcoming, profile, style: "DEFENSIVE" });
+const aggRanked = scoreOpsPlays({ view, upcoming, profile, style: "AGGRESSIVE" });
+
+const bestDef = defRanked[0];
+const bestAgg = aggRanked[0];
+
+const labelDef = bestDef.play === "PASS" ? "PASS" : `Speel: ${bestDef.cardId}`;
+const labelAgg = bestAgg.play === "PASS" ? "PASS" : `Speel: ${bestAgg.cardId}`;
+
+return {
+  title: `OPS advies • Def: ${labelDef} • Agg: ${labelAgg}`,
+  confidence: Math.max(bestDef.confidence ?? 0.65, bestAgg.confidence ?? 0.65),
+  risk: "LOW",
+  bullets: [
+    ...headerLines(view, upcoming),
+    `DEFENSIEF: ${labelDef} (${bestDef.riskLabel})`,
+    ...(bestDef.bullets || []),
+    `AANVALLEND: ${labelAgg} (${bestAgg.riskLabel})`,
+    ...(bestAgg.bullets || []),
+  ].slice(0, 10),
+  alternatives: [
+    { play: "DEF alt", pick: defRanked[1]?.play === "PASS" ? "PASS" : defRanked[1]?.cardId },
+    { play: "AGG alt", pick: aggRanked[1]?.play === "PASS" ? "PASS" : aggRanked[1]?.cardId },
+  ].filter(x => x.pick),
+  debug: { phase: view.phase, bestDef, bestAgg },
+};
 
     // Als scorer niks teruggeeft: geef meteen nuttige debug
     if (!ranked.length || !best) {
