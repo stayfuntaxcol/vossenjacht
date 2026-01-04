@@ -49,11 +49,15 @@ let lastActions = [];
 // ===== ACTIONS LISTENER (NA db + gameId) =====
 if (gameId) {
   const actionsRef = collection(db, "games", gameId, "actions");
-  // kies het juiste veld: createdAt / ts / serverTimestamp
   const actionsQ = query(actionsRef, orderBy("createdAt", "desc"), limit(250));
-
   onSnapshot(actionsQ, (qs) => {
     lastActions = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+  });
+
+  // BONUS: hou spelerscache ook live voor advisor (lastPlayers)
+  const playersRef = collection(db, "games", gameId, "players");
+  onSnapshot(playersRef, (qs) => {
+    lastPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
   });
 } else {
   console.warn("[ACTIONS] gameId ontbreekt in URL (?game=...)");
@@ -68,8 +72,8 @@ const hostFeedbackLine = document.getElementById("hostFeedbackLine");
 
 // Lead Fox Command Center
 const leadCommandModalOverlay = document.getElementById("leadCommandModalOverlay");
-const leadCommandModalClose   = document.getElementById("leadCommandModalClose");
-const leadCommandContent      = document.getElementById("leadCommandContent");
+const leadCommandModalClose = document.getElementById("leadCommandModalClose");
+const leadCommandContent = document.getElementById("leadCommandContent");
 
 // Koppeling van Action Card naam -> asset-bestand in /assets
 const ACTION_CARD_IMAGES = {
@@ -97,9 +101,7 @@ const playerStatusEl = document.getElementById("playerStatus");
 const playerScoreEl = document.getElementById("playerScore");
 const lootSummaryEl = document.getElementById("lootSummary");
 const lootMeterEl = document.getElementById("lootMeter");
-const lootMeterFillEl = lootMeterEl
-  ? lootMeterEl.querySelector(".loot-meter-fill")
-  : null;
+const lootMeterFillEl = lootMeterEl ? lootMeterEl.querySelector(".loot-meter-fill") : null;
 
 // Event + scout + flags
 const eventCurrentDiv = document.getElementById("eventCurrent");
@@ -157,7 +159,6 @@ const HOST_FILES = {
   caught: "host_sad_defeated.png",
   end: "host_sad_defeated.png",
 };
-
 const HOST_DEFAULT_FILE = "host_thumbsup.png";
 
 function setHost(kind, text) {
@@ -253,7 +254,6 @@ function setHostStatus(text) {
   const el = document.getElementById("hostStatusLine");
   if (el) el.textContent = text || "";
 }
-
 function setHostFeedback(text) {
   const el = document.getElementById("hostFeedbackLine");
   if (el) el.textContent = text || "";
@@ -263,7 +263,6 @@ function setHostFeedback(text) {
 function getActionCardImage(card) {
   if (!card || !card.name) return null;
   const key = String(card.name).trim();
-  // eventueel later ook card.art ondersteunen:
   if (card.art) return card.art;
   return ACTION_CARD_IMAGES[key] || null;
 }
@@ -340,14 +339,12 @@ export function hostSay(trigger, text) {
 
 function splitEventTrackByStatus(game) {
   const track = Array.isArray(game.eventTrack) ? [...game.eventTrack] : [];
-  const eventIndex =
-    typeof game.eventIndex === "number" ? game.eventIndex : 0;
-
+  const eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
   return {
     track,
     eventIndex,
-    locked: track.slice(0, eventIndex),   // AL onthuld → LOCKED
-    future: track.slice(eventIndex),      // nog dicht → FUTURE
+    locked: track.slice(0, eventIndex),
+    future: track.slice(eventIndex),
   };
 }
 function shuffleArray(arr) {
@@ -363,7 +360,6 @@ function shuffleArray(arr) {
 function hostInitUI() {
   ensureHostCoachMount();
   preloadHost();
-
   const s = document.getElementById("hostStatusLine");
   const f = document.getElementById("hostFeedbackLine");
   if (s) s.textContent = "Wachten tot de host de raid start…";
@@ -371,7 +367,6 @@ function hostInitUI() {
 }
 
 // ===== FIRESTORE REFS / STATE =====
-
 let gameRef = null;
 let playerRef = null;
 
@@ -426,26 +421,15 @@ function renderHeroAvatarCard(player, game) {
   const avatarEl = document.getElementById("playerAvatar");
   if (!avatarEl || !player) return;
 
-  // container leegmaken
   avatarEl.innerHTML = "";
 
-  // Bepaal of deze speler Lead Fox is (optioneel, alleen als je dat gebruikt)
   let isLead = false;
   if (game && Array.isArray(game.playersOrder)) {
-    // Als je ergens een playersOrder of leadPlayerId hebt kun je dit aanpassen
-    // Voor nu houden we het simpel: als player.isLead == true
     isLead = !!player.isLead;
   }
 
-  // Gebruik dezelfde renderer als de community board
-  const cardEl = renderPlayerSlotCard(
-    { ...player, isLead },
-    { size: "large" } // grotere kaart in het hero-vak
-  );
-
-  if (cardEl) {
-    avatarEl.appendChild(cardEl);
-  }
+  const cardEl = renderPlayerSlotCard({ ...player, isLead }, { size: "large" });
+  if (cardEl) avatarEl.appendChild(cardEl);
 }
 
 function mergeRoundFlags(game) {
@@ -488,6 +472,7 @@ async function chooseOtherPlayerPrompt(title) {
   const lines = others.map((p, idx) => `${idx + 1}. ${p.name || "Vos"}`);
   const choiceStr = prompt(`${title}\n` + lines.join("\n"));
   if (!choiceStr) return null;
+
   const idx = parseInt(choiceStr, 10) - 1;
   if (Number.isNaN(idx) || idx < 0 || idx >= others.length) {
     alert("Ongeldige keuze.");
@@ -519,10 +504,8 @@ async function maybeShowScentCheckInfo(game) {
 
 function sortPlayersByJoinOrder(players) {
   return [...players].sort((a, b) => {
-    const ao =
-      typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
-    const bo =
-      typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
+    const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+    const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
     return ao - bo;
   });
 }
@@ -606,8 +589,7 @@ function getPlayerPos(p) {
 function getDogDistance(game, player) {
   const d = getDogPos(game),
     p = getPlayerPos(player);
-  if (!d || !p || typeof d.x !== "number" || typeof p.x !== "number")
-    return null;
+  if (!d || !p || typeof d.x !== "number" || typeof p.x !== "number") return null;
   return Math.abs(d.x - p.x) + Math.abs(d.y - p.y);
 }
 
@@ -644,14 +626,8 @@ function applyHostHooks(prevGame, game, prevPlayer, player, lastEvent) {
 
 // ===== LOOT / SCORE HELPERS + UI =====
 
-// Berekent altijd een score op basis van de loot in de player-doc.
-// Tijdens het spel: score = punten uit loot.
-// Aan het einde: als player.score hoger is (incl. sack-bonus), gebruiken we die
-// en tonen we het verschil als "Loot Sack" bonus.
 function calcLootStats(player) {
-  if (!player) {
-    return { eggs: 0, hens: 0, prize: 0, lootBonus: 0, score: 0 };
-  }
+  if (!player) return { eggs: 0, hens: 0, prize: 0, lootBonus: 0, score: 0 };
 
   const loot = Array.isArray(player.loot) ? player.loot : [];
 
@@ -665,37 +641,17 @@ function calcLootStats(player) {
     const t = String(tRaw).toUpperCase();
     const v = typeof card.v === "number" ? card.v : 0;
 
-    if (t.includes("PRIZE")) {
-      // Prize Hen
-      prize += 1;
-    } else if (t.includes("HEN")) {
-      // gewone Hen
-      hens += 1;
-    } else if (t.includes("EGG")) {
-      eggs += 1;
-    } else {
-      // evt. speciale loot met eigen v-waarde
-      otherPoints += v;
-    }
+    if (t.includes("PRIZE")) prize += 1;
+    else if (t.includes("HEN")) hens += 1;
+    else if (t.includes("EGG")) eggs += 1;
+    else otherPoints += v;
   });
 
-  // basispunten uit de zichtbare loot
   const pointsFromCounts = eggs + hens * 2 + prize * 3 + otherPoints;
-
-  // score uit Firestore (wordt op het einde gezet incl. sack-bonus)
-  const recordedScore =
-    typeof player.score === "number" ? player.score : 0;
-
-  // Tijdens het spel: recordedScore = 0 → we gebruiken pointsFromCounts
-  // Na het spel: recordedScore >= pointsFromCounts → we nemen recordedScore
+  const recordedScore = typeof player.score === "number" ? player.score : 0;
   const score = recordedScore > 0 ? recordedScore : pointsFromCounts;
 
-  // Loot Sack bonus = alles boven de "normale" loot
-  const lootBonus =
-    recordedScore > pointsFromCounts
-      ? recordedScore - pointsFromCounts
-      : 0;
-
+  const lootBonus = recordedScore > pointsFromCounts ? recordedScore - pointsFromCounts : 0;
   return { eggs, hens, prize, lootBonus, score };
 }
 
@@ -708,19 +664,15 @@ function updateLootUi(player) {
     lootSummaryEl.textContent = "Nog geen buit verzameld.";
   } else {
     let line = `Eggs: ${eggs}  Hens: ${hens}  Prize Hens: ${prize}`;
-    if (lootBonus > 0) {
-      line += `  | Loot Sack: +${lootBonus}`;
-    }
+    if (lootBonus > 0) line += `  | Loot Sack: +${lootBonus}`;
     lootSummaryEl.textContent = line;
   }
 
-  // Oranje meter vult op basis van totale score
-  const baseMax  = 12; // kun je later nog tunen
-  const rawPct   = baseMax > 0 ? (score / baseMax) * 100 : 0;
+  const baseMax = 12;
+  const rawPct = baseMax > 0 ? (score / baseMax) * 100 : 0;
   const meterPct = Math.max(5, Math.min(100, Math.round(rawPct)));
   lootMeterFillEl.style.width = `${meterPct}%`;
 
-  // Score altijd tonen (dus ook midden in het spel)
   if (playerScoreEl) {
     let label = `Score: ${score} (E:${eggs} H:${hens} P:${prize}`;
     if (lootBonus > 0) label += ` +${lootBonus}`;
@@ -757,19 +709,11 @@ const PLAYER_CARD_FILES = [
 
 function pickPlayerCardFile(player) {
   if (!player) return null;
+  if (typeof player.cardArt === "string" && player.cardArt) return player.cardArt;
+  if (typeof player.avatarKey === "string" && player.avatarKey) return player.avatarKey;
 
-  // Optioneel: expliciet veld uit Firestore gebruiken als je dat later toevoegt
-  if (typeof player.cardArt === "string" && player.cardArt) {
-    return player.cardArt;
-  }
-  if (typeof player.avatarKey === "string" && player.avatarKey) {
-    return player.avatarKey;
-  }
-
-  // Anders: stabiele keuze op basis van joinOrder
   const join = typeof player.joinOrder === "number" ? player.joinOrder : 0;
   if (!PLAYER_CARD_FILES.length) return null;
-
   const idx = Math.abs(join) % PLAYER_CARD_FILES.length;
   return PLAYER_CARD_FILES[idx];
 }
@@ -790,40 +734,30 @@ async function updateHeroCardVisual(game, player) {
     "is-lead-fox"
   );
 
-  // Reset kaart-art als er (nog) geen speler is
   if (!player) {
     if (playerCardArtEl) playerCardArtEl.style.backgroundImage = "";
     return;
   }
 
-  // Den-kleur → neon rand
   const color = (player.color || "").toUpperCase();
   if (color === "RED") playerAvatarEl.classList.add("den-red");
   else if (color === "BLUE") playerAvatarEl.classList.add("den-blue");
   else if (color === "GREEN") playerAvatarEl.classList.add("den-green");
   else if (color === "YELLOW") playerAvatarEl.classList.add("den-yellow");
 
-  // Status → overlay op de kaart
   let statusClass = "status-yard";
-  if (player.dashed) {
-    statusClass = "status-dashed";
-  } else if (player.inYard === false) {
-    statusClass = "status-caught";
-  }
+  if (player.dashed) statusClass = "status-dashed";
+  else if (player.inYard === false) statusClass = "status-caught";
   playerAvatarEl.classList.add(statusClass);
 
-  // Lead Fox → dubbele neon
   const leadId = await resolveLeadPlayerId(game);
   if (leadId && player.id && leadId === player.id) {
     playerAvatarEl.classList.add("is-lead-fox");
   }
 
-  // Spelerskaart-art (2:3 kaart in de avatar)
   if (playerCardArtEl) {
     const file = pickPlayerCardFile(player);
-    playerCardArtEl.style.backgroundImage = file
-      ? `url('./assets/${file}')`
-      : "";
+    playerCardArtEl.style.backgroundImage = file ? `url('./assets/${file}')` : "";
   }
 }
 
@@ -845,10 +779,7 @@ function updatePhasePanels(game, player) {
   const status = game.status || "";
 
   if (status === "finished" || phase === "END") {
-    setHost(
-      "end",
-      "Raid is afgelopen – er worden geen keuzes meer gevraagd."
-    );
+    setHost("end", "Raid is afgelopen – er worden geen keuzes meer gevraagd.");
     updateMoveButtonsState();
     updateDecisionButtonsState();
     renderHand();
@@ -858,10 +789,7 @@ function updatePhasePanels(game, player) {
   if (phase === "MOVE") {
     phaseMovePanel.classList.add("active");
     if (player && canMoveNow(game, player)) {
-      setHost(
-        "move_cta",
-        "MOVE – kies: SNATCH / FORAGE / SCOUT / SHIFT."
-      );
+      setHost("move_cta", "MOVE – kies: SNATCH / FORAGE / SCOUT / SHIFT.");
     } else {
       setHost("actions_wait", "MOVE – je kunt nu geen MOVE doen.");
     }
@@ -869,10 +797,7 @@ function updatePhasePanels(game, player) {
     phaseActionsPanel.classList.add("active");
     if (player && canPlayActionNow(game, player)) {
       if (isMyOpsTurn(game)) {
-        setHost(
-          "actions_turn",
-          "ACTIONS – jij bent aan de beurt. Speel een kaart of PASS."
-        );
+        setHost("actions_turn", "ACTIONS – jij bent aan de beurt. Speel een kaart of PASS.");
       } else {
         setHost("actions_wait", "ACTIONS – wacht tot je aan de beurt bent.");
       }
@@ -882,23 +807,14 @@ function updatePhasePanels(game, player) {
   } else if (phase === "DECISION") {
     phaseDecisionPanel.classList.add("active");
     if (player && canDecideNow(game, player)) {
-      setHost(
-        "decision_cta",
-        "DECISION – kies LURK / HIDE (Burrow) / DASH."
-      );
+      setHost("decision_cta", "DECISION – kies LURK / HIDE (Burrow) / DASH.");
     } else if (player && player.decision) {
-      setHost(
-        "actions_wait",
-        `DECISION – jouw keuze staat al vast: ${player.decision}.`
-      );
+      setHost("actions_wait", `DECISION – jouw keuze staat al vast: ${player.decision}.`);
     } else {
       setHost("actions_wait", "DECISION – je doet niet mee.");
     }
   } else if (phase === "REVEAL") {
-    setHost(
-      "reveal",
-      "REVEAL – Event wordt toegepast. Kijk mee op het grote scherm."
-    );
+    setHost("reveal", "REVEAL – Event wordt toegepast. Kijk mee op het grote scherm.");
   } else {
     setHost("idle_start", "Wacht tot de host de raid start…");
   }
@@ -913,9 +829,7 @@ function renderGame() {
 
   const g = currentGame;
 
-  gameStatusDiv.textContent = `Code: ${g.code} – Ronde: ${
-    g.round || 0
-  } – Fase: ${g.phase || "?"}`;
+  gameStatusDiv.textContent = `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
 
   if (g.status === "lobby" || g.status === "new" || g.phase === "SETUP") {
     setHostStatus("Wachten tot de host de raid start…");
@@ -932,20 +846,14 @@ function renderGame() {
   } else if (g.phase === "REVEAL") {
     setHostStatus("REVEAL – Event wordt toegepast.");
   } else if (g.status === "finished" || g.phase === "END") {
-    setHostStatus(
-      "Raid afgelopen – bekijk het scorebord op het Community Board."
-    );
+    setHostStatus("Raid afgelopen – bekijk het scorebord op het Community Board.");
   } else {
     setHostStatus("Even geduld…");
   }
 
   if (g.status === "finished" || g.phase === "END") {
-    setActionFeedback(
-      "Het spel is afgelopen – het scorebord staat op het Community Board."
-    );
-    if (eventCurrentDiv)
-      eventCurrentDiv.textContent =
-        "Spel afgelopen. Bekijk het scorebord op het grote scherm.";
+    setActionFeedback("Het spel is afgelopen – het scorebord staat op het Community Board.");
+    if (eventCurrentDiv) eventCurrentDiv.textContent = "Spel afgelopen. Bekijk het scorebord op het grote scherm.";
     if (eventScoutPreviewDiv) eventScoutPreviewDiv.textContent = "";
     if (specialFlagsDiv) specialFlagsDiv.innerHTML = "";
 
@@ -1001,8 +909,7 @@ function renderGame() {
     eventCurrentDiv.appendChild(titleDiv);
     eventCurrentDiv.appendChild(textDiv);
   } else if (eventCurrentDiv) {
-    eventCurrentDiv.textContent =
-      "Nog geen Event Card onthuld (pas zichtbaar bij REVEAL of via SCOUT).";
+    eventCurrentDiv.textContent = "Nog geen Event Card onthuld (pas zichtbaar bij REVEAL of via SCOUT).";
   }
 
   if (eventScoutPreviewDiv && currentPlayer && currentPlayer.scoutPeek) {
@@ -1010,9 +917,7 @@ function renderGame() {
     if (peek.round === (g.round || 0)) {
       const evPeek = getEventById(peek.eventId);
       if (evPeek) {
-        eventScoutPreviewDiv.textContent = `SCOUT preview (alleen voor jou): positie ${
-          peek.index + 1
-        } – ${evPeek.title}`;
+        eventScoutPreviewDiv.textContent = `SCOUT preview (alleen voor jou): positie ${peek.index + 1} – ${evPeek.title}`;
       }
     }
   }
@@ -1043,64 +948,32 @@ function renderPlayer() {
   const p = currentPlayer;
   const g = currentGame || null;
 
-  // Naam
-  if (playerNameEl) {
-    playerNameEl.textContent = p.name || "Onbekende vos";
-  }
+  if (playerNameEl) playerNameEl.textContent = p.name || "Onbekende vos";
 
-  // Den-kleur
   if (playerDenColorEl) {
     const color = p.color || p.denColor || p.den || "?";
-    playerDenColorEl.textContent = color
-      ? `Den-kleur: ${String(color).toUpperCase()}`
-      : "Den-kleur onbekend";
+    playerDenColorEl.textContent = color ? `Den-kleur: ${String(color).toUpperCase()}` : "Den-kleur onbekend";
   }
 
-  // Status
   if (playerStatusEl) {
     const status =
-      p.inYard === false
-        ? "Gevangen / uit de raid"
-        : p.dashed
-        ? "Met buit gevlucht (DASH)"
-        : "In de Yard";
+      p.inYard === false ? "Gevangen / uit de raid" : p.dashed ? "Met buit gevlucht (DASH)" : "In de Yard";
     playerStatusEl.textContent = `Status: ${status}`;
   }
 
-  // Score
-  if (playerScoreEl) {
-    const eggs  = p.eggs  || 0;
-    const hens  = p.hens  || 0;
-    const prize = p.prize || 0;
-    const score = p.score || 0;
-    playerScoreEl.textContent = `Score: ${score} (P:${prize} H:${hens} E:${eggs})`;
-  }
-
-  // Hero-kaart in de avatar (vaste spelerskaart per naam)
+  // Score UI blijft via updateLootUi (live)
   renderHeroAvatarCard(p, g);
 
-  // Loot-meter + samenvatting (nieuwe helper)
-  if (typeof updateLootMeterAndSummary === "function") {
-    updateLootMeterAndSummary(p);
-  }
-
-  // Oude helpers – alleen aanroepen als ze nog bestaan
-  if (typeof updateLootUi === "function") {
-    updateLootUi(p);
-  }
-  if (typeof updatePhasePanels === "function") {
-    updatePhasePanels(currentGame, p);
-  }
-  if (typeof updateHeroCardVisual === "function") {
-    updateHeroCardVisual(currentGame, p);
-  }
+  if (typeof updateLootMeterAndSummary === "function") updateLootMeterAndSummary(p);
+  if (typeof updateLootUi === "function") updateLootUi(p);
+  if (typeof updatePhasePanels === "function") updatePhasePanels(currentGame, p);
+  if (typeof updateHeroCardVisual === "function") updateHeroCardVisual(currentGame, p);
 }
 
 // ===== MOVE / DECISION BUTTON STATE =====
 
 function updateMoveButtonsState() {
-  if (!btnSnatch || !btnForage || !btnScout || !btnShift || !moveStateText)
-    return;
+  if (!btnSnatch || !btnForage || !btnScout || !btnShift || !moveStateText) return;
 
   if (!currentGame || !currentPlayer) {
     btnSnatch.disabled = true;
@@ -1119,8 +992,7 @@ function updateMoveButtonsState() {
     btnForage.disabled = true;
     btnScout.disabled = true;
     btnShift.disabled = true;
-    moveStateText.textContent =
-      "Het spel is afgelopen – je kunt geen MOVE meer doen.";
+    moveStateText.textContent = "Het spel is afgelopen – je kunt geen MOVE meer doen.";
     return;
   }
 
@@ -1133,23 +1005,14 @@ function updateMoveButtonsState() {
   btnShift.disabled = !canMove;
 
   if (!canMove) {
-    if (g.phase !== "MOVE") {
-      moveStateText.textContent = `Je kunt nu geen MOVE doen (fase: ${g.phase}).`;
-    } else if (p.inYard === false) {
-      moveStateText.textContent = "Je bent niet meer in de Yard.";
-    } else if (p.dashed) {
-      moveStateText.textContent =
-        "Je hebt al DASH gekozen in een eerdere ronde.";
-    } else if (moved.includes(playerId)) {
-      moveStateText.textContent = "Je hebt jouw MOVE voor deze ronde al gedaan.";
-    } else if (g.status !== "round") {
-      moveStateText.textContent = "Er is nog geen actieve ronde.";
-    } else {
-      moveStateText.textContent = "Je kunt nu geen MOVE doen.";
-    }
+    if (g.phase !== "MOVE") moveStateText.textContent = `Je kunt nu geen MOVE doen (fase: ${g.phase}).`;
+    else if (p.inYard === false) moveStateText.textContent = "Je bent niet meer in de Yard.";
+    else if (p.dashed) moveStateText.textContent = "Je hebt al DASH gekozen in een eerdere ronde.";
+    else if (moved.includes(playerId)) moveStateText.textContent = "Je hebt jouw MOVE voor deze ronde al gedaan.";
+    else if (g.status !== "round") moveStateText.textContent = "Er is nog geen actieve ronde.";
+    else moveStateText.textContent = "Je kunt nu geen MOVE doen.";
   } else {
-    moveStateText.textContent =
-      "Je kunt één MOVE doen: SNATCH, FORAGE, SCOUT of SHIFT.";
+    moveStateText.textContent = "Je kunt één MOVE doen: SNATCH, FORAGE, SCOUT of SHIFT.";
   }
 }
 
@@ -1171,8 +1034,7 @@ function updateDecisionButtonsState() {
     btnLurk.disabled = true;
     btnBurrow.disabled = true;
     btnDash.disabled = true;
-    decisionStateText.textContent =
-      "Het spel is afgelopen – geen DECISION meer nodig.";
+    decisionStateText.textContent = "Het spel is afgelopen – geen DECISION meer nodig.";
     return;
   }
 
@@ -1188,8 +1050,7 @@ function updateDecisionButtonsState() {
     btnLurk.disabled = true;
     btnBurrow.disabled = true;
     btnDash.disabled = true;
-    decisionStateText.textContent =
-      "Je zit niet meer in de Yard en doet niet mee aan deze DECISION.";
+    decisionStateText.textContent = "Je zit niet meer in de Yard en doet niet mee aan deze DECISION.";
     return;
   }
 
@@ -1197,8 +1058,7 @@ function updateDecisionButtonsState() {
     btnLurk.disabled = true;
     btnBurrow.disabled = true;
     btnDash.disabled = true;
-    decisionStateText.textContent =
-      "Je hebt al eerder DASH gekozen en doet niet meer mee in de Yard.";
+    decisionStateText.textContent = "Je hebt al eerder DASH gekozen en doet niet meer mee in de Yard.";
     return;
   }
 
@@ -1215,16 +1075,12 @@ function updateDecisionButtonsState() {
   btnBurrow.disabled = !can;
   btnDash.disabled = !can;
 
-  if (can) {
-    decisionStateText.textContent =
-      "Kies jouw DECISION: LURK, HIDE (Burrow) of DASH.";
-  } else {
-    decisionStateText.textContent = "Je kunt nu geen DECISION kiezen.";
-  }
+  decisionStateText.textContent = can
+    ? "Kies jouw DECISION: LURK, HIDE (Burrow) of DASH."
+    : "Je kunt nu geen DECISION kiezen.";
 }
 
 // ===== HAND UI (ACTIONS) =====
-// Let op: renderHand() is de "statusregel + buttons" en renderHandGrid() is de modal grid.
 
 function renderHand() {
   if (!actionsStateText) return;
@@ -1244,12 +1100,10 @@ function renderHand() {
   const myTurnOverall = isMyOpsTurn(g);
 
   if (!hand.length) {
-    if (g.status === "finished" || g.phase === "END") {
-      actionsStateText.textContent =
-        "Het spel is afgelopen – je kunt geen Action Cards meer spelen.";
-    } else {
-      actionsStateText.textContent = "Je hebt geen Action Cards in je hand.";
-    }
+    actionsStateText.textContent =
+      g.status === "finished" || g.phase === "END"
+        ? "Het spel is afgelopen – je kunt geen Action Cards meer spelen."
+        : "Je hebt geen Action Cards in je hand.";
     if (btnHand) btnHand.disabled = true;
     if (btnPass) btnPass.disabled = !(canPlayOverall && myTurnOverall);
     return;
@@ -1258,17 +1112,13 @@ function renderHand() {
   if (btnHand) btnHand.disabled = !canPlayOverall;
 
   if (g.phase !== "ACTIONS") {
-    actionsStateText.textContent =
-      `ACTIONS-fase is nu niet actief. Je hebt ${hand.length} kaart(en) klaarstaan.`;
+    actionsStateText.textContent = `ACTIONS-fase is nu niet actief. Je hebt ${hand.length} kaart(en) klaarstaan.`;
   } else if (!canPlayOverall) {
-    actionsStateText.textContent =
-      "Je kunt nu geen Action Cards spelen (niet in de Yard of al DASHED).";
+    actionsStateText.textContent = "Je kunt nu geen Action Cards spelen (niet in de Yard of al DASHED).";
   } else if (!myTurnOverall) {
-    actionsStateText.textContent =
-      `Je hebt ${hand.length} kaart(en), maar het is nu niet jouw beurt.`;
+    actionsStateText.textContent = `Je hebt ${hand.length} kaart(en), maar het is nu niet jouw beurt.`;
   } else {
-    actionsStateText.textContent =
-      `Jij bent aan de beurt – kies een kaart via HAND of kies PASS. Je hebt ${hand.length} kaart(en).`;
+    actionsStateText.textContent = `Jij bent aan de beurt – kies een kaart via HAND of kies PASS. Je hebt ${hand.length} kaart(en).`;
   }
 
   if (btnPass) btnPass.disabled = !(canPlayOverall && myTurnOverall);
@@ -1288,7 +1138,6 @@ function closeHandModal() {
 
 function renderHandGrid() {
   if (!handCardsGrid) return;
-
   handCardsGrid.innerHTML = "";
 
   const g = currentGame;
@@ -1317,11 +1166,8 @@ function renderHandGrid() {
     tile.type = "button";
     tile.className = "hand-card-tile";
 
-    // card kan string zijn ("Molting Mask") of object ({name:"Molting Mask"})
-    const cardName =
-      typeof card === "string" ? card : (card?.name || card?.id || "");
+    const cardName = typeof card === "string" ? card : (card?.name || card?.id || "");
 
-    // Centrale renderer verwacht meestal naam/id string
     const cardEl = renderActionCard(cardName || card, {
       size: "medium",
       noOverlay: true,
@@ -1346,15 +1192,10 @@ function renderHandGrid() {
   });
 }
 
-// ===== ACTION CARD INFO (voor spelersuitleg in HAND-modal) =====
-// 1 bron van waarheid: cards.js → getActionInfoByName()
+// ===== ACTION CARD INFO =====
 
 function getActionCardInfo(cardOrName) {
-  const name =
-    typeof cardOrName === "string"
-      ? cardOrName
-      : (cardOrName?.name || cardOrName?.id || "");
-
+  const name = typeof cardOrName === "string" ? cardOrName : (cardOrName?.name || cardOrName?.id || "");
   if (!name) return null;
   return getActionInfoByName(name) || null;
 }
@@ -1369,8 +1210,7 @@ function openHandCardDetail(index) {
   if (index < 0 || index >= hand.length) return;
 
   const card = hand[index];
-  const cardName =
-    typeof card === "string" ? card : (card?.name || card?.id || "");
+  const cardName = typeof card === "string" ? card : (card?.name || card?.id || "");
 
   handCardsGrid.innerHTML = "";
 
@@ -1381,9 +1221,7 @@ function openHandCardDetail(index) {
   bigCard.className = "vj-card hand-card hand-card-large";
 
   const def = cardName ? getActionDefByName(cardName) : null;
-  if (def?.imageFront) {
-    bigCard.style.backgroundImage = `url('${def.imageFront}')`;
-  }
+  if (def?.imageFront) bigCard.style.backgroundImage = `url('${def.imageFront}')`;
 
   const label = document.createElement("div");
   label.className = "hand-card-label";
@@ -1399,7 +1237,6 @@ function openHandCardDetail(index) {
 
   const info = getActionCardInfo(cardName);
 
-  // Moment: liever uit def (phase/timing) dan uit info
   if (def?.phase || def?.timing) {
     const pMoment = document.createElement("p");
     const phaseTxt = def?.phase ? String(def.phase) : "";
@@ -1442,12 +1279,7 @@ function openHandCardDetail(index) {
   playBtn.className = "phase-btn phase-btn-primary";
   playBtn.textContent = "Speel deze kaart";
 
-  const canPlayNow =
-    typeof window.playActionCard === "function"
-      ? (canPlayActionNow(g, p) && isMyOpsTurn(g))
-      : (canPlayActionNow(g, p) && isMyOpsTurn(g)); // playActionCard zit later in je file
-
-  // Extra guard: opsLocked = alleen PASS
+  const canPlayNow = canPlayActionNow(g, p) && isMyOpsTurn(g);
   const opsLocked = !!(g?.flagsRound?.opsLocked);
   playBtn.disabled = !canPlayNow || opsLocked;
 
@@ -1476,24 +1308,19 @@ function openHandCardDetail(index) {
   handCardsGrid.appendChild(wrapper);
 }
 
-// Kies juiste loot-kaart art op basis van type
+// ===== LOOT MODAL =====
+
 function getLootCardImage(card) {
   const tRaw = (card && (card.t || card.type)) || "";
   const t = String(tRaw).toUpperCase();
-
   if (t.includes("PRIZE")) return "card_loot_prize_hen.png";
   if (t.includes("HEN")) return "card_loot_hen.png";
   if (t.includes("EGG")) return "card_loot_egg.png";
-
-  // geen match → gebruik placeholder uit CSS
   return null;
 }
 
-// ===== LOOT MODAL =====
-
 function renderLootModal() {
   if (!lootCardsGrid) return;
-
   lootCardsGrid.innerHTML = "";
 
   if (!currentPlayer) {
@@ -1506,7 +1333,6 @@ function renderLootModal() {
   }
 
   const p = currentPlayer;
-
   let loot = Array.isArray(p.loot) ? [...p.loot] : [];
 
   if (!loot.length) {
@@ -1535,11 +1361,8 @@ function renderLootModal() {
     const cardDiv = document.createElement("div");
     cardDiv.className = "vj-card loot-card";
 
-    // Kies de juiste loot-kaart afbeelding
     const imgFile = getLootCardImage(card);
-    if (imgFile) {
-      cardDiv.style.backgroundImage = `url('./assets/${imgFile}')`;
-    }
+    if (imgFile) cardDiv.style.backgroundImage = `url('./assets/${imgFile}')`;
 
     const label = document.createElement("div");
     label.className = "loot-card-label";
@@ -1561,77 +1384,108 @@ function openLootModal() {
   renderLootModal();
   lootModalOverlay.classList.remove("hidden");
 }
-
 function closeLootModal() {
   if (!lootModalOverlay) return;
   lootModalOverlay.classList.add("hidden");
 }
 
 // ==========================================
-// Advisor Hint Overlay — Lead Fox style
+// Advisor Hint Overlay — in LEAD overlay stijl
 // ==========================================
 
-let _hintOverlayEl = null;
-let _hintPanelEl = null;
+let _advisorOverlay = null;
+let _advisorPanel = null;
 
-function ensureHintOverlayDom() {
-  if (_hintOverlayEl && _hintPanelEl) return;
+function ensureAdvisorHintOverlayDom() {
+  if (_advisorOverlay && _advisorPanel) return;
 
-  let overlay = document.getElementById("hintOverlay");
+  // 1) styles (klein, alleen aanvullingen – rest gebruikt jouw bestaande LEAD CSS)
+  if (!document.getElementById("advisorHintStyles")) {
+    const st = document.createElement("style");
+    st.id = "advisorHintStyles";
+    st.textContent = `
+      .advisor-grid { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:.75rem; }
+      @media (max-width: 820px){ .advisor-grid{ grid-template-columns: 1fr; } }
+      .advisor-card{
+        border-radius:.9rem;
+        padding:.75rem .85rem;
+        background: radial-gradient(circle at top left, rgba(255,255,255,0.08), rgba(10,10,20,0.9));
+        border: 1px solid rgba(255,255,255,0.08);
+      }
+      .advisor-card .k{ font-size:.78rem; letter-spacing:.14em; text-transform:uppercase; opacity:.85; margin-bottom:.25rem; }
+      .advisor-card .pick{ font-size:1rem; font-weight:700; margin-bottom:.2rem; }
+      .advisor-card .meta{ font-size:.78rem; opacity:.85; margin:0 0 .45rem; }
+      .advisor-card ul{ margin:.35rem 0 0; padding-left:1.05rem; }
+      .advisor-card li{ font-size:.8rem; line-height:1.35; opacity:.9; margin:.18rem 0; }
+      .advisor-mini { display:flex; flex-wrap:wrap; gap:.35rem; margin:.5rem 0 .75rem; }
+      .advisor-pill{
+        font-size:.75rem; padding:.15rem .5rem; border-radius:999px;
+        border:1px solid rgba(255,255,255,.18); background: rgba(0,0,0,.35);
+      }
+      .advisor-pill.safe{ border-color: rgba(34,197,94,.6); }
+      .advisor-pill.danger{ border-color: rgba(248,113,113,.7); }
+      .advisor-pill.info{ border-color: rgba(59,130,246,.65); }
+      .advisor-why{ margin-top:.75rem; }
+      .advisor-why summary{ cursor:pointer; font-size:.85rem; opacity:.9; }
+      .advisor-why .body{ margin-top:.5rem; font-size:.82rem; opacity:.85; line-height:1.4; }
+      .advisor-tags{ display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.4rem; }
+      .advisor-tag{ font-size:.72rem; padding:.12rem .45rem; border-radius:999px; border:1px solid rgba(255,255,255,.18); opacity:.9; }
+    `;
+    document.head.appendChild(st);
+  }
+
+  // 2) DOM
+  let overlay = document.getElementById("advisorHintModalOverlay");
   if (!overlay) {
     overlay = document.createElement("div");
-    overlay.id = "hintOverlay";
-    overlay.className = "hidden";
+    overlay.id = "advisorHintModalOverlay";
+    overlay.className = "vj-modal-overlay hidden";
+    overlay.innerHTML = `
+      <div class="vj-modal-panel lead-command-panel" role="dialog" aria-modal="true">
+        <button class="vj-modal-close" type="button" aria-label="Sluit">×</button>
+        <h2 class="lead-command-title">LEAD FOX ADVISOR</h2>
+        <p class="lead-command-subtitle" id="advisorHintSub">—</p>
+
+        <div class="advisor-mini" id="advisorHintMini"></div>
+
+        <div class="advisor-grid" id="advisorHintGrid"></div>
+
+        <details class="advisor-why">
+          <summary>Why this</summary>
+          <div class="body" id="advisorHintWhy"></div>
+        </details>
+      </div>
+    `;
     document.body.appendChild(overlay);
   }
 
-  overlay.innerHTML = `
-    <div class="hint-panel" role="dialog" aria-modal="true">
-      <button class="hint-close" type="button" aria-label="Sluit">×</button>
-      <div class="hint-header">
-        <div class="hint-kicker">LEAD FOX ADVISOR</div>
-        <h2 class="hint-title">Hint</h2>
-        <p class="hint-sub">—</p>
-        <div class="hint-mini"></div>
-      </div>
+  const panel = overlay.querySelector(".vj-modal-panel");
+  const closeBtn = overlay.querySelector(".vj-modal-close");
 
-      <div class="hint-grid"></div>
-
-      <details class="hint-why">
-        <summary>Why this</summary>
-        <div class="hint-why-body"></div>
-      </details>
-    </div>
-  `;
-
-  const panel = overlay.querySelector(".hint-panel");
-  const closeBtn = overlay.querySelector(".hint-close");
-
-  closeBtn.addEventListener("click", () => closeAdvisorHintOverlay());
+  closeBtn.addEventListener("click", closeAdvisorHintOverlay);
   overlay.addEventListener("click", (e) => {
     if (e.target === overlay) closeAdvisorHintOverlay();
   });
-
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !_hintOverlayEl?.classList.contains("hidden")) {
-      closeAdvisorHintOverlay();
-    }
+    if (e.key === "Escape" && !_advisorOverlay?.classList.contains("hidden")) closeAdvisorHintOverlay();
   });
 
-  _hintOverlayEl = overlay;
-  _hintPanelEl = panel;
-}
+  _advisorOverlay = overlay;
+  _advisorPanel = panel;
 
-function pct01(x) {
-  const n = Number(x);
-  if (!Number.isFinite(n)) return null;
-  return Math.round(Math.max(0, Math.min(1, n)) * 100);
+  // maak ook globaal beschikbaar (handig bij debug)
+  window.openAdvisorHintOverlay = openAdvisorHintOverlay;
+  window.closeAdvisorHintOverlay = closeAdvisorHintOverlay;
 }
 
 function safeArr(x) {
   return Array.isArray(x) ? x : [];
 }
-
+function pct01(x) {
+  const n = Number(x);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(Math.max(0, Math.min(1, n)) * 100);
+}
 function pickLineFromBest(best) {
   if (!best) return "—";
   if (best.play === "PASS") return "PASS";
@@ -1641,58 +1495,37 @@ function pickLineFromBest(best) {
   return best.play || "—";
 }
 
-function miniStatusPills(ctx) {
-  // probeert meerdere veldnamen (want jouw data evolueert)
+function buildMiniPills(ctx) {
   const me = ctx?.me || {};
   const pills = [];
 
-  const statusRaw = String(me.status || me.state || "").toUpperCase();
-  const isCaught = me.isCaught === true || statusRaw.includes("CAUGHT");
-  const isDashed = me.isDashed === true || statusRaw.includes("DASH");
-  const inYard =
-    typeof me.inYard === "boolean"
-      ? me.inYard
-      : (!isCaught && !isDashed);
+  const inYard = me.inYard !== false && !me.dashed;
+  const caught = me.inYard === false;
+  const dashed = !!me.dashed;
 
-  const loot =
-    me.lootPoints ?? me.lootTotal ?? me.score ?? me.points ?? null;
+  const { score } = calcLootStats(me);
 
-  // Yard / Caught
-  pills.push({
-    cls: inYard ? "hint-pill--safe" : "hint-pill--danger",
-    html: `Yard: <strong>${inYard ? "YES" : "NO"}</strong>`,
-  });
-
-  pills.push({
-    cls: isCaught ? "hint-pill--danger" : "hint-pill--info",
-    html: `Caught: <strong>${isCaught ? "YES" : "NO"}</strong>`,
-  });
-
-  if (loot !== null && loot !== undefined && loot !== "") {
-    pills.push({
-      cls: "hint-pill--info",
-      html: `Loot: <strong>${loot}</strong>`,
-    });
-  }
+  pills.push({ cls: inYard ? "safe" : "danger", text: `Yard: ${inYard ? "YES" : "NO"}` });
+  pills.push({ cls: caught ? "danger" : "info", text: `Caught: ${caught ? "YES" : "NO"}` });
+  pills.push({ cls: dashed ? "info" : "info", text: `Dash: ${dashed ? "YES" : "NO"}` });
+  pills.push({ cls: "info", text: `Loot: ${score}` });
 
   return pills;
 }
 
-function renderAdviceCard({ modeLabel, variantClass, best, bullets }) {
+function renderAdvisorCard({ label, best, bullets }) {
   const pick = pickLineFromBest(best);
-  const risk = best?.riskLabel || "—";
-  const conf = pct01(best?.confidence) ?? null;
+  const risk = best?.riskLabel || best?.risk || "—";
+  const conf = pct01(best?.confidence) ?? pct01(best?.conf) ?? null;
 
-  const list = safeArr(bullets).slice(0, 6);
+  const list = safeArr(bullets).slice(0, 7);
 
   return `
-    <div class="hint-card ${variantClass}">
-      <div class="hint-card-top">
-        <div class="hint-card-label">${modeLabel}</div>
-        <div class="hint-card-pick">${pick}</div>
-      </div>
-      <p class="hint-card-meta">Risico: <strong>${risk}</strong>${conf !== null ? ` • Zekerheid: <strong>${conf}%</strong>` : ""}</p>
-      <ul class="hint-bullets">
+    <div class="advisor-card">
+      <div class="k">${label}</div>
+      <div class="pick">${pick}</div>
+      <p class="meta">Risico: <strong>${risk}</strong>${conf !== null ? ` • Zekerheid: <strong>${conf}%</strong>` : ""}</p>
+      <ul>
         ${list.map((b) => `<li>${b}</li>`).join("")}
       </ul>
     </div>
@@ -1700,11 +1533,11 @@ function renderAdviceCard({ modeLabel, variantClass, best, bullets }) {
 }
 
 function buildWhyThis(hint, ctx) {
-  // toon leerzame “waarom”: events + (als het een action is) tags/meta
-  const upcomingLine = safeArr(hint?.bullets).find((x) => String(x).startsWith("Opkomend:"));
-  const phaseLine = safeArr(hint?.bullets).find((x) => String(x).includes("Fase:"));
+  const bullets = safeArr(hint?.bullets);
+  const phaseLine = bullets.find((x) => String(x).includes("Fase:")) || "";
+  const upcomingLine = bullets.find((x) => String(x).startsWith("Opkomend:")) || "";
 
-  // probeer def/agg picks te vinden
+  // probeer action-meta te tonen als er cardId is
   const bestDef = hint?.debug?.bestDef || null;
   const bestAgg = hint?.debug?.bestAgg || null;
 
@@ -1714,13 +1547,15 @@ function buildWhyThis(hint, ctx) {
   const defDef = defPick ? getActionDefByName(defPick) : null;
   const aggDef = aggPick ? getActionDefByName(aggPick) : null;
 
-  function tagsBlock(def) {
+  const pills = buildMiniPills(ctx);
+
+  const tagsBlock = (def) => {
     const tags = safeArr(def?.tags);
     const meta = def?.meta || null;
 
     const tagHtml = tags.length
-      ? `<div class="hint-tags">${tags.map(t => `<span class="hint-tag">${t}</span>`).join("")}</div>`
-      : `<div class="hint-tags"><span class="hint-tag">no tags</span></div>`;
+      ? `<div class="advisor-tags">${tags.map((t) => `<span class="advisor-tag">${t}</span>`).join("")}</div>`
+      : `<div class="advisor-tags"><span class="advisor-tag">no tags</span></div>`;
 
     const metaLines = [];
     if (meta?.role) metaLines.push(`role: ${meta.role}`);
@@ -1730,100 +1565,71 @@ function buildWhyThis(hint, ctx) {
 
     return `
       ${tagHtml}
-      ${metaLines.length ? `<div>${metaLines.join(" • ")}</div>` : ""}
+      ${metaLines.length ? `<div style="margin-top:.35rem;">${metaLines.join(" • ")}</div>` : ""}
     `;
-  }
-
-  const pills = miniStatusPills(ctx);
+  };
 
   return `
     ${phaseLine ? `<div>${phaseLine}</div>` : ""}
     ${upcomingLine ? `<div>${upcomingLine}</div>` : ""}
-    <div class="hint-tags">
-      ${pills.map(p => `<span class="hint-tag">${p.html.replace(/<strong>|<\/strong>/g, "")}</span>`).join("")}
+    <div class="advisor-tags" style="margin-top:.4rem;">
+      ${pills.map((p) => `<span class="advisor-tag">${p.text}</span>`).join("")}
     </div>
-    ${defDef ? `<div><strong>DEF pick tags/meta:</strong>${tagsBlock(defDef)}</div>` : ""}
-    ${aggDef ? `<div><strong>AGG pick tags/meta:</strong>${tagsBlock(aggDef)}</div>` : ""}
+    ${defDef ? `<div style="margin-top:.6rem;"><strong>DEF pick tags/meta:</strong>${tagsBlock(defDef)}</div>` : ""}
+    ${aggDef ? `<div style="margin-top:.6rem;"><strong>AGG pick tags/meta:</strong>${tagsBlock(aggDef)}</div>` : ""}
   `;
 }
 
-export function openAdvisorHintOverlay(hint, ctx = {}) {
-  ensureHintOverlayDom();
+function openAdvisorHintOverlay(hint, ctx = {}) {
+  ensureAdvisorHintOverlayDom();
 
-  const titleEl = _hintOverlayEl.querySelector(".hint-title");
-  const subEl = _hintOverlayEl.querySelector(".hint-sub");
-  const miniEl = _hintOverlayEl.querySelector(".hint-mini");
-  const gridEl = _hintOverlayEl.querySelector(".hint-grid");
-  const whyBody = _hintOverlayEl.querySelector(".hint-why-body");
+  const sub = _advisorOverlay.querySelector("#advisorHintSub");
+  const mini = _advisorOverlay.querySelector("#advisorHintMini");
+  const grid = _advisorOverlay.querySelector("#advisorHintGrid");
+  const why = _advisorOverlay.querySelector("#advisorHintWhy");
 
-  // Header
   const conf = pct01(hint?.confidence);
-  titleEl.textContent = hint?.title || "Hint";
-  subEl.textContent = `Risico: ${hint?.risk || "—"}${conf !== null ? ` • Zekerheid: ${conf}%` : ""}`;
+  sub.textContent = `Risico: ${hint?.risk || "—"}${conf !== null ? ` • Zekerheid: ${conf}%` : ""}`;
 
-  // Mini status
-  const pills = miniStatusPills(ctx);
-  miniEl.innerHTML = pills
-    .map((p) => `<span class="hint-pill ${p.cls}">${p.html}</span>`)
-    .join("");
+  const pills = buildMiniPills(ctx);
+  mini.innerHTML = pills.map((p) => `<span class="advisor-pill ${p.cls}">${p.text}</span>`).join("");
 
-  // Content: dual als debug bestDef/bestAgg bestaat, anders 1 kaart + lege “Agg”
-  const bestDef = hint?.debug?.bestDef || null;
-  const bestAgg = hint?.debug?.bestAgg || null;
+  // Altijd 2 kaarten tonen:
+  // - als advisorBot DEF/AGG geeft via debug: gebruik dat
+  // - anders: linkerkant = hint, rechterkant = 1e alternatief (of placeholder)
+  const bestDef = hint?.debug?.bestDef || hint || null;
+  const bestAgg =
+    hint?.debug?.bestAgg ||
+    (safeArr(hint?.alternatives)[0]
+      ? { ...safeArr(hint.alternatives)[0], confidence: hint.confidence, riskLabel: hint.risk }
+      : null);
 
-  if (bestDef && bestAgg) {
-    gridEl.innerHTML = `
-      ${renderAdviceCard({
-        modeLabel: "DEFENSIEF",
-        variantClass: "hint-card--def",
-        best: bestDef,
-        bullets: bestDef.bullets || hint.bullets || [],
-      })}
-      ${renderAdviceCard({
-        modeLabel: "AANVALLEND",
-        variantClass: "hint-card--agg",
-        best: bestAgg,
-        bullets: bestAgg.bullets || hint.bullets || [],
-      })}
-    `;
-  } else {
-    // fallback: 1 kaart met huidige bullets
-    gridEl.innerHTML = `
-      ${renderAdviceCard({
-        modeLabel: "ADVIES",
-        variantClass: "hint-card--def",
-        best: hint,
-        bullets: hint?.bullets || [],
-      })}
-      ${renderAdviceCard({
-        modeLabel: "AANVALLEND",
-        variantClass: "hint-card--agg",
-        best: null,
-        bullets: ["(Nog geen Agg variant — maak scoring dual voor MOVE/DECISION)"],
-      })}
-    `;
-  }
+  grid.innerHTML = `
+    ${renderAdvisorCard({
+      label: "DEFENSIEF",
+      best: bestDef,
+      bullets: bestDef?.bullets || hint?.bullets || [],
+    })}
+    ${renderAdvisorCard({
+      label: "AANVALLEND",
+      best: bestAgg,
+      bullets: bestAgg?.bullets || hint?.bullets || ["(Geen Agg variant beschikbaar)"],
+    })}
+  `;
 
-  // Why this
-  whyBody.innerHTML = buildWhyThis(hint, ctx);
+  why.innerHTML = buildWhyThis(hint, ctx);
 
-  _hintOverlayEl.classList.remove("hidden");
+  _advisorOverlay.classList.remove("hidden");
 }
 
-export function closeAdvisorHintOverlay() {
-  ensureHintOverlayDom();
-  _hintOverlayEl.classList.add("hidden");
+function closeAdvisorHintOverlay() {
+  ensureAdvisorHintOverlayDom();
+  _advisorOverlay.classList.add("hidden");
 }
 
 // ===== LOGGING HELPER =====
 
-async function logMoveAction(
-  game,
-  player,
-  choice,
-  phase = "MOVE",
-  extra = null
-) {
+async function logMoveAction(game, player, choice, phase = "MOVE", extra = null) {
   const actionsCol = collection(db, "games", gameId, "actions");
   const payload = {
     round: game.round || 0,
@@ -1857,20 +1663,16 @@ function formatChoiceForDisplay(phase, rawChoice) {
   if (!rawChoice) return "–";
   const choice = String(rawChoice);
 
-  // DECISION_xxx
   if (phase === "DECISION" && choice.startsWith("DECISION_")) {
     const kind = choice.slice("DECISION_".length);
-    if (kind === "LURK")   return "LURK – in de Yard blijven";
+    if (kind === "LURK") return "LURK – in de Yard blijven";
     if (kind === "BURROW") return "BURROW – schuilen / verstoppen";
-    if (kind === "DASH")   return "DASH – met buit vluchten";
+    if (kind === "DASH") return "DASH – met buit vluchten";
     return kind;
   }
 
-  // MOVE_xxx
   if (phase === "MOVE" && choice.startsWith("MOVE_")) {
-    if (choice.includes("SNATCH")) {
-      return "SNATCH – 1 buitkaart uit de stapel";
-    }
+    if (choice.includes("SNATCH")) return "SNATCH – 1 buitkaart uit de stapel";
     if (choice.includes("FORAGE")) {
       const m = choice.match(/FORAGE_(\d+)/);
       const n = m ? m[1] : "?";
@@ -1889,12 +1691,9 @@ function formatChoiceForDisplay(phase, rawChoice) {
     return choice.slice("MOVE_".length);
   }
 
-  // ACTION_xxx
   if (phase === "ACTIONS" && choice.startsWith("ACTION_")) {
     const name = choice.slice("ACTION_".length);
-    if (name === "PASS") {
-      return "PASS – geen kaart gespeeld";
-    }
+    if (name === "PASS") return "PASS – geen kaart gespeeld";
     return `${name} – Action Card`;
   }
 
@@ -1931,15 +1730,11 @@ async function performSnatch() {
   await updateDoc(playerRef, { loot });
   await updateDoc(gameRef, { lootDeck, movedPlayerIds: arrayUnion(playerId) });
 
-  await logMoveAction(game, player, "MOVE_SNATCH_FROM_DECK", "MOVE", {
-    lootCard: card,
-  });
+  await logMoveAction(game, player, "MOVE_SNATCH_FROM_DECK", "MOVE", { lootCard: card });
 
   const label = card.t || "Loot";
   const val = card.v ?? "?";
-  setActionFeedback(
-    `SNATCH: je hebt een ${label} (waarde ${val}) uit de buitstapel getrokken.`
-  );
+  setActionFeedback(`SNATCH: je hebt een ${label} (waarde ${val}) uit de buitstapel getrokken.`);
 }
 
 async function performForage() {
@@ -1957,9 +1752,7 @@ async function performForage() {
     return;
   }
 
-  const actionDeck = Array.isArray(game.actionDeck)
-    ? [...game.actionDeck]
-    : [];
+  const actionDeck = Array.isArray(game.actionDeck) ? [...game.actionDeck] : [];
   const hand = Array.isArray(player.hand) ? [...player.hand] : [];
 
   if (!actionDeck.length) {
@@ -2006,9 +1799,7 @@ async function performScout() {
     return;
   }
 
-  const posStr = prompt(
-    `Welke event-positie wil je scouten? (1-${track.length})`
-  );
+  const posStr = prompt(`Welke event-positie wil je scouten? (1-${track.length})`);
   if (!posStr) return;
   const pos = parseInt(posStr, 10);
   if (Number.isNaN(pos) || pos < 1 || pos > track.length) {
@@ -2026,9 +1817,7 @@ async function performScout() {
   const eventId = track[idx];
   const ev = getEventById(eventId);
 
-  alert(
-    `Je scout Event #${pos}: ` + (ev ? ev.title : eventId || "Onbekend event")
-  );
+  alert(`Je scout Event #${pos}: ` + (ev ? ev.title : eventId || "Onbekend event"));
 
   await updateDoc(playerRef, {
     scoutPeek: { round: game.round || 0, index: idx, eventId },
@@ -2036,9 +1825,7 @@ async function performScout() {
   await updateDoc(gameRef, { movedPlayerIds: arrayUnion(playerId) });
 
   await logMoveAction(game, player, `MOVE_SCOUT_${pos}`, "MOVE");
-  setActionFeedback(
-    `SCOUT: je hebt event #${pos} bekeken. Deze ronde zie je deze kaart als persoonlijke preview.`
-  );
+  setActionFeedback(`SCOUT: je hebt event #${pos} bekeken. Deze ronde zie je deze kaart als persoonlijke preview.`);
 }
 
 async function performShift() {
@@ -2048,25 +1835,20 @@ async function performShift() {
   const playerSnap = await getDoc(playerRef);
   if (!gameSnap.exists() || !playerSnap.exists()) return;
 
-  const game   = gameSnap.data();
+  const game = gameSnap.data();
   const player = playerSnap.data();
 
-  // Alleen in MOVE-fase + juiste speler
   if (!canMoveNow(game, player)) {
     alert("Je kunt nu geen MOVE doen.");
     return;
   }
 
-  // Burrow Beacon / lockEvents blokkeert elke wijziging
   const flags = mergeRoundFlags(game);
   if (flags.lockEvents) {
-    alert(
-      "Events zijn gelocked (Burrow Beacon). Je kunt niet meer shiften."
-    );
+    alert("Events zijn gelocked (Burrow Beacon). Je kunt niet meer shiften.");
     return;
   }
 
-  // Gebruik dezelfde helper als bij Kick Up Dust
   const { track, eventIndex } = splitEventTrackByStatus(game);
   if (!track.length) {
     alert("Geen Event Track beschikbaar.");
@@ -2075,22 +1857,16 @@ async function performShift() {
 
   const futureCount = track.length - eventIndex;
   if (futureCount <= 1) {
-    alert(
-      "SHIFT heeft geen effect – er zijn te weinig toekomstige Events om te verschuiven."
-    );
+    alert("SHIFT heeft geen effect – er zijn te weinig toekomstige Events om te verschuiven.");
     return;
   }
 
   const maxPos = track.length;
 
-  const pos1Str = prompt(
-    `SHIFT – eerste positie (alleen toekomstige events: ${eventIndex + 1}-${maxPos})`
-  );
+  const pos1Str = prompt(`SHIFT – eerste positie (alleen toekomstige events: ${eventIndex + 1}-${maxPos})`);
   if (!pos1Str) return;
 
-  const pos2Str = prompt(
-    `SHIFT – tweede positie (alleen toekomstige events: ${eventIndex + 1}-${maxPos})`
-  );
+  const pos2Str = prompt(`SHIFT – tweede positie (alleen toekomstige events: ${eventIndex + 1}-${maxPos})`);
   if (!pos2Str) return;
 
   const pos1 = parseInt(pos1Str, 10);
@@ -2112,15 +1888,11 @@ async function performShift() {
   const i1 = pos1 - 1;
   const i2 = pos2 - 1;
 
-  // blokkeren als hij een al-onthulde kaart probeert te verplaatsen
   if (i1 < eventIndex || i2 < eventIndex) {
-    alert(
-      `Je kunt geen Events verschuiven die al onthuld zijn. Kies alleen posities vanaf ${eventIndex + 1}.`
-    );
+    alert(`Je kunt geen Events verschuiven die al onthuld zijn. Kies alleen posities vanaf ${eventIndex + 1}.`);
     return;
   }
 
-  // swap alleen future-kaarten
   [track[i1], track[i2]] = [track[i2], track[i1]];
 
   await updateDoc(gameRef, {
@@ -2128,16 +1900,8 @@ async function performShift() {
     movedPlayerIds: arrayUnion(playerId),
   });
 
-  await logMoveAction(
-    game,
-    player,
-    `MOVE_SHIFT_${pos1}<->${pos2}`,
-    "MOVE"
-  );
-
-  setActionFeedback(
-    `SHIFT: je hebt toekomstige Events op posities ${pos1} en ${pos2} gewisseld.`
-  );
+  await logMoveAction(game, player, `MOVE_SHIFT_${pos1}<->${pos2}`, "MOVE");
+  setActionFeedback(`SHIFT: je hebt toekomstige Events op posities ${pos1} en ${pos2} gewisseld.`);
 }
 
 // ===== DECISION ACTIES =====
@@ -2157,9 +1921,7 @@ async function selectDecision(kind) {
   const flags = mergeRoundFlags(game);
   const ft = flags.followTail || {};
   if (ft[playerId]) {
-    setActionFeedback(
-      "Follow the Tail is actief: jouw uiteindelijke DECISION zal gelijk worden aan de keuze van de gekozen vos."
-    );
+    setActionFeedback("Follow the Tail is actief: jouw uiteindelijke DECISION zal gelijk worden aan de keuze van de gekozen vos.");
   }
 
   if (!canDecideNow(game, player)) {
@@ -2181,13 +1943,9 @@ async function selectDecision(kind) {
       ? "DASH (wegrennen)"
       : kind;
 
-  const ok = confirm(
-    `Je staat op het punt ${label} te kiezen als jouw definitieve beslissing voor deze ronde. Bevestigen?`
-  );
+  const ok = confirm(`Je staat op het punt ${label} te kiezen als jouw definitieve beslissing voor deze ronde. Bevestigen?`);
   if (!ok) {
-    setActionFeedback(
-      "Je DECISION is nog niet vastgelegd – je kunt nog even nadenken."
-    );
+    setActionFeedback("Je DECISION is nog niet vastgelegd – je kunt nog even nadenken.");
     return;
   }
 
@@ -2223,21 +1981,18 @@ async function playActionCard(index) {
   if (index < 0 || index >= hand.length) return;
 
   const card = hand[index];
-const cardName =
-  typeof card === "string" ? card.trim() : String(card?.name || card?.id || "").trim();
+  const cardName =
+    typeof card === "string" ? card.trim() : String(card?.name || card?.id || "").trim();
 
-if (!cardName) {
-  alert("Onbekende Action Card in je hand (geen name/id).");
-  return;
-}
+  if (!cardName) {
+    alert("Onbekende Action Card in je hand (geen name/id).");
+    return;
+  }
+
   const flagsBefore = mergeRoundFlags(game);
   if (flagsBefore.opsLocked) {
-    alert(
-      "Hold Still is actief: er mogen geen nieuwe Action Cards meer worden gespeeld. Je kunt alleen PASS kiezen."
-    );
-    setActionFeedback(
-      "Hold Still is actief – speel geen kaarten meer, kies PASS als je aan de beurt bent."
-    );
+    alert("Hold Still is actief: er mogen geen nieuwe Action Cards meer worden gespeeld. Je kunt alleen PASS kiezen.");
+    setActionFeedback("Hold Still is actief – speel geen kaarten meer, kies PASS als je aan de beurt bent.");
     return;
   }
 
@@ -2285,16 +2040,14 @@ if (!cardName) {
       break;
     default:
       alert(
-        "Deze kaart is nog niet volledig geïmplementeerd in de online versie. Gebruik eventueel de fysieke regels als huisregel."
+        'Deze kaart is nog niet volledig geïmplementeerd in de online versie. Gebruik eventueel de fysieke regels als huisregel.'
       );
       executed = false;
       break;
   }
 
   if (!executed) {
-    setActionFeedback(
-      `De kaart "${cardName}" kon nu niet worden gespeeld. Hij blijft in je hand.`
-    );
+    setActionFeedback(`De kaart "${cardName}" kon nu niet worden gespeeld. Hij blijft in je hand.`);
     return;
   }
 
@@ -2310,9 +2063,7 @@ if (!cardName) {
     opsConsecutivePasses: 0,
   });
 
-  setActionFeedback(
-    `Je speelde "${cardName}". Het effect is uitgevoerd (zie ook de Community log).`
-  );
+  setActionFeedback(`Je speelde "${cardName}". Het effect is uitgevoerd (zie ook de Community log).`);
 }
 
 async function passAction() {
@@ -2359,9 +2110,7 @@ async function playScatter(game, player) {
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
-    message: `${
-      player.name || "Speler"
-    } speelt Scatter! – niemand mag Scouten deze ronde.`,
+    message: `${player.name || "Speler"} speelt Scatter! – niemand mag Scouten deze ronde.`,
   });
   setActionFeedback("Scatter! is actief – niemand mag Scouten deze ronde.");
   setHost("scatter", "Scatter! – niemand mag SCOUTen.");
@@ -2369,9 +2118,7 @@ async function playScatter(game, player) {
 }
 
 async function playDenSignal(game, player) {
-  const colorInput = prompt(
-    "Den Signal – welke Den kleur wil je beschermen? (RED / BLUE / GREEN / YELLOW)"
-  );
+  const colorInput = prompt("Den Signal – welke Den kleur wil je beschermen? (RED / BLUE / GREEN / YELLOW)");
   if (!colorInput) return false;
   const color = colorInput.trim().toUpperCase();
   if (!["RED", "BLUE", "GREEN", "YELLOW"].includes(color)) {
@@ -2389,13 +2136,9 @@ async function playDenSignal(game, player) {
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
-    message: `${
-      player.name || "Speler"
-    } speelt Den Signal – Den ${color} is immuun voor vang-events deze ronde.`,
+    message: `${player.name || "Speler"} speelt Den Signal – Den ${color} is immuun voor vang-events deze ronde.`,
   });
-  setActionFeedback(
-    `Den Signal: Den ${color} is immuun voor vang-events deze ronde.`
-  );
+  setActionFeedback(`Den Signal: Den ${color} is immuun voor vang-events deze ronde.`);
   return true;
 }
 
@@ -2426,33 +2169,20 @@ async function playNoGoZone(game, player) {
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
-    message: `${
-      player.name || "Speler"
-    } speelt No-Go Zone – Scouten op positie ${pos} is verboden.`,
+    message: `${player.name || "Speler"} speelt No-Go Zone – Scouten op positie ${pos} is verboden.`,
   });
-  setActionFeedback(
-    `No-Go Zone: positie ${pos} kan deze ronde niet gescout worden.`
-  );
+  setActionFeedback(`No-Go Zone: positie ${pos} kan deze ronde niet gescout worden.`);
   return true;
 }
 
 async function playKickUpDust(game, player) {
-  // 1) Burrow Beacon / Hold Still etc. via flags
   const flags = mergeRoundFlags(game);
   if (flags.lockEvents) {
-    alert(
-      "Burrow Beacon is actief – de Event Track is gelocked en kan niet meer veranderen."
-    );
+    alert("Burrow Beacon is actief – de Event Track is gelocked en kan niet meer veranderen.");
     return false;
   }
-
-  // 2) Laat de engine-helper alles doen (incl. log + locks)
   await applyKickUpDust(gameId);
-
-  // 3) Alleen visuele / UX feedback vanuit de player-klant
-  setActionFeedback(
-    "Kick Up Dust: de toekomstige Event kaarten zijn door elkaar geschud. Onthulde kaarten blijven op hun plek."
-  );
+  setActionFeedback("Kick Up Dust: de toekomstige Event kaarten zijn door elkaar geschud. Onthulde kaarten blijven op hun plek.");
   return true;
 }
 
@@ -2466,13 +2196,9 @@ async function playBurrowBeacon(game, player) {
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
-    message: `${
-      player.name || "Speler"
-    } speelt Burrow Beacon – Event Track kan deze ronde niet meer veranderen.`,
+    message: `${player.name || "Speler"} speelt Burrow Beacon – Event Track kan deze ronde niet meer veranderen.`,
   });
-  setActionFeedback(
-    "Burrow Beacon: de Event Track is gelocked – geen SHIFT of schudden meer deze ronde."
-  );
+  setActionFeedback("Burrow Beacon: de Event Track is gelocked – geen SHIFT of schudden meer deze ronde.");
   setHost("beacon", "Burrow Beacon – Event Track gelocked.");
   return true;
 }
@@ -2491,9 +2217,7 @@ async function playMoltingMask(game, player) {
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
-    message: `${
-      player.name || "Speler"
-    } speelt Molting Mask – nieuwe Den kleur: ${newColor}.`,
+    message: `${player.name || "Speler"} speelt Molting Mask – nieuwe Den kleur: ${newColor}.`,
   });
   setActionFeedback(`Molting Mask: je Den kleur is nu ${newColor}.`);
   return true;
@@ -2509,13 +2233,9 @@ async function playHoldStill(game, player) {
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
-    message: `${
-      player.name || "Speler"
-    } speelt Hold Still – geen nieuwe Action Cards meer deze ronde, alleen PASS.`,
+    message: `${player.name || "Speler"} speelt Hold Still – geen nieuwe Action Cards meer deze ronde, alleen PASS.`,
   });
-  setActionFeedback(
-    "Hold Still is actief – er mogen geen Action Cards meer gespeeld worden, alleen PASS."
-  );
+  setActionFeedback("Hold Still is actief – er mogen geen Action Cards meer gespeeld worden, alleen PASS.");
   setHost("ops_locked", "Hold Still – alleen PASS is toegestaan deze ronde.");
   return true;
 }
@@ -2534,20 +2254,13 @@ async function playNoseForTrouble(game, player) {
       map.set(id, ev ? ev.title : id);
     }
   }
-  const options = Array.from(map.entries()).map(([id, title]) => ({
-    id,
-    title,
-  }));
+  const options = Array.from(map.entries()).map(([id, title]) => ({ id, title }));
   options.sort((a, b) => a.title.localeCompare(b.title, "nl"));
 
-  const menuLines = options.map(
-    (opt, idx) => `${idx + 1}. ${opt.title}`
-  );
-  const choiceStr = prompt(
-    "Nose for Trouble – kies het volgende Event dat je verwacht:\n" +
-      menuLines.join("\n")
-  );
+  const menuLines = options.map((opt, idx) => `${idx + 1}. ${opt.title}`);
+  const choiceStr = prompt("Nose for Trouble – kies het volgende Event dat je verwacht:\n" + menuLines.join("\n"));
   if (!choiceStr) return false;
+
   const idx = parseInt(choiceStr, 10) - 1;
   if (Number.isNaN(idx) || idx < 0 || idx >= options.length) {
     alert("Ongeldige keuze.");
@@ -2559,9 +2272,7 @@ async function playNoseForTrouble(game, player) {
   const ev = getEventById(chosenId);
 
   const flags = mergeRoundFlags(game);
-  const preds = Array.isArray(flags.predictions)
-    ? [...flags.predictions]
-    : [];
+  const preds = Array.isArray(flags.predictions) ? [...flags.predictions] : [];
   preds.push({ playerId, eventId: chosenId });
   flags.predictions = preds;
 
@@ -2571,24 +2282,14 @@ async function playNoseForTrouble(game, player) {
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
-    message: `${
-      player.name || "Speler"
-    } speelt Nose for Trouble – voorspelt: ${
-      ev ? ev.title : chosenId
-    }.`,
+    message: `${player.name || "Speler"} speelt Nose for Trouble – voorspelt: ${ev ? ev.title : chosenId}.`,
   });
-  setActionFeedback(
-    `Nose for Trouble: je hebt "${
-      ev ? ev.title : chosenId
-    }" voorspeld als volgende Event.`
-  );
+  setActionFeedback(`Nose for Trouble: je hebt "${ev ? ev.title : chosenId}" voorspeld als volgende Event.`);
   return true;
 }
 
 async function playScentCheck(game, player) {
-  const target = await chooseOtherPlayerPrompt(
-    "Scent Check – kies een vos om te besnuffelen"
-  );
+  const target = await chooseOtherPlayerPrompt("Scent Check – kies een vos om te besnuffelen");
   if (!target) return false;
 
   try {
@@ -2597,18 +2298,14 @@ async function playScentCheck(game, player) {
     if (snap.exists()) {
       const t = snap.data();
       const dec = t.decision || "(nog geen keuze)";
-      alert(
-        `[Scent Check] ${t.name || "Vos"} heeft op dit moment DECISION: ${dec}.`
-      );
+      alert(`[Scent Check] ${t.name || "Vos"} heeft op dit moment DECISION: ${dec}.`);
     }
   } catch (err) {
     console.error("ScentCheck immediate peek error", err);
   }
 
   const flags = mergeRoundFlags(game);
-  const list = Array.isArray(flags.scentChecks)
-    ? [...flags.scentChecks]
-    : [];
+  const list = Array.isArray(flags.scentChecks) ? [...flags.scentChecks] : [];
   list.push({ viewerId: playerId, targetId: target.id });
   flags.scentChecks = list;
 
@@ -2618,22 +2315,14 @@ async function playScentCheck(game, player) {
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
-    message: `${
-      player.name || "Speler"
-    } speelt Scent Check op ${target.name || "een vos"}.`,
+    message: `${player.name || "Speler"} speelt Scent Check op ${target.name || "een vos"}.`,
   });
-  setActionFeedback(
-    `Scent Check: je volgt deze ronde de beslissingen van ${
-      target.name || "de gekozen vos"
-    } van dichtbij.`
-  );
+  setActionFeedback(`Scent Check: je volgt deze ronde de beslissingen van ${target.name || "de gekozen vos"} van dichtbij.`);
   return true;
 }
 
 async function playFollowTail(game, player) {
-  const target = await chooseOtherPlayerPrompt(
-    "Follow the Tail – kies een vos om te volgen"
-  );
+  const target = await chooseOtherPlayerPrompt("Follow the Tail – kies een vos om te volgen");
   if (!target) return false;
 
   const flags = mergeRoundFlags(game);
@@ -2647,17 +2336,9 @@ async function playFollowTail(game, player) {
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
-    message: `${
-      player.name || "Speler"
-    } speelt Follow the Tail en volgt de keuze van ${
-      target.name || "een vos"
-    }.`,
+    message: `${player.name || "Speler"} speelt Follow the Tail en volgt de keuze van ${target.name || "een vos"}.`,
   });
-  setActionFeedback(
-    `Follow the Tail: jouw uiteindelijke DECISION zal gelijk zijn aan die van ${
-      target.name || "de gekozen vos"
-    }.`
-  );
+  setActionFeedback(`Follow the Tail: jouw uiteindelijke DECISION zal gelijk zijn aan die van ${target.name || "de gekozen vos"}.`);
   return true;
 }
 
@@ -2670,11 +2351,9 @@ async function playAlphaCall(game, player) {
   }
 
   const lines = ordered.map((p, idx) => `${idx + 1}. ${p.name || "Vos"}`);
-  const choiceStr = prompt(
-    "Alpha Call – kies wie de nieuwe Lead Fox wordt:\n" +
-      lines.join("\n")
-  );
+  const choiceStr = prompt("Alpha Call – kies wie de nieuwe Lead Fox wordt:\n" + lines.join("\n"));
   if (!choiceStr) return false;
+
   const idx = parseInt(choiceStr, 10) - 1;
   if (Number.isNaN(idx) || idx < 0 || idx >= ordered.length) {
     alert("Ongeldige keuze.");
@@ -2689,50 +2368,34 @@ async function playAlphaCall(game, player) {
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
-    message: `${
-      player.name || "Speler"
-    } speelt Alpha Call – Lead Fox wordt nu ${
-      ordered[idx].name || "een vos"
-    }.`,
+    message: `${player.name || "Speler"} speelt Alpha Call – Lead Fox wordt nu ${ordered[idx].name || "een vos"}.`,
   });
-  setActionFeedback(
-    `Alpha Call: Lead Fox is nu ${
-      ordered[idx].name || "de gekozen vos"
-    }.`
-  );
+  setActionFeedback(`Alpha Call: Lead Fox is nu ${ordered[idx].name || "de gekozen vos"}.`);
   return true;
 }
+
 async function playPackTinker(game, player) {
-  // 1) Flags van deze ronde (incl. Burrow Beacon)
   const flags = mergeRoundFlags(game);
   if (flags.lockEvents) {
-    alert(
-      "Burrow Beacon is actief – de Event Track is gelocked en kan niet meer veranderen."
-    );
+    alert("Burrow Beacon is actief – de Event Track is gelocked en kan niet meer veranderen.");
     return false;
   }
 
-  // 2) Huidige Event Track + index van al onthulde kaarten
   const track = Array.isArray(game.eventTrack) ? [...game.eventTrack] : [];
   if (!track.length) {
     alert("Geen Event Track beschikbaar.");
     return false;
   }
 
-  const eventIndex =
-    typeof game.eventIndex === "number" ? game.eventIndex : 0; 
-  // alles < eventIndex = al onthuld/gelocked
+  const eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
   const maxPos = track.length;
 
-  // 3) Posities vragen aan de speler
   const p1Str = prompt(
     `Pack Tinker – eerste eventpositie (1–${maxPos}). Let op: posities 1–${eventIndex} zijn al onthuld en gelocked.`
   );
   if (!p1Str) return false;
 
-  const p2Str = prompt(
-    `Pack Tinker – tweede eventpositie (1–${maxPos}). Kies opnieuw een kaart die nog gesloten ligt.`
-  );
+  const p2Str = prompt(`Pack Tinker – tweede eventpositie (1–${maxPos}). Kies opnieuw een kaart die nog gesloten ligt.`);
   if (!p2Str) return false;
 
   const pos1 = parseInt(p1Str, 10);
@@ -2754,24 +2417,16 @@ async function playPackTinker(game, player) {
   const i1 = pos1 - 1;
   const i2 = pos2 - 1;
 
-  // 4) EXTRA GUARD: niet aan gelockte (reeds onthulde) kaarten komen
   if (i1 < eventIndex || i2 < eventIndex) {
-    alert(
-      "Je kunt geen Event kaarten verschuiven die al zijn onthuld. Kies twee kaarten die nog gesloten liggen."
-    );
+    alert("Je kunt geen Event kaarten verschuiven die al zijn onthuld. Kies twee kaarten die nog gesloten liggen.");
     return false;
   }
 
-  // 5) Laat engine.js het echte werk doen (incl. server-side safety + log)
   await applyPackTinker(gameId, i1, i2);
-
-  // 6) Alleen UI-feedback hier
-  setActionFeedback(
-    `Pack Tinker: je hebt toekomstige events op posities ${pos1} en ${pos2} gewisseld.`
-  );
-
+  setActionFeedback(`Pack Tinker: je hebt toekomstige events op posities ${pos1} en ${pos2} gewisseld.`);
   return true;
 }
+
 async function playMaskSwap(game, player) {
   const players = await fetchPlayersForGame();
   const inYard = players.filter(isInYardLocal);
@@ -2798,15 +2453,12 @@ async function playMaskSwap(game, player) {
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
-    message: `${
-      player.name || "Speler"
-    } speelt Mask Swap – alle Den-kleuren in de Yard worden gehusseld.`,
+    message: `${player.name || "Speler"} speelt Mask Swap – alle Den-kleuren in de Yard worden gehusseld.`,
   });
-  setActionFeedback(
-    "Mask Swap: Den-kleuren van alle vossen in de Yard zijn gehusseld."
-  );
+  setActionFeedback("Mask Swap: Den-kleuren van alle vossen in de Yard zijn gehusseld.");
   return true;
 }
+
 // ===== LEAD FOX COMMAND CENTER =====
 
 async function renderLeadCommandCenter() {
@@ -2817,10 +2469,6 @@ async function renderLeadCommandCenter() {
   const round = currentGame.round || 0;
 
   const players = await fetchPlayersForGame();
-  const playerById = {};
-  players.forEach((p) => {
-    playerById[p.id] = p;
-  });
 
   const actionsCol = collection(db, "games", gameId, "actions");
   const snap = await getDocs(actionsCol);
@@ -2831,7 +2479,7 @@ async function renderLeadCommandCenter() {
     const d = docSnap.data() || {};
     if ((d.round || 0) !== round) return;
 
-    const pid   = d.playerId || "unknown";
+    const pid = d.playerId || "unknown";
     const phase = d.phase || "";
 
     let bucket = perPlayer.get(pid);
@@ -2840,8 +2488,8 @@ async function renderLeadCommandCenter() {
       perPlayer.set(pid, bucket);
     }
 
-    if (phase === "MOVE")       bucket.moves.push(d);
-    else if (phase === "ACTIONS")  bucket.actions.push(d);
+    if (phase === "MOVE") bucket.moves.push(d);
+    else if (phase === "ACTIONS") bucket.actions.push(d);
     else if (phase === "DECISION") bucket.decisions.push(d);
   });
 
@@ -2862,11 +2510,7 @@ async function renderLeadCommandCenter() {
   }
 
   orderedPlayers.forEach((p) => {
-    const group = perPlayer.get(p.id) || {
-      moves: [],
-      actions: [],
-      decisions: [],
-    };
+    const group = perPlayer.get(p.id) || { moves: [], actions: [], decisions: [] };
 
     const block = document.createElement("div");
     block.className = "lead-player-block";
@@ -2877,9 +2521,7 @@ async function renderLeadCommandCenter() {
     else if (color === "GREEN") block.classList.add("den-green");
     else if (color === "YELLOW") block.classList.add("den-yellow");
 
-    if (currentPlayer && p.id === currentPlayer.id) {
-      block.classList.add("is-self-lead");
-    }
+    if (currentPlayer && p.id === currentPlayer.id) block.classList.add("is-self-lead");
 
     const headerRow = document.createElement("div");
     headerRow.className = "lead-player-header";
@@ -2924,15 +2566,9 @@ async function renderLeadCommandCenter() {
       return col;
     }
 
-    phaseGrid.appendChild(
-      buildPhaseCol("MOVE", "MOVE", group.moves)
-    );
-    phaseGrid.appendChild(
-      buildPhaseCol("ACTIONS", "ACTIONS", group.actions)
-    );
-    phaseGrid.appendChild(
-      buildPhaseCol("DECISION", "DECISION", group.decisions)
-    );
+    phaseGrid.appendChild(buildPhaseCol("MOVE", "MOVE", group.moves));
+    phaseGrid.appendChild(buildPhaseCol("ACTIONS", "ACTIONS", group.actions));
+    phaseGrid.appendChild(buildPhaseCol("DECISION", "DECISION", group.decisions));
 
     block.appendChild(headerRow);
     block.appendChild(phaseGrid);
@@ -2954,9 +2590,7 @@ async function openLeadCommandCenter() {
   }
 
   if (leadId !== currentPlayer.id) {
-    alert(
-      "Alleen de Lead Fox heeft toegang tot het Command Center met alle keuzes van deze ronde."
-    );
+    alert("Alleen de Lead Fox heeft toegang tot het Command Center met alle keuzes van deze ronde.");
     return;
   }
 
@@ -2999,6 +2633,7 @@ async function ensurePlayerDoc() {
   await setDoc(playerRef, seed, { merge: true });
 }
 
+// ====== AUTH START ======
 initAuth(async () => {
   if (!gameId || !playerId) return;
 
@@ -3008,128 +2643,118 @@ initAuth(async () => {
   await ensurePlayerDoc();
   hostInitUI();
 
-onSnapshot(gameRef, (snap) => {
-  if (!snap.exists()) {
-    currentGame = null;
-    lastGame = null;
-    if (gameStatusDiv) gameStatusDiv.textContent = "Spel niet gevonden.";
-    return;
-  }
+  onSnapshot(gameRef, (snap) => {
+    if (!snap.exists()) {
+      currentGame = null;
+      lastGame = null;
+      if (gameStatusDiv) gameStatusDiv.textContent = "Spel niet gevonden.";
+      return;
+    }
 
-  const newGame = { id: snap.id, ...snap.data() };
+    const newGame = { id: snap.id, ...snap.data() };
 
-  if (prevGame && prevGame.leadIndex !== newGame.leadIndex) {
-    resetLeadCache();
-  }
+    if (prevGame && prevGame.leadIndex !== newGame.leadIndex) resetLeadCache();
 
-  applyHostHooks(prevGame, newGame, prevPlayer, currentPlayer, null);
+    applyHostHooks(prevGame, newGame, prevPlayer, currentPlayer, null);
 
-  currentGame = newGame;
-  prevGame = newGame;
-  lastGame = newGame; // <- hint-bot kan dit gebruiken
+    currentGame = newGame;
+    prevGame = newGame;
+    lastGame = newGame;
 
-  renderGame();
-});
+    renderGame();
+  });
 
-onSnapshot(playerRef, (snap) => {
-  if (!snap.exists()) {
-    currentPlayer = null;
-    lastMe = null;
-    if (playerNameEl) playerNameEl.textContent = "Speler niet gevonden.";
-    return;
-  }
+  onSnapshot(playerRef, (snap) => {
+    if (!snap.exists()) {
+      currentPlayer = null;
+      lastMe = null;
+      if (playerNameEl) playerNameEl.textContent = "Speler niet gevonden.";
+      return;
+    }
 
-  const newPlayer = { id: snap.id, ...snap.data() };
+    const newPlayer = { id: snap.id, ...snap.data() };
 
-  applyHostHooks(currentGame, currentGame, prevPlayer, newPlayer, null);
+    applyHostHooks(currentGame, currentGame, prevPlayer, newPlayer, null);
 
-  currentPlayer = newPlayer;
-  prevPlayer = newPlayer;
-  lastMe = newPlayer; // <- hint-bot kan dit gebruiken
+    currentPlayer = newPlayer;
+    prevPlayer = newPlayer;
+    lastMe = newPlayer;
 
-  renderPlayer();
-});
+    renderPlayer();
+  });
 
-// MOVE
+  // MOVE
   if (btnSnatch) btnSnatch.addEventListener("click", performSnatch);
   if (btnForage) btnForage.addEventListener("click", performForage);
-  if (btnScout)  btnScout.addEventListener("click", performScout);
-  if (btnShift)  btnShift.addEventListener("click", performShift);
+  if (btnScout) btnScout.addEventListener("click", performScout);
+  if (btnShift) btnShift.addEventListener("click", performShift);
 
   // DECISION
-  if (btnLurk) {
-    btnLurk.addEventListener("click", () => selectDecision("LURK"));
-  }
-  if (btnBurrow) {
-    btnBurrow.addEventListener("click", () => selectDecision("BURROW"));
-  }
-  if (btnDash) {
-    btnDash.addEventListener("click", () => selectDecision("DASH"));
-  }
+  if (btnLurk) btnLurk.addEventListener("click", () => selectDecision("LURK"));
+  if (btnBurrow) btnBurrow.addEventListener("click", () => selectDecision("BURROW"));
+  if (btnDash) btnDash.addEventListener("click", () => selectDecision("DASH"));
 
   // ACTIONS
   if (btnPass) btnPass.addEventListener("click", passAction);
   if (btnHand) btnHand.addEventListener("click", openHandModal);
   if (btnLoot) btnLoot.addEventListener("click", openLootModal);
   if (btnLead) btnLead.addEventListener("click", openLeadCommandCenter);
-  
-if (btnHint) {
-  btnHint.addEventListener("click", () => {
-    console.log("[HINT] clicked", {
-      hasGame: !!lastGame,
-      hasMe: !!lastMe,
-      gameId: lastGame?.id,
-      meId: lastMe?.id,
-    });
 
-    try {
-      if (!lastGame || !lastMe) {
-        alert("Hint: game/player state nog niet geladen.");
-        return;
-      }
-
-      const hint = getAdvisorHint({
-        game: lastGame,
-        me: lastMe,
-        players: lastPlayers || [],
-        actions: lastActions,
-        profileKey: "BEGINNER_COACH",
+  // HINT (clean: 1 try/catch, geen nested try meer)
+  if (btnHint) {
+    btnHint.addEventListener("click", () => {
+      console.log("[HINT] clicked", {
+        hasGame: !!lastGame,
+        hasMe: !!lastMe,
+        gameId: lastGame?.id,
+        meId: lastMe?.id,
       });
 
-    try {
-  // NEW overlay (Lead Fox style)
-  if (typeof openAdvisorHintOverlay === "function") {
-    openAdvisorHintOverlay(hint, { game, me });
+      let hint = null;
+
+      try {
+        if (!lastGame || !lastMe) {
+          alert("Hint: game/player state nog niet geladen.");
+          return;
+        }
+
+        hint = getAdvisorHint({
+          game: lastGame,
+          me: lastMe,
+          players: lastPlayers || [],
+          actions: lastActions || [],
+          profileKey: "BEGINNER_COACH",
+        });
+
+        // NEW overlay (Lead Fox style)
+        openAdvisorHintOverlay(hint, { game: lastGame, me: lastMe });
+      } catch (err) {
+        console.error("[HINT] crashed:", err);
+
+        // fallback 1: oude overlay
+        try {
+          if (hint && typeof showHint === "function") {
+            showHint(hint);
+            return;
+          }
+        } catch (e) {}
+
+        // fallback 2: alert
+        alert("Hint crash: " + (err?.message || err));
+      }
+    });
   } else {
-    // fallback als de nieuwe renderer niet geladen is
-    showHint?.(hint);
+    console.warn("[HINT] btnHint niet gevonden in DOM");
   }
 
-  // optional: oude alert fallback uit (laat commented)
-  // alert([hint.title, ...(hint.bullets || [])].join("\n"));
-
-} catch (err) {
-  console.error("[HINT] crashed:", err);
-
-  // fallback 1: oude overlay
-  try {
-    if (typeof showHint === "function") {
-      showHint(hint);
-      return;
-    }
-  } catch (e) {}
-
-  // fallback 2: alert
-  alert("Hint crash: " + (err?.message || err));
-}
-
-  // Modals sluiten
+  // Modals sluiten (HAND/LOOT)
   if (handModalClose) handModalClose.addEventListener("click", closeHandModal);
   if (handModalOverlay) {
     handModalOverlay.addEventListener("click", (e) => {
       if (e.target === handModalOverlay) closeHandModal();
     });
   }
+
   if (lootModalClose) lootModalClose.addEventListener("click", closeLootModal);
   if (lootModalOverlay) {
     lootModalOverlay.addEventListener("click", (e) => {
@@ -3138,14 +2763,10 @@ if (btnHint) {
   }
 
   // LEAD Command Center modal sluiten
-  if (leadCommandModalClose) {
-    leadCommandModalClose.addEventListener("click", closeLeadCommandCenter);
-  }
+  if (leadCommandModalClose) leadCommandModalClose.addEventListener("click", closeLeadCommandCenter);
   if (leadCommandModalOverlay) {
     leadCommandModalOverlay.addEventListener("click", (e) => {
-      if (e.target === leadCommandModalOverlay) {
-        closeLeadCommandCenter();
-      }
+      if (e.target === leadCommandModalOverlay) closeLeadCommandCenter();
     });
   }
 });
