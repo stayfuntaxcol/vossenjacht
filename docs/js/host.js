@@ -3,6 +3,7 @@ import { getEventById, CARD_BACK } from "./cards.js";
 import { addLog } from "./log.js";
 import { resolveAfterReveal } from "./engine.js";
 import { renderPlayerSlotCard } from "./cardRenderer.js";
+import { startBotRunner } from "./bots/botRunner.js";
 import {
   getFirestore,
   doc,
@@ -943,6 +944,7 @@ const colorOffset = Math.floor(Math.random() * DEN_COLORS.length);
       roosterSeen: 0,
       raidEndedByRooster: false,
       raidStarted: true,
+      botsEnabled: true,
       actionDeck,
       lootDeck,
       sack,
@@ -1092,6 +1094,7 @@ function renderPlayerZones() {
 // ==== MAIN INIT ====
 initAuth(async (authUser) => {
   if (!gameId || !gameRef || !playersColRef) return;
+  startBotRunner({ db, gameId, addLog, isBoardOnly });
 
   // ==== GAME SNAPSHOT ====
   onSnapshot(gameRef, (snap) => {
