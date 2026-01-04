@@ -187,8 +187,6 @@ function stopBotLoop() {
   botLastKey = null;
 }
 
-let botBusy = false;
-
 async function runBotsOnce() {
   if (botBusy) return;
 
@@ -198,13 +196,12 @@ async function runBotsOnce() {
   // bots uit = niks doen
   if (!game.botsEnabled) return;
 
-  // spel klaar = stoppen
+  // spel klaar = niks doen
   if (game.status === "finished" || game.phase === "END") return;
 
   botBusy = true;
   try {
-    // 👇 HIER roep je jouw bot-logica aan
-    // await runBotLogic(game);
+    await botMaybePassInActions(game);
   } catch (err) {
     console.error("BOT error in runBotsOnce:", err);
   } finally {
@@ -212,57 +209,46 @@ async function runBotsOnce() {
   }
 }
 
+// Bot-logic: alleen voorbeeld -> PASS in ACTIONS als bot aan de beurt is
+async function botMaybePassInActions(game) {
   // alleen tijdens actieve raid/round
-  if (latestGame.status !== "round" && latestGame.status !== "raid") return;
+  if (game.status !== "round" && game.status !== "raid") return;
 
-  // Alleen ACTIONS voorbeeld: bot doet PASS als het zijn beurt is
-  if (latestGame.phase !== "ACTIONS") return;
-
-  const order = latestGame.opsTurnOrder || [];
-  const idx = typeof latestGame.opsTurnIndex === "number" ? latestGame.opsTurnIndex : 0;
-  const turnId = order[idx];
-  if (!turnId) return;
-
-  const p = (latestPlayers || []).find(x => x.id === turnId);
-  if (!p || !p.isBot) return;
-
-  // Anti-spam sleutel: dezelfde turn-state -> maar 1 actie
-  const key = `${latestGame.id}|r${latestGame.round}|ACTIONS|${turnId}|i${idx}`;
-  if (botLastKey === key) return;
-  botLastKey = key;
-
-  botBusy = true;
-  try {
-    await botPassOpsTurn(p);
-  } finally {
-    botBusy = false;
-  }
-}
-
-async function botPassOpsTurn(botPlayer) {
-  // gebruik verse game snapshot om race conditions te voorkomen
-  const snap = await getDoc(gameRef);
-  if (!snap.exists()) return;
-  const game = snap.data();
-
-  // veiligheid
+  // Alleen ACTIONS voorbeeld
   if (game.phase !== "ACTIONS") return;
 
   const order = game.opsTurnOrder || [];
-  const curIdx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
+  const idx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
+  const turnId = order[idx];
+  if (!turnId) return;
 
-  let nextIdx = curIdx + 1;
-  if (order.length) nextIdx = nextIdx % order.length;
+  const p = (latestPlayers || []).find((x) => x.id === turnId);
+  if (!p || !p.isBot) return;
 
-  const nextPasses = (game.opsConsecutivePasses || 0) + 1;
+  // Anti-spam sleutel: dezelfde turn-state -> maar 1 actie
+  const key = `${gameId}|r${game.round}|ACTIONS|${turnId}|i${idx}`;
+  if (botLastKey === key) return;
+  botLastKey = key;
 
-  // 1 write: game vooruit
+  await botPassOpsTurn(p, game);
+}
+
+// Bot doet PASS (werkt zonder extra snapshots/loops)
+async function botPassOpsTurn(botPlayer, game) {
+  if (!gameRef) return;
+
+  const order = game.opsTurnOrder || [];
+  const idx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
+
+  const nextIdx = Math.min(idx + 1, order.length); // niet voorbij einde
+  const passes = typeof game.opsConsecutivePasses === "number" ? game.opsConsecutivePasses : 0;
+
   await updateDoc(gameRef, {
     opsTurnIndex: nextIdx,
-    opsConsecutivePasses: nextPasses,
+    opsConsecutivePasses: passes + 1,
   });
 
-  // optioneel: actie loggen als "actions" document
+  // registreren in actions-collectie (net als spelers)
   await addDoc(collection(db, "games", gameId, "actions"), {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -272,12 +258,11 @@ async function botPassOpsTurn(botPlayer) {
     createdAt: serverTimestamp(),
   });
 
-  // optioneel: log regel
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
     kind: "BOT",
-    message: `${botPlayer.name || "BOT Fox"}: PASS`,
+    message: `${botPlayer.name || "BOT Fox"} speelt: PASS`,
   });
 }
 
