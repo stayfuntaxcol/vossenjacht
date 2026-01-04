@@ -162,6 +162,113 @@ let latestGame             = null;
 let currentLeadFoxId       = null;
 let currentLeadFoxName     = "";
 
+// ===============================
+// BOT LOOP (1x starten, niet per snapshot)
+// ===============================
+let botInterval = null;
+let botBusy = false;
+let botLastKey = null;
+
+function startBotLoop() {
+  // bots nooit laten draaien op community-board-only scherm
+  if (isBoardOnly) return;
+
+  // al actief? niets doen
+  if (botInterval) return;
+
+  botInterval = setInterval(runBotsOnce, 1200); // 1.2s per tick
+}
+
+function stopBotLoop() {
+  if (!botInterval) return;
+  clearInterval(botInterval);
+  botInterval = null;
+  botBusy = false;
+  botLastKey = null;
+}
+
+async function runBotsOnce() {
+  if (botBusy) return;
+  if (!latestGame) return;
+
+  // alleen als bots aan staan
+  if (latestGame.botsEnabled !== true) return;
+
+  // stop bij einde
+  if (latestGame.status === "finished" || latestGame.phase === "END") {
+    stopBotLoop();
+    return;
+  }
+
+  // alleen tijdens actieve raid/round
+  if (latestGame.status !== "round" && latestGame.status !== "raid") return;
+
+  // Alleen ACTIONS voorbeeld: bot doet PASS als het zijn beurt is
+  if (latestGame.phase !== "ACTIONS") return;
+
+  const order = latestGame.opsTurnOrder || [];
+  const idx = typeof latestGame.opsTurnIndex === "number" ? latestGame.opsTurnIndex : 0;
+  const turnId = order[idx];
+  if (!turnId) return;
+
+  const p = (latestPlayers || []).find(x => x.id === turnId);
+  if (!p || !p.isBot) return;
+
+  // Anti-spam sleutel: dezelfde turn-state -> maar 1 actie
+  const key = `${latestGame.id}|r${latestGame.round}|ACTIONS|${turnId}|i${idx}`;
+  if (botLastKey === key) return;
+  botLastKey = key;
+
+  botBusy = true;
+  try {
+    await botPassOpsTurn(p);
+  } finally {
+    botBusy = false;
+  }
+}
+
+async function botPassOpsTurn(botPlayer) {
+  // gebruik verse game snapshot om race conditions te voorkomen
+  const snap = await getDoc(gameRef);
+  if (!snap.exists()) return;
+  const game = snap.data();
+
+  // veiligheid
+  if (game.phase !== "ACTIONS") return;
+
+  const order = game.opsTurnOrder || [];
+  const curIdx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
+
+  let nextIdx = curIdx + 1;
+  if (order.length) nextIdx = nextIdx % order.length;
+
+  const nextPasses = (game.opsConsecutivePasses || 0) + 1;
+
+  // 1 write: game vooruit
+  await updateDoc(gameRef, {
+    opsTurnIndex: nextIdx,
+    opsConsecutivePasses: nextPasses,
+  });
+
+  // optioneel: actie loggen als "actions" document
+  await addDoc(collection(db, "games", gameId, "actions"), {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    playerId: botPlayer.id,
+    playerName: botPlayer.name || "BOT Fox",
+    choice: "PASS",
+    createdAt: serverTimestamp(),
+  });
+
+  // optioneel: log regel
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "BOT",
+    message: `${botPlayer.name || "BOT Fox"}: PASS`,
+  });
+}
+
 // Kleur-cycling voor Dens
 const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
 
@@ -946,7 +1053,7 @@ const colorOffset = Math.floor(Math.random() * DEN_COLORS.length);
       roosterSeen: 0,
       raidEndedByRooster: false,
       raidStarted: true,
-      botsEnabled: true,
+      botsEnabled: false,
       actionDeck,
       lootDeck,
       sack,
@@ -1115,6 +1222,12 @@ initAuth(async (authUser) => {
       game.currentEventId && game.phase === "REVEAL"
         ? getEventById(game.currentEventId)
         : null;
+
+    startBotLoop();
+
+if (game.status === "finished" || game.phase === "END") {
+  stopBotLoop();
+}
     
     // In REVEAL-fase: active event groot tonen
 if (game.phase === "REVEAL" && game.currentEventId) {
@@ -1980,6 +2093,8 @@ async function addBotToCurrentGame() {
       loot: [],
     });
 
+    await updateDoc(doc(db, "games", gameId), { botsEnabled: true });
+    
     console.log("BOT toegevoegd aan game:", gameId);
   } catch (err) {
     console.error("Fout bij BOT toevoegen:", err);
