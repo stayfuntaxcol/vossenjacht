@@ -1,9 +1,14 @@
+// host.js — VOSSENJACHT (FULL FEATURE PARITY + AUTONOMOUS BOTS incl. Action Cards)
+// - Behoudt (vrijwel) alle UI/overlays/scoreboard/leaderboards/log/event-poster/QR/new-raid/add-bot uit je originele host.js
+// - Fixes bots: werken in status "raid" én "round", draaien ook in mode=board, lock voorkomt dubbel-run,
+//   bots spelen (simpel) Action Cards in OPS en eindigen OPS met PASS (consecutive-pass logic klopt).
+
 import { initAuth } from "./firebase.js";
 import { getEventById, CARD_BACK } from "./cards.js";
 import { addLog } from "./log.js";
 import { resolveAfterReveal } from "./engine.js";
 import { renderPlayerSlotCard } from "./cardRenderer.js";
-import { startBotRunner } from "./bots/botRunner.js";
+
 import {
   getFirestore,
   doc,
@@ -16,18 +21,18 @@ import {
   getDocs,
   orderBy,
   limit,
-  addDoc,           // ← toevoegen
-  serverTimestamp,  // ← toevoegen
-  runTransaction, // ✅ toevoegen
+  addDoc,
+  serverTimestamp,
+  runTransaction,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const db = getFirestore();
 
 const params = new URLSearchParams(window.location.search);
-let gameId = params.get("game");        // ← const → let maken
+let gameId = params.get("game"); // let (wordt opnieuw gezet bij new raid)
 const mode = params.get("mode") || "host"; // "host" of "board"
-
 const isBoardOnly = mode === "board";
+
 let gameRef = null;
 let playersColRef = null;
 
@@ -36,43 +41,39 @@ if (gameId) {
   playersColRef = collection(db, "games", gameId, "players");
 }
 
+// ===============================
 // Basis host UI
-const gameInfo      = document.getElementById("gameInfo");
-const roundInfo     = document.getElementById("roundInfo");
-const logPanel      = document.getElementById("logPanel");
+// ===============================
+const gameInfo = document.getElementById("gameInfo");
+const roundInfo = document.getElementById("roundInfo");
+const logPanel = document.getElementById("logPanel");
+
 // Logpaneel verbergen in Community Board modus
 if (isBoardOnly && logPanel) {
   logPanel.style.display = "none";
 }
-const startBtn      = document.getElementById("startRoundBtn");
-const endBtn        = document.getElementById("endRoundBtn"); // oude testknop
-const nextPhaseBtn  = document.getElementById("nextPhaseBtn");
+
+const startBtn = document.getElementById("startRoundBtn");
+const endBtn = document.getElementById("endRoundBtn"); // oude testknop
+const nextPhaseBtn = document.getElementById("nextPhaseBtn");
 const playAsHostBtn = document.getElementById("playAsHostBtn");
 const newRaidBtn = document.getElementById("newRaidBtn");
-const addBotBtn  = document.getElementById("addBotBtn");
-
-if (newRaidBtn) {
-  newRaidBtn.addEventListener("click", startNewRaidFromBoard);
-}
-
-if (addBotBtn) {
-  addBotBtn.addEventListener("click", addBotToCurrentGame);
-}
+const addBotBtn = document.getElementById("addBotBtn");
 
 // Board / zones
 const eventTrackDiv = document.getElementById("eventTrack");
-const yardZone      = document.getElementById("yardZone");
-const caughtZone    = document.getElementById("caughtZone");
-const dashZone      = document.getElementById("dashZone");
+const yardZone = document.getElementById("yardZone");
+const caughtZone = document.getElementById("caughtZone");
+const dashZone = document.getElementById("dashZone");
 
 // Status cards
-const phaseCard      = document.getElementById("phaseCard");
-const leadFoxCard    = document.getElementById("leadFoxCard");
-const roosterCard    = document.getElementById("roosterCard");
-const beaconCard     = document.getElementById("beaconCard");
-const scatterCard    = document.getElementById("scatterCard");
-const sackCard       = document.getElementById("sackCard");
-const lootDeckCard   = document.getElementById("lootDeckCard");
+const phaseCard = document.getElementById("phaseCard");
+const leadFoxCard = document.getElementById("leadFoxCard");
+const roosterCard = document.getElementById("roosterCard");
+const beaconCard = document.getElementById("beaconCard");
+const scatterCard = document.getElementById("scatterCard");
+const sackCard = document.getElementById("sackCard");
+const lootDeckCard = document.getElementById("lootDeckCard");
 const actionDeckCard = document.getElementById("actionDeckCard");
 
 // Fullscreen toggle
@@ -84,41 +85,83 @@ if (fullscreenBtn) {
 }
 
 // QR Join overlay / controls
-const qrJoinOverlay   = document.getElementById("qrJoinOverlay");
-const qrJoinLabel     = document.getElementById("qrJoinLabel");
+const qrJoinOverlay = document.getElementById("qrJoinOverlay");
+const qrJoinLabel = document.getElementById("qrJoinLabel");
 const qrJoinContainer = document.getElementById("qrJoin");
 const qrJoinToggleBtn = document.getElementById("qrJoinToggleBtn");
-const qrJoinCloseBtn  = document.getElementById("qrJoinCloseBtn");
-
+const qrJoinCloseBtn = document.getElementById("qrJoinCloseBtn");
 let qrInstance = null;
 
 // Scoreboard overlay / controls
-const scoreOverlay        = document.getElementById("scoreOverlay");
+const scoreOverlay = document.getElementById("scoreOverlay");
 const scoreOverlayContent = document.getElementById("scoreOverlayContent");
-const showScoreboardBtn   = document.getElementById("showScoreboardBtn");
-const scoreOverlayCloseBtn= document.getElementById("scoreOverlayCloseBtn");
+const showScoreboardBtn = document.getElementById("showScoreboardBtn");
+const scoreOverlayCloseBtn = document.getElementById("scoreOverlayCloseBtn");
 
 // Event poster overlay / controls
-const eventPosterOverlay  = document.getElementById("eventPosterOverlay");
-const eventPosterTitle    = document.getElementById("eventPosterTitle");
-const eventPosterImage    = document.getElementById("eventPosterImage");
-const eventPosterText     = document.getElementById("eventPosterText");
+const eventPosterOverlay = document.getElementById("eventPosterOverlay");
+const eventPosterTitle = document.getElementById("eventPosterTitle");
+const eventPosterImage = document.getElementById("eventPosterImage");
+const eventPosterText = document.getElementById("eventPosterText");
 const eventPosterCloseBtn = document.getElementById("eventPosterCloseBtn");
 
 // Laatste event dat we fullscreen hebben getoond
 let lastRevealedEventId = null;
 
+// Verberg oude test-knop (endBtn)
+if (endBtn) {
+  endBtn.style.display = "none";
+}
+
+// ===============================
+// State
+// ===============================
+let currentRoundNumber = 0;
+let currentRoundForActions = 0;
+let currentPhase = "MOVE";
+let unsubActions = null;
+
+let latestPlayers = [];
+let latestGame = null;
+
+// Voor Lead Fox highlight & kaart
+let currentLeadFoxId = null;
+let currentLeadFoxName = "";
+
+// Scoreboard cache (bestond impliciet in je file; nu expliciet)
+let latestPlayersCacheForScoreboard = [];
+
+// Kleur-cycling voor Dens
+const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
+
+// ===============================
+// Helpers (status/yard)
+// ===============================
+function isActiveRaidStatus(status) {
+  return status === "raid" || status === "round";
+}
+
+function isGameFinished(game) {
+  return !game || game.status === "finished" || game.phase === "END";
+}
+
+function isInYardLocal(p) {
+  return p?.inYard !== false && !p?.dashed;
+}
+function isInYardForEvents(p) {
+  return isInYardLocal(p);
+}
+
+// ===============================
+// Event poster
+// ===============================
 function openEventPoster(eventId) {
   if (!eventPosterOverlay || !eventId) return;
   const ev = getEventById(eventId);
   if (!ev) return;
 
-  if (eventPosterTitle) {
-    eventPosterTitle.textContent = ev.title || "";
-  }
-  if (eventPosterText) {
-    eventPosterText.textContent = ev.text || "";
-  }
+  if (eventPosterTitle) eventPosterTitle.textContent = ev.title || "";
+  if (eventPosterText) eventPosterText.textContent = ev.text || "";
   if (eventPosterImage) {
     const src = ev.imagePoster || ev.imageFront || CARD_BACK;
     eventPosterImage.src = src;
@@ -139,131 +182,15 @@ if (eventPosterCloseBtn && eventPosterOverlay) {
 // Klik op de donkere achtergrond sluit ook
 if (eventPosterOverlay) {
   eventPosterOverlay.addEventListener("click", (e) => {
-    if (e.target === eventPosterOverlay) {
-      closeEventPoster();
-    }
+    if (e.target === eventPosterOverlay) closeEventPoster();
   });
 }
 
-// Verberg oude test-knop (endBtn)
-if (endBtn) {
-  endBtn.style.display = "none";
-}
-
-let currentRoundNumber     = 0;
-let currentRoundForActions = 0;
-let currentPhase           = "MOVE";
-let unsubActions           = null;
-
-let latestPlayers          = [];
-let latestGame             = null;
-
-// Voor Lead Fox highlight & kaart
-let currentLeadFoxId       = null;
-let currentLeadFoxName     = "";
-
 // ===============================
-// BOT LOOP (1x starten, niet per snapshot)
+// QR join
 // ===============================
-let botInterval = null;
-let botBusy = false;
-let botLastKey = null;
-
-function startBotLoop() {
-  // bots nooit laten draaien op community-board-only scherm
-  if (isBoardOnly) return;
-
-  // al actief? niets doen
-  if (botInterval) return;
-
-  botInterval = setInterval(runBotsOnce, 1200); // 1.2s per tick
-}
-
-function stopBotLoop() {
-  if (!botInterval) return;
-  clearInterval(botInterval);
-  botInterval = null;
-  botBusy = false;
-  botLastKey = null;
-}
-async function runBotsOnce() {
-  if (botBusy) return;
-
-  const game = latestGame;
-  if (!gameId || !game) return;
-
-  // bots uit = niks doen
-  if (game.botsEnabled !== true) return;
-
-  // spel klaar = niks doen
-  if (game.status === "finished" || game.phase === "END") return;
-
-  const bots = (latestPlayers || []).filter((p) => !!p?.isBot);
-  if (!bots.length) return;
-
-  // ✅ eerst checken of er werk is (voorkomt “bot spam”)
-  let workNeeded = false;
-
-  if (game.status === "round" && game.phase === "MOVE") {
-    workNeeded = bots.some((b) => canBotMove(game, b));
-  } else if (game.status === "round" && game.phase === "ACTIONS") {
-    const turnId = isBotOpsTurn(game);
-    workNeeded = !!turnId && bots.some((b) => b.id === turnId);
-  } else if (game.status === "round" && game.phase === "DECISION") {
-    workNeeded = bots.some((b) => canBotDecide(game, b));
-  } else {
-    return; // andere fases: geen bot-werk
-  }
-
-  if (!workNeeded) return;
-
-  botBusy = true;
-  try {
-    // ✅ lock: maar 1 scherm (host/board) voert bot acties uit
-    const gotLock = await acquireBotLock();
-    if (!gotLock) return;
-
-    // 1) MOVE
-    if (game.phase === "MOVE") {
-      for (const bot of bots) {
-        if (!canBotMove(game, bot)) continue;
-        await botDoMove(bot.id);
-      }
-      return;
-    }
-
-    // 2) ACTIONS -> PASS (veilig)
-    if (game.phase === "ACTIONS") {
-      const turnId = isBotOpsTurn(game);
-      if (!turnId) return;
-
-      const bot = bots.find((b) => b.id === turnId);
-      if (!bot) return;
-
-      await botDoPass(bot.id);
-      return;
-    }
-
-    // 3) DECISION
-    if (game.phase === "DECISION") {
-      for (const bot of bots) {
-        if (!canBotDecide(game, bot)) continue;
-        await botDoDecision(bot.id);
-      }
-    }
-  } catch (err) {
-    console.error("BOT error in runBotsOnce:", err);
-  } finally {
-    botBusy = false;
-  }
-}
-
-// ==== QR: URL maken richting lobby (index.html) ====
-
 function getJoinUrl(game) {
   if (!game || !game.code) return null;
-
-  // Zorgt voor: https://.../vossenjacht/index.html?code=ABCD
   const url = new URL("index.html", window.location.href);
   url.searchParams.set("code", game.code);
   return url.toString();
@@ -309,15 +236,16 @@ if (qrJoinToggleBtn && qrJoinOverlay) {
 if (qrJoinCloseBtn && qrJoinOverlay) {
   qrJoinCloseBtn.addEventListener("click", closeQrOverlay);
 }
-// SCOREBOARD overlay show/hide
+
+// ===============================
+// Score overlay show/hide
+// ===============================
 function openScoreOverlay() {
   if (!scoreOverlay) return;
-
-  // Als er nog geen scoreboard is opgebouwd: doe het nu
   if (latestGame) {
+    // async, maar ok
     renderFinalScoreboard(latestGame);
   }
-
   scoreOverlay.classList.remove("hidden");
 }
 
@@ -333,8 +261,9 @@ if (scoreOverlayCloseBtn && scoreOverlay) {
   scoreOverlayCloseBtn.addEventListener("click", closeScoreOverlay);
 }
 
-// ==== Helpers: decks, event track ====
-
+// ===============================
+// Deck helpers
+// ===============================
 function shuffleArray(array) {
   const arr = [...array];
   for (let i = arr.length - 1; i > 0; i--) {
@@ -344,10 +273,9 @@ function shuffleArray(array) {
   return arr;
 }
 
-// Event track: precies 12 kaarten, met DOG_CHARGE altijd in de eerste helft
-// en SECOND_CHARGE altijd in de tweede helft.
+// Event track: 12 kaarten, met DOG_CHARGE eerste helft en SECOND_CHARGE tweede helft
 function buildEventTrack() {
-   const SAFE_FIRST_EVENT = "SHEEPDOG_PATROL";
+  const SAFE_FIRST_EVENT = "SHEEPDOG_PATROL";
   const others = [
     "DEN_RED",
     "DEN_BLUE",
@@ -362,16 +290,13 @@ function buildEventTrack() {
   const pool = shuffleArray(others);
 
   const track = new Array(12).fill(null);
-  
   track[0] = SAFE_FIRST_EVENT;
-  
-  const firstHalfSlots  = [1, 2, 3, 4, 5];
+
+  const firstHalfSlots = [1, 2, 3, 4, 5];
   const secondHalfSlots = [6, 7, 8, 9, 10, 11];
 
-  const dogIndex =
-    firstHalfSlots[Math.floor(Math.random() * firstHalfSlots.length)];
-  const secondIndex =
-    secondHalfSlots[Math.floor(Math.random() * secondHalfSlots.length)];
+  const dogIndex = firstHalfSlots[Math.floor(Math.random() * firstHalfSlots.length)];
+  const secondIndex = secondHalfSlots[Math.floor(Math.random() * secondHalfSlots.length)];
 
   track[dogIndex] = "DOG_CHARGE";
   track[secondIndex] = "SECOND_CHARGE";
@@ -381,7 +306,6 @@ function buildEventTrack() {
     if (track[i] !== null) continue;
     track[i] = pool[pIdx++];
   }
-
   return track;
 }
 
@@ -404,9 +328,7 @@ function buildActionDeck() {
   ];
   const deck = [];
   defs.forEach((def) => {
-    for (let i = 0; i < def.count; i++) {
-      deck.push({ name: def.name });
-    }
+    for (let i = 0; i < def.count; i++) deck.push({ name: def.name });
   });
   return shuffleArray(deck);
 }
@@ -419,22 +341,21 @@ function buildLootDeck() {
   return shuffleArray(deck);
 }
 
-// ==== Rendering – Event Track & Status Cards ====
-
+// ===============================
+// Rendering – Event Track & Status Cards
+// ===============================
 function renderEventTrack(game) {
   if (!eventTrackDiv) return;
 
-  const track     = game.eventTrack || [];
-  const revealed  = game.eventRevealed || [];
+  const track = game.eventTrack || [];
+  const revealed = game.eventRevealed || [];
   const currentId = game.currentEventId || null;
 
   eventTrackDiv.innerHTML = "";
 
   if (!track.length) {
     const p = document.createElement("p");
-    p.textContent = game.raidStarted
-      ? "Geen Event Track gevonden."
-      : "Nog geen raid gestart.";
+    p.textContent = game.raidStarted ? "Geen Event Track gevonden." : "Nog geen raid gestart.";
     p.className = "event-track-status";
     eventTrackDiv.appendChild(p);
     return;
@@ -456,26 +377,17 @@ function renderEventTrack(game) {
     const slot = document.createElement("div");
     slot.classList.add("event-slot", `event-state-${state}`);
 
-    // Kies de juiste afbeelding:
-    // - FUTURE  => achterkant (CARD_BACK)
-    // - REVEALED => ev.imageFront of fallback naar CARD_BACK
     let imgUrl = CARD_BACK;
-    if (isRevealed && ev && ev.imageFront) {
-      imgUrl = ev.imageFront;
-    }
-
-    // Volledige achtergrond vervangen door de echte kaart
+    if (isRevealed && ev && ev.imageFront) imgUrl = ev.imageFront;
     slot.style.background = `url(${imgUrl}) center / cover no-repeat`;
 
-    // Klein index-labeltje bovenop (1 t/m 12)
     const idx = document.createElement("div");
     idx.className = "event-slot-index";
     idx.textContent = i + 1;
     slot.appendChild(idx);
 
-    // Klikken op een onthulde kaart → fullscreen poster
     slot.addEventListener("click", () => {
-      if (!isRevealed) return; // future cards blijven geheim
+      if (!isRevealed) return;
       openEventPoster(eventId);
     });
 
@@ -506,26 +418,18 @@ function renderStatusCards(game) {
     `;
   }
 
-  // Rooster – alleen statuskaart, geen tekst / dots
+  // Rooster – alleen statuskaart
   if (roosterCard) {
-    // roosterSeen telt hoeveel ROOSTER_CROW events er al zijn geweest
     const roosterSeenRaw = game.roosterSeen || 0;
-
-    // clamp tussen 0 en 3 (we hebben 4 kaarten)
     const stateIndex = Math.max(0, Math.min(roosterSeenRaw, 3));
 
-    // maak de kaart leeg (geen HTML overlay)
     roosterCard.innerHTML = "";
-
-    // oude rooster-state klassen weghalen
     roosterCard.classList.remove(
       "rooster-state-0",
       "rooster-state-1",
       "rooster-state-2",
       "rooster-state-3"
     );
-
-    // nieuwe state toevoegen → triggert de juiste background-image in CSS
     roosterCard.classList.add(`rooster-state-${stateIndex}`);
   }
 
@@ -534,59 +438,31 @@ function renderStatusCards(game) {
   // Beacon – alleen OFF/ON status art
   if (beaconCard) {
     const on = !!flags.lockEvents;
-
-    // geen tekst meer
     beaconCard.innerHTML = "";
-
-    // oude status-klassen eraf
-    beaconCard.classList.remove(
-      "beacon-on",
-      "beacon-off",
-      "card-status-on"
-    );
-
-    // juiste state erbij
+    beaconCard.classList.remove("beacon-on", "beacon-off", "card-status-on");
     beaconCard.classList.add(on ? "beacon-on" : "beacon-off");
   }
 
-   // Scatter – alleen OFF/ON status art
+  // Scatter – alleen OFF/ON status art
   if (scatterCard) {
     const on = !!flags.scatter;
-
     scatterCard.innerHTML = "";
-
-    scatterCard.classList.remove(
-      "scatter-on",
-      "scatter-off",
-      "card-status-on"
-    );
-
+    scatterCard.classList.remove("scatter-on", "scatter-off", "card-status-on");
     scatterCard.classList.add(on ? "scatter-on" : "scatter-off");
   }
 
-   // Sack – statuskaart (empty / half / full)
+  // Sack – empty/half/full
   if (sackCard) {
-    const sack  = Array.isArray(game.sack) ? game.sack : [];
+    const sack = Array.isArray(game.sack) ? game.sack : [];
     const count = sack.length;
 
-    // geen tekst meer op de kaart
     sackCard.innerHTML = "";
-
-    // oude state-klassen verwijderen
     sackCard.classList.remove("sack-empty", "sack-half", "sack-full");
 
-    // simpele drempels:
-    // 0-3  kaarten  => empty
-    // 4-7 kaarten => half
-    // 8+ kaarten  => full
     let stateClass = "sack-empty";
-    if (count <= 4) {
-      stateClass = "sack-empty";
-    } else if (count <= 8) {
-      stateClass = "sack-half";
-    } else {
-      stateClass = "sack-full";
-    }
+    if (count <= 4) stateClass = "sack-empty";
+    else if (count <= 8) stateClass = "sack-half";
+    else stateClass = "sack-full";
 
     sackCard.classList.add(stateClass);
   }
@@ -602,17 +478,17 @@ function renderStatusCards(game) {
 
   // Action Deck
   if (actionDeckCard) {
-    const actionDeck = Array.isArray(game.actionDeck)
-      ? game.actionDeck
-      : [];
+    const actionDeck = Array.isArray(game.actionDeck) ? game.actionDeck : [];
     actionDeckCard.innerHTML = `
       <div class="card-title">Action Deck</div>
       <div class="card-value">${actionDeck.length}</div>
     `;
   }
 }
-// ==== EINDSCORE / SCOREBOARD + LEADERBOARDS ====
 
+// ===============================
+// EINDSCORE / SCOREBOARD + LEADERBOARDS
+// ===============================
 async function renderFinalScoreboard(game) {
   if (!roundInfo) return;
 
@@ -622,20 +498,18 @@ async function renderFinalScoreboard(game) {
   if (!players.length) {
     const msg = "Geen spelers gevonden voor het scorebord.";
     roundInfo.textContent = msg;
-    if (scoreOverlayContent) {
-      scoreOverlayContent.textContent = msg;
-    }
+    if (scoreOverlayContent) scoreOverlayContent.textContent = msg;
     return;
   }
 
   const enriched = players.map((p) => {
-    const eggs  = p.eggs  || 0;
-    const hens  = p.hens  || 0;
+    const eggs = p.eggs || 0;
+    const hens = p.hens || 0;
     const prize = p.prize || 0;
 
-    const baseScore   = eggs + hens * 2 + prize * 3;
+    const baseScore = eggs + hens * 2 + prize * 3;
     const storedScore = typeof p.score === "number" ? p.score : baseScore;
-    const bonus       = Math.max(0, storedScore - baseScore);
+    const bonus = Math.max(0, storedScore - baseScore);
 
     return {
       ...p,
@@ -650,9 +524,9 @@ async function renderFinalScoreboard(game) {
 
   enriched.sort((a, b) => b.totalScore - a.totalScore);
 
-  const bestScore  = enriched.length ? enriched[0].totalScore : 0;
-  const winners    = enriched.filter((p) => p.totalScore === bestScore);
-  const winnerIds  = new Set(winners.map((w) => w.id));
+  const bestScore = enriched.length ? enriched[0].totalScore : 0;
+  const winners = enriched.filter((p) => p.totalScore === bestScore);
+  const winnerIds = new Set(winners.map((w) => w.id));
 
   roundInfo.innerHTML = "";
 
@@ -698,9 +572,7 @@ async function renderFinalScoreboard(game) {
 
   enriched.forEach((p, idx) => {
     const tr = document.createElement("tr");
-    if (winnerIds.has(p.id)) {
-      tr.classList.add("scoreboard-row-winner");
-    }
+    if (winnerIds.has(p.id)) tr.classList.add("scoreboard-row-winner");
 
     tr.innerHTML = `
       <td>${idx + 1}</td>
@@ -716,7 +588,7 @@ async function renderFinalScoreboard(game) {
 
   section.appendChild(table);
 
-  // ===== multi-leaderboards onder score-tabel =====
+  // Multi-leaderboards onder score-tabel
   const leaderboardSection = document.createElement("div");
   leaderboardSection.className = "leaderboard-section-multi";
   leaderboardSection.innerHTML = `
@@ -740,7 +612,6 @@ async function renderFinalScoreboard(game) {
 
   roundInfo.appendChild(section);
 
-  // Leaderboards vullen voor dit scherm
   await loadLeaderboardsMulti();
 
   // Daarna dezelfde inhoud in de popup zetten
@@ -751,33 +622,27 @@ async function renderFinalScoreboard(game) {
   }
 }
 
-/**
- * Berekent de "echte" leaderboard-score, incl. sack-bonus.
- * E = 1, H = 2, P = 3, + evt. bonus.
- * Neemt de hoogste van data.score en deze berekening.
- */
 function calcLeaderboardScore(data) {
   if (!data) return 0;
 
-  const eggs  = Number(data.eggs  || 0);
-  const hens  = Number(data.hens  || 0);
+  const eggs = Number(data.eggs || 0);
+  const hens = Number(data.hens || 0);
   const prize = Number(data.prize || 0);
-  const bonus = Number(data.bonus || 0); // als je die opslaat
+  const bonus = Number(data.bonus || 0);
 
   const baseFromCounts = eggs + hens * 2 + prize * 3;
-  const stored         = Number(data.score || 0);
+  const stored = Number(data.score || 0);
 
   return Math.max(stored, baseFromCounts + bonus);
 }
 
 function appendLeaderboardRow(listEl, rank, data) {
-  const eggs  = data.eggs  || 0;
-  const hens  = data.hens  || 0;
+  const eggs = data.eggs || 0;
+  const hens = data.hens || 0;
   const prize = data.prize || 0;
   const bonus = data.bonus || 0;
   const score = calcLeaderboardScore(data);
 
-  // Extra safeguard: geen regels met 0 score
   if (score <= 0) return;
 
   let dateLabel = "";
@@ -806,14 +671,13 @@ function appendLeaderboardRow(listEl, rank, data) {
 async function loadLeaderboardsMulti() {
   if (!roundInfo) return;
 
-  const listToday   = roundInfo.querySelector("#leaderboardToday");
-  const listMonth   = roundInfo.querySelector("#leaderboardMonth");
+  const listToday = roundInfo.querySelector("#leaderboardToday");
+  const listMonth = roundInfo.querySelector("#leaderboardMonth");
   const listAllTime = roundInfo.querySelector("#leaderboardAllTime");
-
   if (!listToday || !listMonth || !listAllTime) return;
 
-  listToday.innerHTML   = "";
-  listMonth.innerHTML   = "";
+  listToday.innerHTML = "";
+  listMonth.innerHTML = "";
   listAllTime.innerHTML = "";
 
   try {
@@ -840,13 +704,11 @@ async function fillLeaderboardAllTime(listEl) {
     return;
   }
 
-  let docs = [];
-  snap.forEach((docSnap) => docs.push(docSnap.data()));
+  let docsArr = [];
+  snap.forEach((docSnap) => docsArr.push(docSnap.data()));
 
-  // filter alles met 0 of minder weg
-  docs = docs.filter((d) => calcLeaderboardScore(d) > 0);
-
-  if (!docs.length) {
+  docsArr = docsArr.filter((d) => calcLeaderboardScore(d) > 0);
+  if (!docsArr.length) {
     const li = document.createElement("li");
     li.className = "leaderboard-empty";
     li.textContent = "Nog geen scores.";
@@ -854,14 +716,14 @@ async function fillLeaderboardAllTime(listEl) {
     return;
   }
 
-  docs.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
+  docsArr.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
 
   let rank = 1;
-  docs.forEach((data) => appendLeaderboardRow(listEl, rank++, data));
+  docsArr.forEach((data) => appendLeaderboardRow(listEl, rank++, data));
 }
 
 async function fillLeaderboardToday(listEl) {
-  const now        = new Date();
+  const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
   const leaderboardCol = collection(db, "leaderboard");
@@ -882,11 +744,11 @@ async function fillLeaderboardToday(listEl) {
     return;
   }
 
-  let docs = [];
-  snap.forEach((docSnap) => docs.push(docSnap.data()));
+  let docsArr = [];
+  snap.forEach((docSnap) => docsArr.push(docSnap.data()));
 
-  docs = docs.filter((d) => calcLeaderboardScore(d) > 0);
-  if (!docs.length) {
+  docsArr = docsArr.filter((d) => calcLeaderboardScore(d) > 0);
+  if (!docsArr.length) {
     const li = document.createElement("li");
     li.className = "leaderboard-empty";
     li.textContent = "Nog geen scores voor vandaag.";
@@ -894,14 +756,14 @@ async function fillLeaderboardToday(listEl) {
     return;
   }
 
-  docs.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
-  const top = docs.slice(0, 10);
+  docsArr.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
+  const top = docsArr.slice(0, 10);
 
   top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
 }
 
 async function fillLeaderboardMonth(listEl) {
-  const now        = new Date();
+  const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
   const leaderboardCol = collection(db, "leaderboard");
@@ -922,11 +784,11 @@ async function fillLeaderboardMonth(listEl) {
     return;
   }
 
-  let docs = [];
-  snap.forEach((docSnap) => docs.push(docSnap.data()));
+  let docsArr = [];
+  snap.forEach((docSnap) => docsArr.push(docSnap.data()));
 
-  docs = docs.filter((d) => calcLeaderboardScore(d) > 0);
-  if (!docs.length) {
+  docsArr = docsArr.filter((d) => calcLeaderboardScore(d) > 0);
+  if (!docsArr.length) {
     const li = document.createElement("li");
     li.className = "leaderboard-empty";
     li.textContent = "Nog geen scores voor deze maand.";
@@ -934,33 +796,21 @@ async function fillLeaderboardMonth(listEl) {
     return;
   }
 
-  docs.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
-  const top = docs.slice(0, 25);
+  docsArr.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
+  const top = docsArr.slice(0, 25);
 
   top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
 }
 
-// Kleur-cycling voor Dens
-const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
-
-// ==== INIT RAID (eerste keer) ====
-
-function isInYardLocal(p) {
-  return p?.inYard !== false && !p?.dashed;
-}
-
-function isInYardForEvents(p) {
-  return isInYardLocal(p);
-}
-
-async function initRaidIfNeeded(gameRef) {
-  const snap = await getDoc(gameRef);
+// ===============================
+// INIT RAID (eerste keer)
+// ===============================
+async function initRaidIfNeeded(gameRefParam) {
+  const snap = await getDoc(gameRefParam);
   if (!snap.exists()) return null;
   const game = snap.data();
 
-  if (game.raidStarted) {
-    return game;
-  }
+  if (game.raidStarted) return game;
 
   const playersCol = collection(db, "games", gameId, "players");
   const playersSnap = await getDocs(playersCol);
@@ -970,9 +820,7 @@ async function initRaidIfNeeded(gameRef) {
   });
 
   if (!players.length) {
-    alert(
-      "Geen spelers gevonden. Laat eerst spelers joinen voordat je de raid start."
-    );
+    alert("Geen spelers gevonden. Laat eerst spelers joinen voordat je de raid start.");
     return game;
   }
 
@@ -982,11 +830,12 @@ async function initRaidIfNeeded(gameRef) {
     return aSec - bSec;
   });
 
-  let actionDeck      = buildActionDeck();
-  const lootDeck      = buildLootDeck();
-  const eventTrack    = buildEventTrack();
+  let actionDeck = buildActionDeck();
+  const lootDeck = buildLootDeck();
+  const eventTrack = buildEventTrack();
   const eventRevealed = eventTrack.map(() => false);
-  const flagsRound    = {
+
+  const flagsRound = {
     lockEvents: false,
     scatter: false,
     denImmune: {},
@@ -996,9 +845,9 @@ async function initRaidIfNeeded(gameRef) {
     followTail: {},
     scentChecks: [],
   };
-  
-const colorOffset = Math.floor(Math.random() * DEN_COLORS.length);
-    const updates = [];
+
+  const colorOffset = Math.floor(Math.random() * DEN_COLORS.length);
+  const updates = [];
 
   sorted.forEach((p, index) => {
     const color = DEN_COLORS[(index + colorOffset) % DEN_COLORS.length];
@@ -1017,19 +866,22 @@ const colorOffset = Math.floor(Math.random() * DEN_COLORS.length);
         decision: null,
         hand,
         loot: [],
+        // bot helper (harmless)
+        opsActionPlayedRound: null,
       })
     );
   });
 
   const sack = [];
-  if (lootDeck.length) {
-    sack.push(lootDeck.pop());
-  }
+  if (lootDeck.length) sack.push(lootDeck.pop());
 
   const leadIndex = Math.floor(Math.random() * sorted.length);
 
+  // ✅ botsEnabled NIET resetten naar false
+  const botsEnabled = game.botsEnabled === true;
+
   updates.push(
-    updateDoc(gameRef, {
+    updateDoc(gameRefParam, {
       status: "raid",
       phase: "MOVE",
       round: 0,
@@ -1040,7 +892,7 @@ const colorOffset = Math.floor(Math.random() * DEN_COLORS.length);
       roosterSeen: 0,
       raidEndedByRooster: false,
       raidStarted: true,
-      botsEnabled: false,
+      botsEnabled,
       actionDeck,
       lootDeck,
       sack,
@@ -1052,6 +904,8 @@ const colorOffset = Math.floor(Math.random() * DEN_COLORS.length);
       opsTurnOrder: [],
       opsTurnIndex: 0,
       opsConsecutivePasses: 0,
+      // safe discard pile
+      actionDiscard: [],
     })
   );
 
@@ -1061,20 +915,16 @@ const colorOffset = Math.floor(Math.random() * DEN_COLORS.length);
     round: 0,
     phase: "MOVE",
     kind: "SYSTEM",
-    message:
-      "Nieuwe raid gestart. Lead Fox: " + (sorted[leadIndex]?.name || ""),
+    message: "Nieuwe raid gestart. Lead Fox: " + (sorted[leadIndex]?.name || ""),
   });
 
-  const newSnap = await getDoc(gameRef);
+  const newSnap = await getDoc(gameRefParam);
   return newSnap.exists() ? newSnap.data() : null;
 }
 
-// Geen gameId → melding
-if (!gameId && gameInfo) {
-  gameInfo.textContent = "Geen gameId in de URL";
-}
-
-// ==== HELPER: SPELERS ZONES RENDEREN ====
+// ===============================
+// HELPER: SPELERS ZONES RENDEREN
+// ===============================
 function renderPlayerZones() {
   if (!yardZone || !caughtZone || !dashZone) return;
 
@@ -1082,29 +932,23 @@ function renderPlayerZones() {
 
   // Labels bewaren
   const caughtLabel = caughtZone.querySelector(".player-zone-label");
-  const dashLabel   = dashZone.querySelector(".player-zone-label");
+  const dashLabel = dashZone.querySelector(".player-zone-label");
 
   // Zones leegmaken
-  yardZone.innerHTML   = "";
+  yardZone.innerHTML = "";
   caughtZone.innerHTML = "";
-  dashZone.innerHTML   = "";
+  dashZone.innerHTML = "";
 
   // Labels terugzetten
   if (caughtLabel) caughtZone.appendChild(caughtLabel);
-  if (dashLabel)   dashZone.appendChild(dashLabel);
+  if (dashLabel) dashZone.appendChild(dashLabel);
 
   if (!players.length) return;
 
   // volgorde op joinOrder
   const ordered = [...players].sort((a, b) => {
-    const ao =
-      typeof a.joinOrder === "number"
-        ? a.joinOrder
-        : Number.MAX_SAFE_INTEGER;
-    const bo =
-      typeof b.joinOrder === "number"
-        ? b.joinOrder
-        : Number.MAX_SAFE_INTEGER;
+    const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+    const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
     return ao - bo;
   });
 
@@ -1113,14 +957,10 @@ function renderPlayerZones() {
 
   // LeadIndex uit latestGame
   let leadIdx =
-    latestGame && typeof latestGame.leadIndex === "number"
-      ? latestGame.leadIndex
-      : 0;
+    latestGame && typeof latestGame.leadIndex === "number" ? latestGame.leadIndex : 0;
 
   if (leadIdx < 0) leadIdx = 0;
-  if (baseList.length) {
-    leadIdx = leadIdx % baseList.length;
-  }
+  if (baseList.length) leadIdx = leadIdx % baseList.length;
 
   // bepaal huidige Lead Fox
   currentLeadFoxId = null;
@@ -1135,9 +975,7 @@ function renderPlayerZones() {
   }
 
   // statuskaarten bijwerken (Lead Fox naam)
-  if (latestGame) {
-    renderStatusCards(latestGame);
-  }
+  if (latestGame) renderStatusCards(latestGame);
 
   // kaarten in zones plaatsen
   ordered.forEach((p) => {
@@ -1154,12 +992,7 @@ function renderPlayerZones() {
 
     const isLead = currentLeadFoxId && p.id === currentLeadFoxId;
 
-    const footerBase =
-      zoneType === "yard"
-        ? "IN YARD"
-        : zoneType === "dash"
-        ? "DASHED"
-        : "CAUGHT";
+    const footerBase = zoneType === "yard" ? "IN YARD" : zoneType === "dash" ? "DASHED" : "CAUGHT";
 
     const card = renderPlayerSlotCard(p, {
       size: "medium",
@@ -1169,29 +1002,571 @@ function renderPlayerZones() {
 
     if (!card) return;
 
-    if (zoneType === "yard") {
-      yardZone.appendChild(card);
-    } else if (zoneType === "dash") {
-      dashZone.appendChild(card);
-    } else {
-      caughtZone.appendChild(card);
-    }
+    if (zoneType === "yard") yardZone.appendChild(card);
+    else if (zoneType === "dash") dashZone.appendChild(card);
+    else caughtZone.appendChild(card);
   });
 
   // Als spel klaar is → eindscore tonen
-  if (
-    latestGame &&
-    (latestGame.status === "finished" || latestGame.phase === "END")
-  ) {
+  if (latestGame && isGameFinished(latestGame)) {
     renderFinalScoreboard(latestGame);
   }
 }
 
-// ==== MAIN INIT ====
+// ===============================
+// GAME CODE generator + NEW RAID FROM BOARD
+// ===============================
+function generateCode(length = 4) {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  for (let i = 0; i < length; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+  return code;
+}
+
+async function startNewRaidFromBoard() {
+  try {
+    const code = generateCode();
+
+    const gameRefLocal = await addDoc(collection(db, "games"), {
+      code,
+      status: "lobby",
+      phase: "MOVE",
+      round: 0,
+      currentEventId: null,
+      createdAt: serverTimestamp(),
+      hostUid: null,
+      raidStarted: false,
+      raidEndedByRooster: false,
+      roosterSeen: 0,
+      botsEnabled: true,
+    });
+
+    const newGameId = gameRefLocal.id;
+    gameId = newGameId;
+
+    const url = new URL(window.location.href);
+    url.searchParams.set("game", newGameId);
+    url.searchParams.set("mode", "board");
+    window.location.href = url.toString();
+  } catch (err) {
+    console.error("Fout bij Start nieuwe Raid:", err);
+    alert("Er ging iets mis bij het starten van een nieuwe Raid.");
+  }
+}
+
+if (newRaidBtn) newRaidBtn.addEventListener("click", startNewRaidFromBoard);
+
+// ===============================
+// BOT SYSTEM (autonomous)
+// ===============================
+let hostUid = null;
+let botTickScheduled = false;
+
+// botRunnerId met storage fallback
+let botRunnerId = null;
+try {
+  botRunnerId = localStorage.getItem("botRunnerId");
+} catch (e) {
+  botRunnerId = null;
+}
+
+if (!botRunnerId) {
+  const rnd =
+    globalThis.crypto && crypto.randomUUID
+      ? crypto.randomUUID()
+      : String(Math.random()).slice(2) + "-" + Date.now();
+  botRunnerId = rnd;
+  try {
+    localStorage.setItem("botRunnerId", botRunnerId);
+  } catch (e) {
+    // ignore
+  }
+}
+
+// BOT LOOP (1x starten)
+let botInterval = null;
+let botBusy = false;
+
+function startBotLoop() {
+  if (botInterval) return;
+  botInterval = setInterval(runBotsOnce, 900);
+}
+
+function stopBotLoop() {
+  if (!botInterval) return;
+  clearInterval(botInterval);
+  botInterval = null;
+  botBusy = false;
+}
+
+function scheduleBotTick() {
+  if (botTickScheduled) return;
+  botTickScheduled = true;
+
+  setTimeout(async () => {
+    botTickScheduled = false;
+    try {
+      await runBotsOnce();
+    } catch (e) {
+      console.warn("[BOTS] runBotsOnce error", e);
+    }
+  }, 250);
+}
+
+function isBotPlayer(p) {
+  return !!p?.isBot;
+}
+
+function canBotMove(game, p) {
+  if (!game || !p) return false;
+  if (!isActiveRaidStatus(game.status)) return false;
+  if (game.phase !== "MOVE") return false;
+  if (game.raidEndedByRooster) return false;
+  if (!isInYardLocal(p)) return false;
+
+  const moved = Array.isArray(game.movedPlayerIds) ? game.movedPlayerIds : [];
+  return !moved.includes(p.id);
+}
+
+function canBotDecide(game, p) {
+  if (!game || !p) return false;
+  if (!isActiveRaidStatus(game.status)) return false;
+  if (game.phase !== "DECISION") return false;
+  if (game.raidEndedByRooster) return false;
+  if (!isInYardLocal(p)) return false;
+  if (p.decision) return false;
+  return true;
+}
+
+function isOpsTurn(game) {
+  if (!game) return null;
+  if (!isActiveRaidStatus(game.status)) return null;
+  if (game.phase !== "ACTIONS") return null;
+
+  const order = game.opsTurnOrder || [];
+  if (!order.length) return null;
+
+  const idx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
+  if (idx < 0 || idx >= order.length) return null;
+
+  return order[idx];
+}
+
+async function logBot(gameIdParam, payload) {
+  await addDoc(collection(db, "games", gameIdParam, "actions"), {
+    ...payload,
+    createdAt: serverTimestamp(),
+  });
+
+  await addLog(gameIdParam, {
+    round: payload.round ?? 0,
+    phase: payload.phase ?? "",
+    kind: "BOT",
+    playerId: payload.playerId,
+    message: payload.message || `${payload.playerName || "BOT"}: ${payload.choice}`,
+  });
+}
+
+async function acquireBotLock() {
+  if (!gameId) return false;
+
+  const ref = doc(db, "games", gameId);
+  const now = Date.now();
+  const me = hostUid || botRunnerId;
+
+  try {
+    const ok = await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return false;
+
+      const g = snap.data();
+      if (g?.botsEnabled !== true) return false;
+      if (isGameFinished(g)) return false;
+
+      const lockUntil = Number(g.botsLockUntil || 0);
+      const lockBy = String(g.botsLockBy || "");
+
+      if (lockUntil > now && lockBy && lockBy !== me) return false;
+
+      tx.update(ref, {
+        botsLockUntil: now + 1600,
+        botsLockBy: me,
+      });
+      return true;
+    });
+
+    return ok === true;
+  } catch (e) {
+    console.warn("[BOTS] lock tx failed", e);
+    return false;
+  }
+}
+
+// ===============================
+// BOT MOVE
+// ===============================
+async function botDoMove(botId) {
+  const gRef = doc(db, "games", gameId);
+  const pRef = doc(db, "games", gameId, "players", botId);
+
+  let logPayload = null;
+
+  await runTransaction(db, async (tx) => {
+    const gSnap = await tx.get(gRef);
+    const pSnap = await tx.get(pRef);
+    if (!gSnap.exists() || !pSnap.exists()) return;
+
+    const g = gSnap.data();
+    const p = { id: pSnap.id, ...pSnap.data() };
+
+    if (!canBotMove(g, p)) return;
+
+    const moved = Array.isArray(g.movedPlayerIds) ? [...g.movedPlayerIds] : [];
+    const hand = Array.isArray(p.hand) ? [...p.hand] : [];
+    const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
+    const lootDeck = Array.isArray(g.lootDeck) ? [...g.lootDeck] : [];
+    const loot = Array.isArray(p.loot) ? [...p.loot] : [];
+
+    // Strategie: als hand klein -> forage 2, anders snatch loot
+    if (hand.length < 2 && actionDeck.length) {
+      let drawn = 0;
+      for (let i = 0; i < 2; i++) {
+        if (!actionDeck.length) break;
+        hand.push(actionDeck.pop());
+        drawn++;
+      }
+
+      tx.update(pRef, { hand });
+      tx.update(gRef, {
+        actionDeck,
+        movedPlayerIds: [...new Set([...moved, botId])],
+      });
+
+      logPayload = {
+        round: g.round || 0,
+        phase: "MOVE",
+        playerId: botId,
+        playerName: p.name || "BOT",
+        choice: `MOVE_FORAGE_${drawn}cards`,
+        message: `BOT deed FORAGE (${drawn} kaart(en))`,
+      };
+    } else {
+      if (!lootDeck.length) return;
+      const card = lootDeck.pop();
+      loot.push(card);
+
+      tx.update(pRef, { loot });
+      tx.update(gRef, {
+        lootDeck,
+        movedPlayerIds: [...new Set([...moved, botId])],
+      });
+
+      logPayload = {
+        round: g.round || 0,
+        phase: "MOVE",
+        playerId: botId,
+        playerName: p.name || "BOT",
+        choice: "MOVE_SNATCH_FROM_DECK",
+        message: `BOT deed SNATCH (${card.t || "Loot"} ${card.v ?? ""})`,
+      };
+    }
+  });
+
+  if (logPayload) await logBot(gameId, logPayload);
+}
+
+// ===============================
+// BOT ACTIONS (OPS): play action OR PASS
+// - Bots spelen max 1 kaart per ronde in OPS (per bot)
+// - Na action play: opsConsecutivePasses reset naar 0
+// - Anders PASS: opsConsecutivePasses++
+// ===============================
+const BOT_ACTION_PROB = 0.45;
+
+// simpele, veilige effecten (alle overige: alleen discard+log)
+const BOT_SIMPLE_EFFECTS = new Set(["Burrow Beacon", "Scatter!", "Scent Check", "Follow the Tail"]);
+
+function pickBotActionName(hand) {
+  const names = (hand || []).map((c) => c?.name).filter(Boolean);
+  if (!names.length) return null;
+
+  const preferred = names.filter((n) => BOT_SIMPLE_EFFECTS.has(n));
+  if (preferred.length) return preferred[Math.floor(Math.random() * preferred.length)];
+  return names[Math.floor(Math.random() * names.length)];
+}
+
+async function botDoOpsTurn(botId) {
+  const gRef = doc(db, "games", gameId);
+  const pRef = doc(db, "games", gameId, "players", botId);
+
+  let logPayload = null;
+
+  await runTransaction(db, async (tx) => {
+    const gSnap = await tx.get(gRef);
+    const pSnap = await tx.get(pRef);
+    if (!gSnap.exists() || !pSnap.exists()) return;
+
+    const g = gSnap.data();
+    const p = { id: pSnap.id, ...pSnap.data() };
+
+    if (!isActiveRaidStatus(g.status) || g.phase !== "ACTIONS") return;
+
+    const order = g.opsTurnOrder || [];
+    const idx = typeof g.opsTurnIndex === "number" ? g.opsTurnIndex : 0;
+    if (!order.length || order[idx] !== botId) return;
+
+    const roundNum = Number(g.round || 0);
+    const nextIndex = (idx + 1) % order.length;
+
+    const alreadyPlayed = Number(p.opsActionPlayedRound || 0) === roundNum;
+
+    const hand = Array.isArray(p.hand) ? [...p.hand] : [];
+    const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
+    const discard = Array.isArray(g.actionDiscard) ? [...g.actionDiscard] : [];
+    const flagsRound = g.flagsRound ? { ...g.flagsRound } : {};
+
+    let willPlay = !alreadyPlayed && hand.length && Math.random() < BOT_ACTION_PROB;
+
+    if (willPlay) {
+      const cardName = pickBotActionName(hand);
+      if (!cardName) {
+        willPlay = false;
+      } else {
+        // remove 1 instance from hand
+        const removeIdx = hand.findIndex((c) => c?.name === cardName);
+        if (removeIdx >= 0) hand.splice(removeIdx, 1);
+
+        // discard
+        discard.push({ name: cardName, by: botId, round: roundNum, at: Date.now() });
+
+        // draw 1 replacement (optioneel)
+        if (actionDeck.length) hand.push(actionDeck.pop());
+
+        // simpele effecten (veilig)
+        if (cardName === "Burrow Beacon") {
+          flagsRound.lockEvents = true;
+        }
+        if (cardName === "Scatter!") {
+          flagsRound.scatter = true;
+          tx.update(gRef, { scatterArmed: true });
+        }
+        if (cardName === "Scent Check") {
+          const arr = Array.isArray(flagsRound.scentChecks) ? [...flagsRound.scentChecks] : [];
+          if (!arr.includes(botId)) arr.push(botId);
+          flagsRound.scentChecks = arr;
+        }
+        if (cardName === "Follow the Tail") {
+          const ft = flagsRound.followTail ? { ...flagsRound.followTail } : {};
+          ft[botId] = true;
+          flagsRound.followTail = ft;
+        }
+
+        // update player + game, reset pass-chain
+        tx.update(pRef, { hand, opsActionPlayedRound: roundNum });
+        tx.update(gRef, {
+          actionDeck,
+          actionDiscard: discard,
+          flagsRound,
+          opsTurnIndex: nextIndex,
+          opsConsecutivePasses: 0,
+        });
+
+        logPayload = {
+          round: roundNum,
+          phase: "ACTIONS",
+          playerId: botId,
+          playerName: p.name || "BOT",
+          choice: `ACTION_PLAY_${cardName}`,
+          message: `BOT speelt Action Card: ${cardName}`,
+        };
+        return;
+      }
+    }
+
+    // PASS
+    const passes = Number(g.opsConsecutivePasses || 0) + 1;
+
+    tx.update(gRef, {
+      opsTurnIndex: nextIndex,
+      opsConsecutivePasses: passes,
+    });
+
+    logPayload = {
+      round: roundNum,
+      phase: "ACTIONS",
+      playerId: botId,
+      playerName: p.name || "BOT",
+      choice: "ACTION_PASS",
+      message: "BOT kiest PASS",
+    };
+  });
+
+  if (logPayload) await logBot(gameId, logPayload);
+}
+
+// ===============================
+// BOT DECISION
+// ===============================
+async function botDoDecision(botId) {
+  const pRef = doc(db, "games", gameId, "players", botId);
+  const gRef = doc(db, "games", gameId);
+
+  let logPayload = null;
+
+  await runTransaction(db, async (tx) => {
+    const gSnap = await tx.get(gRef);
+    const pSnap = await tx.get(pRef);
+    if (!gSnap.exists() || !pSnap.exists()) return;
+
+    const g = gSnap.data();
+    const p = { id: pSnap.id, ...pSnap.data() };
+
+    if (!canBotDecide(g, p)) return;
+
+    const loot = Array.isArray(p.loot) ? p.loot : [];
+    const lootPts = loot.reduce((sum, c) => sum + (Number(c?.v) || 0), 0);
+
+    let kind = "LURK";
+    if ((g.roosterSeen || 0) >= 2 && lootPts >= 3) kind = "DASH";
+    else if (!p.burrowUsed && Math.random() < 0.15) kind = "BURROW";
+
+    const update = { decision: kind };
+    if (kind === "BURROW" && !p.burrowUsed) update.burrowUsed = true;
+
+    tx.update(pRef, update);
+
+    logPayload = {
+      round: g.round || 0,
+      phase: "DECISION",
+      playerId: botId,
+      playerName: p.name || "BOT",
+      choice: `DECISION_${kind}`,
+      message: `BOT kiest ${kind}`,
+    };
+  });
+
+  if (logPayload) await logBot(gameId, logPayload);
+}
+
+// ===============================
+// BOT TICK
+// ===============================
+async function runBotsOnce() {
+  if (botBusy) return;
+
+  const game = latestGame;
+  if (!gameId || !game) return;
+  if (game.botsEnabled !== true) return;
+  if (isGameFinished(game)) return;
+  if (!isActiveRaidStatus(game.status)) return;
+
+  const bots = (latestPlayers || []).filter((p) => isBotPlayer(p));
+  if (!bots.length) return;
+
+  // werk nodig?
+  let workNeeded = false;
+
+  if (game.phase === "MOVE") {
+    workNeeded = bots.some((b) => canBotMove(game, b));
+  } else if (game.phase === "ACTIONS") {
+    const turnId = isOpsTurn(game);
+    workNeeded = !!turnId && bots.some((b) => b.id === turnId);
+  } else if (game.phase === "DECISION") {
+    workNeeded = bots.some((b) => canBotDecide(game, b));
+  } else {
+    return;
+  }
+
+  if (!workNeeded) return;
+
+  botBusy = true;
+  try {
+    const gotLock = await acquireBotLock();
+    if (!gotLock) return;
+
+    if (game.phase === "MOVE") {
+      for (const bot of bots) {
+        if (!canBotMove(game, bot)) continue;
+        await botDoMove(bot.id);
+      }
+      return;
+    }
+
+    if (game.phase === "ACTIONS") {
+      const turnId = isOpsTurn(game);
+      if (!turnId) return;
+      const bot = bots.find((b) => b.id === turnId);
+      if (!bot) return;
+      await botDoOpsTurn(bot.id);
+      return;
+    }
+
+    if (game.phase === "DECISION") {
+      for (const bot of bots) {
+        if (!canBotDecide(game, bot)) continue;
+        await botDoDecision(bot.id);
+      }
+    }
+  } catch (err) {
+    console.error("BOT error in runBotsOnce:", err);
+  } finally {
+    botBusy = false;
+  }
+}
+
+// ===============================
+// BOT-speler toevoegen aan huidige game
+// ===============================
+async function addBotToCurrentGame() {
+  try {
+    if (!gameId) {
+      alert("Geen actief spel gevonden (gameId ontbreekt).");
+      return;
+    }
+
+    await addDoc(collection(db, "games", gameId, "players"), {
+      name: "BOT Fox",
+      isBot: true,
+      isHost: false,
+      uid: null,
+      score: 0,
+      joinedAt: serverTimestamp(),
+      joinOrder: null,
+      color: null,
+      inYard: true,
+      dashed: false,
+      burrowUsed: false,
+      decision: null,
+      hand: [],
+      loot: [],
+      opsActionPlayedRound: null,
+    });
+
+    await updateDoc(doc(db, "games", gameId), { botsEnabled: true });
+
+    console.log("BOT toegevoegd aan game:", gameId);
+  } catch (err) {
+    console.error("Fout bij BOT toevoegen:", err);
+    alert("Er ging iets mis bij het toevoegen van een BOT.");
+  }
+}
+
+if (addBotBtn) addBotBtn.addEventListener("click", addBotToCurrentGame);
+
+// ===============================
+// MAIN INIT
+// ===============================
+if (!gameId && gameInfo) {
+  gameInfo.textContent = "Geen gameId in de URL";
+}
+
 initAuth(async (authUser) => {
   hostUid = authUser?.uid || null;
+
   if (!gameId || !gameRef || !playersColRef) return;
-  startBotRunner({ db, gameId, addLog, isBoardOnly });
+
+  // botloop altijd starten; lock voorkomt dubbel (host/board)
+  startBotLoop();
 
   // ==== GAME SNAPSHOT ====
   onSnapshot(gameRef, (snap) => {
@@ -1202,56 +1577,41 @@ initAuth(async (authUser) => {
 
     const game = snap.data();
     latestGame = { id: snap.id, ...game };
-    
+
     currentRoundNumber = game.round || 0;
-    currentPhase       = game.phase || "MOVE";
+    currentPhase = game.phase || "MOVE";
 
-    const event =
-      game.currentEventId && game.phase === "REVEAL"
-        ? getEventById(game.currentEventId)
-        : null;
+    // Stop bots bij einde
+    if (isGameFinished(game)) stopBotLoop();
 
-    startBotLoop();
-
-if (game.status === "finished" || game.phase === "END") {
-  stopBotLoop();
-}
-    
     // In REVEAL-fase: active event groot tonen
-if (game.phase === "REVEAL" && game.currentEventId) {
-  if (game.currentEventId !== lastRevealedEventId) {
-    lastRevealedEventId = game.currentEventId;
-    openEventPoster(game.currentEventId);
-  }
-} else {
-  lastRevealedEventId = null;
-}
+    if (game.phase === "REVEAL" && game.currentEventId) {
+      if (game.currentEventId !== lastRevealedEventId) {
+        lastRevealedEventId = game.currentEventId;
+        openEventPoster(game.currentEventId);
+      }
+    } else {
+      lastRevealedEventId = null;
+    }
 
-    // game-state veranderd → zones opnieuw tekenen (Lead Fox kan wisselen)
+    // zones opnieuw tekenen (Lead Fox kan wisselen)
     renderPlayerZones();
 
     // Start-knop blokkeren als spel al klaar is
     if (startBtn) {
-      startBtn.disabled =
-        game.status === "finished" || game.raidEndedByRooster === true;
+      startBtn.disabled = game.status === "finished" || game.raidEndedByRooster === true;
     }
 
     renderEventTrack(game);
     renderStatusCards(game);
 
-    // QR-code updaten als er een game-code is
-    if (game.code) {
-      renderJoinQr(game);
-    }
+    // QR-code updaten
+    if (game.code) renderJoinQr(game);
 
     let extraStatus = "";
-    if (game.raidEndedByRooster) {
-      extraStatus = " – Raid geëindigd door Rooster Crow (limiet bereikt)";
-    }
+    if (game.raidEndedByRooster) extraStatus = " – Raid geëindigd door Rooster Crow (limiet bereikt)";
     if (game.status === "finished") {
-      extraStatus = extraStatus
-        ? extraStatus + " – spel afgelopen."
-        : " – spel afgelopen.";
+      extraStatus = extraStatus ? extraStatus + " – spel afgelopen." : " – spel afgelopen.";
     }
 
     if (gameInfo) {
@@ -1261,7 +1621,7 @@ if (game.phase === "REVEAL" && game.currentEventId) {
     }
 
     // Spel afgelopen → eindscore tonen & actions-stoppen
-    if (game.status === "finished" || game.phase === "END") {
+    if (isGameFinished(game)) {
       if (unsubActions) {
         unsubActions();
         unsubActions = null;
@@ -1270,10 +1630,8 @@ if (game.phase === "REVEAL" && game.currentEventId) {
       return;
     }
 
-    if (game.status !== "round" && game.status !== "raid") {
-      if (roundInfo) {
-        roundInfo.textContent = "Nog geen actieve ronde.";
-      }
+    if (!isActiveRaidStatus(game.status)) {
+      if (roundInfo) roundInfo.textContent = "Nog geen actieve ronde.";
       if (unsubActions) {
         unsubActions();
         unsubActions = null;
@@ -1281,17 +1639,14 @@ if (game.phase === "REVEAL" && game.currentEventId) {
       return;
     }
 
-    if (currentRoundForActions === currentRoundNumber && unsubActions) {
-      return;
-    }
-
+    if (currentRoundForActions === currentRoundNumber && unsubActions) return;
     currentRoundForActions = currentRoundNumber;
 
+    const event =
+      game.currentEventId && game.phase === "REVEAL" ? getEventById(game.currentEventId) : null;
+
     const actionsCol = collection(db, "games", gameId, "actions");
-    const actionsQuery = query(
-      actionsCol,
-      where("round", "==", currentRoundForActions)
-    );
+    const actionsQuery = query(actionsCol, where("round", "==", currentRoundForActions));
 
     if (unsubActions) unsubActions();
     unsubActions = onSnapshot(actionsQuery, (snapActions) => {
@@ -1302,16 +1657,14 @@ if (game.phase === "REVEAL" && game.currentEventId) {
 
       if (event) {
         const h2 = document.createElement("h2");
-        h2.textContent =
-          `Ronde ${currentRoundForActions} – fase: ${phaseLabel}: ${event.title}`;
+        h2.textContent = `Ronde ${currentRoundForActions} – fase: ${phaseLabel}: ${event.title}`;
         const pText = document.createElement("p");
         pText.textContent = event.text;
         roundInfo.appendChild(h2);
         roundInfo.appendChild(pText);
       } else {
         const h2 = document.createElement("h2");
-        h2.textContent =
-          `Ronde ${currentRoundForActions} – fase: ${phaseLabel}`;
+        h2.textContent = `Ronde ${currentRoundForActions} – fase: ${phaseLabel}`;
         roundInfo.appendChild(h2);
       }
 
@@ -1326,9 +1679,7 @@ if (game.phase === "REVEAL" && game.currentEventId) {
         const a = aDoc.data();
         const line = document.createElement("div");
         line.className = "round-action-line";
-        line.textContent = `${a.playerName || a.playerId}: ${a.phase} – ${
-          a.choice
-        }`;
+        line.textContent = `${a.playerName || a.playerId}: ${a.phase} – ${a.choice}`;
         list.appendChild(line);
       });
       roundInfo.appendChild(list);
@@ -1343,13 +1694,13 @@ if (game.phase === "REVEAL" && game.currentEventId) {
     });
     latestPlayers = players;
 
-   renderPlayerZones();
-   scheduleBotTick();
+    renderPlayerZones();
+    scheduleBotTick();
   });
 
   // ==== LOGPANEL ====
   if (!isBoardOnly) {
-    const logCol   = collection(db, "games", gameId, "log");
+    const logCol = collection(db, "games", gameId, "log");
     const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
 
     onSnapshot(logQuery, (snap) => {
@@ -1365,10 +1716,9 @@ if (game.phase === "REVEAL" && game.currentEventId) {
       entries.forEach((e) => {
         const div = document.createElement("div");
         div.className = "log-line";
-        div.textContent =
-          `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${
-            e.message ?? ""
-          }`;
+        div.textContent = `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${
+          e.message ?? ""
+        }`;
         inner.appendChild(div);
       });
       logPanel.appendChild(inner);
@@ -1382,16 +1732,12 @@ if (game.phase === "REVEAL" && game.currentEventId) {
       if (!game) return;
 
       if (game.status === "finished") {
-        alert(
-          "Dit spel is al afgelopen. Start een nieuwe game als je opnieuw wilt spelen."
-        );
+        alert("Dit spel is al afgelopen. Start een nieuwe game als je opnieuw wilt spelen.");
         return;
       }
 
       if (game.raidEndedByRooster) {
-        alert(
-          "De raid is geëindigd door de Rooster-limiet. Er kunnen geen nieuwe rondes meer gestart worden."
-        );
+        alert("De raid is geëindigd door de Rooster-limiet. Er kunnen geen nieuwe rondes meer gestart worden.");
         return;
       }
 
@@ -1399,30 +1745,19 @@ if (game.phase === "REVEAL" && game.currentEventId) {
       const newRound = previousRound + 1;
 
       const ordered = [...latestPlayers].sort((a, b) => {
-        const ao =
-          typeof a.joinOrder === "number"
-            ? a.joinOrder
-            : Number.MAX_SAFE_INTEGER;
-        const bo =
-          typeof b.joinOrder === "number"
-            ? b.joinOrder
-            : Number.MAX_SAFE_INTEGER;
+        const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+        const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
         return ao - bo;
       });
 
       const activeOrdered = ordered.filter(isInYardLocal);
       const baseList = activeOrdered.length ? activeOrdered : [];
 
-      let leadIndex =
-        typeof game.leadIndex === "number" ? game.leadIndex : 0;
+      let leadIndex = typeof game.leadIndex === "number" ? game.leadIndex : 0;
 
       if (baseList.length) {
-        leadIndex =
-          ((leadIndex % baseList.length) + baseList.length) % baseList.length;
-
-        if (previousRound >= 1) {
-          leadIndex = (leadIndex + 1) % baseList.length;
-        }
+        leadIndex = ((leadIndex % baseList.length) + baseList.length) % baseList.length;
+        if (previousRound >= 1) leadIndex = (leadIndex + 1) % baseList.length;
       } else {
         leadIndex = 0;
       }
@@ -1459,9 +1794,7 @@ if (game.phase === "REVEAL" && game.currentEventId) {
         round: newRound,
         phase: "MOVE",
         kind: "SYSTEM",
-        message: leadName
-          ? `Ronde ${newRound} gestart. Lead Fox: ${leadName}.`
-          : `Ronde ${newRound} gestart.`,
+        message: leadName ? `Ronde ${newRound} gestart. Lead Fox: ${leadName}.` : `Ronde ${newRound} gestart.`,
       });
     });
   }
@@ -1473,7 +1806,7 @@ if (game.phase === "REVEAL" && game.currentEventId) {
       if (!snap.exists()) return;
       const game = snap.data();
 
-      const current     = game.phase || "MOVE";
+      const current = game.phase || "MOVE";
       const roundNumber = game.round || 0;
 
       if (game.status === "finished" || current === "END") {
@@ -1481,7 +1814,7 @@ if (game.phase === "REVEAL" && game.currentEventId) {
         return;
       }
 
-      if (game.status !== "round" && game.status !== "raid") {
+      if (!isActiveRaidStatus(game.status)) {
         alert("Er is geen actieve ronde in de raid.");
         return;
       }
@@ -1493,9 +1826,7 @@ if (game.phase === "REVEAL" && game.currentEventId) {
         const moved = game.movedPlayerIds || [];
 
         if (mustMoveCount > 0 && moved.length < mustMoveCount) {
-          alert(
-            `Niet alle vossen hebben hun MOVE gedaan (${moved.length}/${mustMoveCount}).`
-          );
+          alert(`Niet alle vossen hebben hun MOVE gedaan (${moved.length}/${mustMoveCount}).`);
           return;
         }
 
@@ -1512,24 +1843,15 @@ if (game.phase === "REVEAL" && game.currentEventId) {
         }
 
         const ordered = [...active].sort((a, b) => {
-          const ao =
-            typeof a.joinOrder === "number"
-              ? a.joinOrder
-              : Number.MAX_SAFE_INTEGER;
-          const bo =
-            typeof b.joinOrder === "number"
-              ? b.joinOrder
-              : Number.MAX_SAFE_INTEGER;
+          const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+          const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
           return ao - bo;
         });
 
         const baseOrder = ordered.map((p) => p.id);
 
-        let leadIndex =
-          typeof game.leadIndex === "number" ? game.leadIndex : 0;
-        if (leadIndex < 0 || leadIndex >= baseOrder.length) {
-          leadIndex = 0;
-        }
+        let leadIndex = typeof game.leadIndex === "number" ? game.leadIndex : 0;
+        if (leadIndex < 0 || leadIndex >= baseOrder.length) leadIndex = 0;
 
         const opsTurnOrder = [];
         for (let i = 0; i < baseOrder.length; i++) {
@@ -1547,8 +1869,7 @@ if (game.phase === "REVEAL" && game.currentEventId) {
           round: roundNumber,
           phase: "ACTIONS",
           kind: "SYSTEM",
-          message:
-            "OPS-fase gestart. Lead Fox begint met het spelen van Action Cards of PASS.",
+          message: "OPS-fase gestart. Lead Fox begint met het spelen van Action Cards of PASS.",
         });
 
         return;
@@ -1561,9 +1882,7 @@ if (game.phase === "REVEAL" && game.currentEventId) {
         const passes = game.opsConsecutivePasses || 0;
 
         if (activeCount > 0 && passes < activeCount) {
-          alert(
-            `OPS-fase is nog bezig: opeenvolgende PASSes: ${passes}/${activeCount}.`
-          );
+          alert(`OPS-fase is nog bezig: opeenvolgende PASSes: ${passes}/${activeCount}.`);
           return;
         }
 
@@ -1573,8 +1892,7 @@ if (game.phase === "REVEAL" && game.currentEventId) {
           round: roundNumber,
           phase: "DECISION",
           kind: "SYSTEM",
-          message:
-            "Iedereen heeft na elkaar gepast in OPS – door naar DECISION-fase.",
+          message: "Iedereen heeft na elkaar gepast in OPS – door naar DECISION-fase.",
         });
 
         return;
@@ -1586,15 +1904,12 @@ if (game.phase === "REVEAL" && game.currentEventId) {
         const decided = active.filter((p) => !!p.decision).length;
 
         if (active.length > 0 && decided < active.length) {
-          alert(
-            `Niet alle vossen hebben een DECISION gekozen (${decided}/${active.length}).`
-          );
+          alert(`Niet alle vossen hebben een DECISION gekozen (${decided}/${active.length}).`);
           return;
         }
 
         const track = game.eventTrack || [];
-        let eventIndex =
-          typeof game.eventIndex === "number" ? game.eventIndex : 0;
+        let eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
 
         if (!track.length || eventIndex >= track.length) {
           alert("Er zijn geen events meer op de Track om te onthullen.");
@@ -1603,9 +1918,8 @@ if (game.phase === "REVEAL" && game.currentEventId) {
 
         const eventId = track[eventIndex];
         const ev = getEventById(eventId);
-        const revealed = game.eventRevealed
-          ? [...game.eventRevealed]
-          : track.map(() => false);
+
+        const revealed = game.eventRevealed ? [...game.eventRevealed] : track.map(() => false);
         revealed[eventIndex] = true;
 
         let newRoosterSeen = game.roosterSeen || 0;
@@ -1650,8 +1964,7 @@ if (game.phase === "REVEAL" && game.currentEventId) {
               round: roundNumber,
               phase: "REVEAL",
               kind: "SYSTEM",
-              message:
-                "Derde Rooster Crow: dashers verdelen de Sack en daarna eindigt de raid.",
+              message: "Derde Rooster Crow: dashers verdelen de Sack en daarna eindigt de raid.",
             });
           }
         }
@@ -1660,32 +1973,24 @@ if (game.phase === "REVEAL" && game.currentEventId) {
         return;
       }
 
-      // REVEAL -> MOVE of EINDE – afhankelijk van overgebleven foxes in de Yard
+      // REVEAL -> MOVE of EINDE
       if (current === "REVEAL") {
         const latestSnap = await getDoc(gameRef);
         if (!latestSnap.exists()) return;
         const latest = latestSnap.data();
 
-        // Als engine.js het spel al heeft afgesloten (bv. bij 3x Rooster Crow)
-        if (latest && (latest.status === "finished" || latest.phase === "END")) {
-          return;
-        }
+        if (latest && isGameFinished(latest)) return;
 
-        // Check: zijn er na REVEAL nog foxes in de Yard?
         const activeAfterReveal = latestPlayers.filter(isInYardLocal);
 
         if (activeAfterReveal.length === 0) {
-          await updateDoc(gameRef, {
-            status: "finished",
-            phase: "END",
-          });
+          await updateDoc(gameRef, { status: "finished", phase: "END" });
 
           await addLog(gameId, {
             round: roundNumber,
             phase: "END",
             kind: "SYSTEM",
-            message:
-              "Geen vossen meer in de Yard na REVEAL – de raid is afgelopen.",
+            message: "Geen vossen meer in de Yard na REVEAL – de raid is afgelopen.",
           });
 
           return;
@@ -1697,8 +2002,7 @@ if (game.phase === "REVEAL" && game.currentEventId) {
           round: roundNumber,
           phase: "MOVE",
           kind: "SYSTEM",
-          message:
-            "REVEAL afgerond. Terug naar MOVE-fase voor de volgende ronde.",
+          message: "REVEAL afgerond. Terug naar MOVE-fase voor de volgende ronde.",
         });
 
         return;
@@ -1707,355 +2011,8 @@ if (game.phase === "REVEAL" && game.currentEventId) {
   }
 });
 
-// Simpele code-generator, zelfde stijl als index
-function generateCode(length = 4) {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
-  for (let i = 0; i < length; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return code;
-}
-
-// Nieuwe Raid starten vanaf het Community Board
-async function startNewRaidFromBoard() {
-  try {
-    const code = generateCode();
-
-const gameRefLocal = await addDoc(collection(db, "games"), {
-  code,
-  status: "lobby",
-  phase: "MOVE",
-  round: 0,
-  currentEventId: null,
-  createdAt: serverTimestamp(),
-  hostUid: null,
-  raidStarted: false,
-  raidEndedByRooster: false,
-  roosterSeen: 0,
-  botsEnabled: true, 
-  });
-
-    const newGameId = gameRefLocal.id;
-    gameId = newGameId;
-
-    const url = new URL(window.location.href);
-    url.searchParams.set("game", newGameId);
-    url.searchParams.set("mode", "board");
-    window.location.href = url.toString();
-  } catch (err) {
-    console.error("Fout bij Start nieuwe Raid:", err);
-    alert("Er ging iets mis bij het starten van een nieuwe Raid.");
-  }
-}
-
 // ===============================
-// BOT RUNNER (minimal)
-// - MOVE: snatch/forage
-// - ACTIONS: PASS only (veilig)
-// - DECISION: lurk/burrow/dash simple
+// Safety: listeners buttons exist
 // ===============================
-
-let hostUid = null;
-let botTickScheduled = false;
-
-// stabiele runner-id (zodat lock ook werkt als hostUid null is)
-let botRunnerId = localStorage.getItem("botRunnerId");
-if (!botRunnerId) {
-  const rnd =
-    (globalThis.crypto && crypto.randomUUID)
-      ? crypto.randomUUID()
-      : String(Math.random()).slice(2) + "-" + Date.now();
-  botRunnerId = rnd;
-  localStorage.setItem("botRunnerId", botRunnerId);
-}
-
-function isBotPlayer(p) {
-  return !!p?.isBot;
-}
-
-function canBotMove(game, p) {
-  if (!game || !p) return false;
-  if (game.status !== "round") return false;
-  if (game.phase !== "MOVE") return false;
-  if (game.raidEndedByRooster) return false;
-  if (!isInYardLocal(p)) return false;
-
-  const moved = Array.isArray(game.movedPlayerIds) ? game.movedPlayerIds : [];
-  return !moved.includes(p.id);
-}
-
-function canBotDecide(game, p) {
-  if (!game || !p) return false;
-  if (game.status !== "round") return false;
-  if (game.phase !== "DECISION") return false;
-  if (game.raidEndedByRooster) return false;
-  if (!isInYardLocal(p)) return false;
-  if (p.decision) return false;
-  return true;
-}
-
-function isBotOpsTurn(game) {
-  if (!game) return null;
-  if (game.status !== "round") return null;
-  if (game.phase !== "ACTIONS") return null;
-
-  const order = game.opsTurnOrder || [];
-  if (!order.length) return null;
-
-  const idx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
-  if (idx < 0 || idx >= order.length) return null;
-
-  return order[idx];
-}
-
-async function logBot(gameId, payload) {
-  await addDoc(collection(db, "games", gameId, "actions"), {
-    ...payload,
-    createdAt: serverTimestamp(),
-  });
-
-  await addLog(gameId, {
-    round: payload.round ?? 0,
-    phase: payload.phase ?? "",
-    kind: "BOT",
-    playerId: payload.playerId,
-    message:
-      payload.message || `${payload.playerName || "BOT"}: ${payload.choice}`,
-  });
-}
-
-// call dit vanuit je game snapshot (zoals jij al doet)
-function scheduleBotTick() {
-  if (botTickScheduled) return;
-  botTickScheduled = true;
-
-  setTimeout(async () => {
-    botTickScheduled = false;
-    try {
-      await runBotsOnce();
-    } catch (e) {
-      console.warn("[BOTS] runBotsOnce error", e);
-    }
-  }, 250);
-}
-
-async function acquireBotLock() {
-  if (!gameId) return false;
-
-  const ref = doc(db, "games", gameId);
-  const now = Date.now();
-  const me = hostUid || botRunnerId;
-
-  try {
-    const ok = await runTransaction(db, async (tx) => {
-      const snap = await tx.get(ref);
-      if (!snap.exists()) return false;
-
-      const g = snap.data();
-
-      // bots moeten expliciet aan staan
-      if (g?.botsEnabled !== true) return false;
-
-      const lockUntil = Number(g.botsLockUntil || 0);
-      const lockBy = String(g.botsLockBy || "");
-
-      // locked by other and not expired
-      if (lockUntil > now && lockBy && lockBy !== me) return false;
-
-      tx.update(ref, {
-        botsLockUntil: now + 1500, // 1.5s lock
-        botsLockBy: me,
-      });
-      return true;
-    });
-
-    return ok === true;
-  } catch (e) {
-    console.warn("[BOTS] lock tx failed", e);
-    return false;
-  }
-}
-
-async function botDoMove(botId) {
-  const gRef = doc(db, "games", gameId);
-  const pRef = doc(db, "games", gameId, "players", botId);
-
-  let logPayload = null;
-
-  await runTransaction(db, async (tx) => {
-    const gSnap = await tx.get(gRef);
-    const pSnap = await tx.get(pRef);
-    if (!gSnap.exists() || !pSnap.exists()) return;
-
-    const g = gSnap.data();
-    const p = { id: pSnap.id, ...pSnap.data() };
-
-    if (!canBotMove(g, p)) return;
-
-    const moved = Array.isArray(g.movedPlayerIds) ? [...g.movedPlayerIds] : [];
-    const hand = Array.isArray(p.hand) ? [...p.hand] : [];
-    const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
-    const lootDeck = Array.isArray(g.lootDeck) ? [...g.lootDeck] : [];
-    const loot = Array.isArray(p.loot) ? [...p.loot] : [];
-
-    let choice = "MOVE_SNATCH_FROM_DECK";
-    let msg = "";
-
-    if (hand.length < 2 && actionDeck.length) {
-      let drawn = 0;
-      for (let i = 0; i < 2; i++) {
-        if (!actionDeck.length) break;
-        hand.push(actionDeck.pop());
-        drawn++;
-      }
-      choice = `MOVE_FORAGE_${drawn}cards`;
-      msg = `BOT deed FORAGE (${drawn} kaart(en))`;
-
-      tx.update(pRef, { hand });
-      tx.update(gRef, {
-        actionDeck,
-        movedPlayerIds: [...new Set([...moved, botId])],
-      });
-    } else {
-      if (!lootDeck.length) return;
-      const card = lootDeck.pop();
-      loot.push(card);
-
-      msg = `BOT deed SNATCH (${card.t || "Loot"} ${card.v ?? ""})`;
-
-      tx.update(pRef, { loot });
-      tx.update(gRef, {
-        lootDeck,
-        movedPlayerIds: [...new Set([...moved, botId])],
-      });
-    }
-
-    logPayload = {
-      round: g.round || 0,
-      phase: "MOVE",
-      playerId: botId,
-      playerName: p.name || "BOT",
-      choice,
-      message: msg,
-    };
-  });
-
-  if (logPayload) await logBot(gameId, logPayload);
-}
-
-async function botDoPass(botId) {
-  const gRef = doc(db, "games", gameId);
-  const pRef = doc(db, "games", gameId, "players", botId);
-
-  let logPayload = null;
-
-  await runTransaction(db, async (tx) => {
-    const gSnap = await tx.get(gRef);
-    const pSnap = await tx.get(pRef);
-    if (!gSnap.exists() || !pSnap.exists()) return;
-
-    const g = gSnap.data();
-    const p = { id: pSnap.id, ...pSnap.data() };
-
-    const order = g.opsTurnOrder || [];
-    const idx = typeof g.opsTurnIndex === "number" ? g.opsTurnIndex : 0;
-
-    if (g.phase !== "ACTIONS" || g.status !== "round") return;
-    if (!order.length || order[idx] !== botId) return;
-
-    const nextIndex = (idx + 1) % order.length;
-    const passes = Number(g.opsConsecutivePasses || 0) + 1;
-
-    tx.update(gRef, {
-      opsTurnIndex: nextIndex,
-      opsConsecutivePasses: passes,
-    });
-
-    logPayload = {
-      round: g.round || 0,
-      phase: "ACTIONS",
-      playerId: botId,
-      playerName: p.name || "BOT",
-      choice: "ACTION_PASS",
-      message: "BOT kiest PASS",
-    };
-  });
-
-  if (logPayload) await logBot(gameId, logPayload);
-}
-
-async function botDoDecision(botId) {
-  const pRef = doc(db, "games", gameId, "players", botId);
-  const gRef = doc(db, "games", gameId);
-
-  let logPayload = null;
-
-  await runTransaction(db, async (tx) => {
-    const gSnap = await tx.get(gRef);
-    const pSnap = await tx.get(pRef);
-    if (!gSnap.exists() || !pSnap.exists()) return;
-
-    const g = gSnap.data();
-    const p = { id: pSnap.id, ...pSnap.data() };
-
-    if (!canBotDecide(g, p)) return;
-
-    const loot = Array.isArray(p.loot) ? p.loot : [];
-    const lootPts = loot.reduce((sum, c) => sum + (Number(c?.v) || 0), 0);
-
-    let kind = "LURK";
-    if ((g.roosterSeen || 0) >= 2 && lootPts >= 3) kind = "DASH";
-    else if (!p.burrowUsed && Math.random() < 0.15) kind = "BURROW";
-
-    const update = { decision: kind };
-    if (kind === "BURROW" && !p.burrowUsed) update.burrowUsed = true;
-
-    tx.update(pRef, update);
-
-    logPayload = {
-      round: g.round || 0,
-      phase: "DECISION",
-      playerId: botId,
-      playerName: p.name || "BOT",
-      choice: `DECISION_${kind}`,
-      message: `BOT kiest ${kind}`,
-    };
-  });
-
-  if (logPayload) await logBot(gameId, logPayload);
-}
-
-// BOT-speler toevoegen aan de huidige game
-async function addBotToCurrentGame() {
-  try {
-    if (!gameId) {
-      alert("Geen actief spel gevonden (gameId ontbreekt).");
-      return;
-    }
-
-    await addDoc(collection(db, "games", gameId, "players"), {
-      name: "BOT Fox",
-      isBot: true,
-      isHost: false,
-      uid: null,
-      score: 0,
-      joinedAt: serverTimestamp(),
-      joinOrder: null,
-      color: null,
-      inYard: true,
-      dashed: false,
-      burrowUsed: false,
-      decision: null,
-      hand: [],
-      loot: [],
-    });
-
-    await updateDoc(doc(db, "games", gameId), { botsEnabled: true });
-    
-    console.log("BOT toegevoegd aan game:", gameId);
-  } catch (err) {
-    console.error("Fout bij BOT toevoegen:", err);
-    alert("Er ging iets mis bij het toevoegen van een BOT.");
-  }
-}
+if (newRaidBtn) newRaidBtn.addEventListener("click", startNewRaidFromBoard);
+if (addBotBtn) addBotBtn.addEventListener("click", addBotToCurrentGame);
