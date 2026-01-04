@@ -1,10 +1,9 @@
 // /bots/core/scoring.js
 // MOVE: SNATCH / SCOUT / FORRAGE / SHIFT
-// OPS: Action Cards spelen of PASS
+// OPS: Action Cards spelen of PASS (nu met DEFENSIVE/AGGRESSIVE styles)
 // DECISION: LURK / BURROW / DASH
 //
 // Belangrijk: Action Card effecten komen uit cards.js (ACTION_DEFS via getActionDefByName)
-// i.p.v. een hardcoded ACTION_TAGS map.
 
 import { hasTag } from "./eventIntel.js";
 import { getActionDefByName } from "../../cards.js"; // pad: /bots/core -> /cards.js
@@ -15,13 +14,14 @@ import { getActionDefByName } from "../../cards.js"; // pad: /bots/core -> /card
 function clamp01(x) {
   return Math.max(0, Math.min(1, x));
 }
-
+function clamp(x, a, b) {
+  return Math.max(a, Math.min(b, x));
+}
 function riskLabel(r) {
   if (r < 0.35) return "LOW";
   if (r < 0.65) return "MED";
   return "HIGH";
 }
-
 function safeArr(a) {
   return Array.isArray(a) ? a : [];
 }
@@ -43,15 +43,18 @@ function intelCount(view) {
 function danger(upcoming) {
   // Probeer beide stijlen: jouw EVENT_DEFS tags (lowercase) + oudere bot-tags (uppercase)
   const dog = hasTag(upcoming, "dog_attack") || hasTag(upcoming, "DOG_ATTACK");
-  const dash = hasTag(upcoming, "targets_dashers") || hasTag(upcoming, "CATCH_DASHERS");
+  const dash =
+    hasTag(upcoming, "targets_dashers") || hasTag(upcoming, "CATCH_DASHERS");
   const yard = hasTag(upcoming, "yard_only") || hasTag(upcoming, "CATCH_ALL_YARD");
-  const den = hasTag(upcoming, "catch_by_color") || hasTag(upcoming, "DEN_CHECK");
+  const den =
+    hasTag(upcoming, "catch_by_color") || hasTag(upcoming, "DEN_CHECK") || hasTag(upcoming, "CATCH_BY_DEN_COLOR");
   return { dog, dash, yard, den, any: dog || dash || yard || den };
 }
 
 function normalizeHandIds(hand) {
   return safeArr(hand)
-    .map((c) => (typeof c === "string" ? c : (c?.name || c?.id || "")))
+    .map((c) => (typeof c === "string" ? c : (c?.name || c?.id || c?.cardId || "")))
+    .map((s) => String(s).trim())
     .filter(Boolean);
 }
 
@@ -59,10 +62,12 @@ function actionMeta(cardName) {
   const def = getActionDefByName(cardName);
   return {
     name: def?.name || cardName,
+    id: def?.id || null,
     type: def?.type || "UTILITY",
     timing: def?.timing || "anytime",
     tags: safeArr(def?.tags),
     description: def?.description || "",
+    meta: def?.meta || null, // <-- nieuw: advisor kan hierop bouwen
   };
 }
 
@@ -86,7 +91,7 @@ export function scoreMoveMoves({ view, upcoming, profile }) {
   const w = profile?.weights || {};
   const evLoot = expectedLootCardPoints(view);
   const intel = intelCount(view);
-  const lock = !!view?.flags?.lockEvents;
+  const lock = !!(view?.flags?.lockEvents || view?.flagsRound?.lockEvents);
   const d = danger(upcoming);
 
   const candidates = ["SNATCH", "SCOUT", "FORRAGE", "SHIFT"].map((move) => {
@@ -95,14 +100,12 @@ export function scoreMoveMoves({ view, upcoming, profile }) {
     const bullets = [];
 
     if (move === "SNATCH") {
-      // SNATCH = pak 1 loot kaart -> directe punten
-      score += (w.loot ?? 1.3) * (evLoot / 5); // normaliseer t.o.v. max loot (Prize Hen=5)
+      score += (w.loot ?? 1.3) * (evLoot / 5);
       bullets.push(`SNATCH: +1 loot kaart (+~${evLoot.toFixed(1)} punten verwacht).`);
       bullets.push("Meeste loot wint → dit is vaak de beste value-pick.");
     }
 
     if (move === "FORRAGE") {
-      // FORRAGE = pak 2 action cards -> future value (OPS)
       const handSize = safeArr(view?.me?.hand).length;
       const future = 1.1 - Math.min(0.45, handSize * 0.08);
       score += 0.95 * future;
@@ -111,7 +114,6 @@ export function scoreMoveMoves({ view, upcoming, profile }) {
     }
 
     if (move === "SCOUT") {
-      // SCOUT = bekijk event card -> intel value richting Decision
       const info = 1.0 + (intel === 0 ? 0.4 : 0.0) + (d.any ? 0.25 : 0.0);
       score += 1.05 * info;
       bullets.push("SCOUT: bekijk 1 Event Card naar keuze (grote waarde).");
@@ -120,7 +122,6 @@ export function scoreMoveMoves({ view, upcoming, profile }) {
     }
 
     if (move === "SHIFT") {
-      // SHIFT = verplaats 2 verborgen events -> control zonder info
       if (lock) {
         score -= 0.7;
         risk = 0.02;
@@ -134,7 +135,6 @@ export function scoreMoveMoves({ view, upcoming, profile }) {
       }
     }
 
-    // kleine risk penalty
     score -= (w.risk ?? 1.0) * risk;
 
     return {
@@ -152,138 +152,348 @@ export function scoreMoveMoves({ view, upcoming, profile }) {
 }
 
 // =====================
-// Action card scoring (OPS)
+// OPS scoring (nieuw)
 // =====================
-export function scoreActionCardsNow({ view, upcoming }) {
-  const hand = normalizeHandIds(view?.me?.hand);
-  const lock = !!view?.flags?.lockEvents;
-  const d = danger(upcoming);
 
-  const scored = hand.map((cardName) => {
-    const meta = actionMeta(cardName);
-
-    let score = 0.15;
-    const bullets = [];
-
-    // Timing bias: after_event kaarten liever bewaren (reaction)
-    if (meta.timing === "after_event") {
-      score -= 0.25;
-      bullets.push("Reaction kaart: vaak beter bewaren tot na een Event.");
-    } else if (meta.timing === "before_event") {
-      score += 0.10;
-      bullets.push("Before-event kaart: goed moment om druk te zetten.");
-    } else {
-      bullets.push("Anytime kaart: flexibel inzetbaar.");
-    }
-
-    // Type baseline
-    if (meta.type === "INFO") score += 0.28;
-    if (meta.type === "DEFENSE") score += 0.22;
-    if (meta.type === "TRICK") score += 0.18;
-    if (meta.type === "MOVEMENT") score += 0.12;
-
-    // Tag synergie (jouw ACTION_DEFS tags)
-    const t = meta.tags;
-
-    // Tegen DOG events
-    if (d.dog && (t.includes("avoid_dog") || t.includes("obscure") || t.includes("redirect_danger") || t.includes("escape"))) {
-      score += 0.55;
-      bullets.push("Sterk tegen Dog-events.");
-    }
-
-    // Tegen Den kleur checks
-    if (d.den && (t.includes("swap_den") || t.includes("den_trick") || t.includes("protect_den") || t.includes("group_defense"))) {
-      score += 0.45;
-      bullets.push("Helpt tegen Den kleur-check events.");
-    }
-
-    // Intel / vooruit kijken
-    if (t.includes("peek_event") || t.includes("peek") || t.includes("warn") || t.includes("info")) {
-      score += 0.35 + (d.any ? 0.10 : 0.0);
-      bullets.push("Info voordeel richting Decision.");
-    }
-
-    // Event manipulatie / redraw
-    if (t.includes("cancel_event") || t.includes("redraw") || t.includes("reorder")) {
-      if (lock) {
-        score -= 0.25;
-        bullets.push("Events gelocked → minder waarde nu.");
-      } else {
-        score += 0.30;
-        bullets.push("Kan events beïnvloeden / ombuigen.");
-      }
-    }
-
-    // “altijd ok” tags
-    if (t.includes("counter") || t.includes("reaction")) score += 0.08;
-
-    // korte beschrijving als fallback bullet
-    if (meta.description && bullets.length < 3) bullets.push(meta.description);
-
-    return {
-      type: "ACTION",
-      cardId: meta.name,           // let op: jouw hand gebruikt card "name"
-      score,
-      bullets: bullets.slice(0, 3),
-      meta, // handig voor debug
-    };
-  });
-
-  scored.sort((a, b) => b.score - a.score);
-  return scored;
+// flags helper (soms zit dit in flagsRound of game.flagsRound)
+function getFlags(view) {
+  return (
+    view?.flagsRound ||
+    view?.flags ||
+    view?.game?.flagsRound ||
+    view?.game?.flags ||
+    {}
+  );
 }
 
-// =====================
-// OPS scoring: PLAY CARD of PASS
-// =====================
-export function scoreOpsPlays({ view, upcoming, profile }) {
-  const w = profile?.weights || {};
+function normalizeActionName(x) {
+  const name = typeof x === "string" ? x : (x?.name || x?.id || x?.cardId || "");
+  return String(name).trim();
+}
 
-  const rankedCards = scoreActionCardsNow({ view, upcoming });
-  const bestCard = rankedCards[0] || null;
-  const bestScore = bestCard ? bestCard.score : 0;
+function collectUpcomingIntel(upcoming = [], myDen = "") {
+  // Werkt met jouw EVENT_DEFS objecten (id/category/denColor/tags),
+  // maar pakt ook iets als upcoming minder info bevat.
+  const tags = new Set();
+  let hasCatchAll = false;
+  let hasCatchDashers = false;
+  let hasDenCheck = false;
+  let denHit = false;
+  let hasDogThreat = false;
+  let leadTarget = false;
 
-  // PASS baseline: bewaren kan slim zijn als je beste kaart nu weinig doet
-  const passScore = 0.22;
+  // fallback via hasTag (als upcoming objects geen tags bevatten)
+  const d = danger(upcoming);
+  if (d.yard) hasCatchAll = true;
+  if (d.dash) hasCatchDashers = true;
+  if (d.den) hasDenCheck = true;
+  if (d.dog) hasDogThreat = true;
 
-  const options = [];
+  for (const ev of (upcoming || [])) {
+    const evTags = Array.isArray(ev?.tags) ? ev.tags : [];
+    evTags.forEach(t => tags.add(String(t)));
 
-  if (bestCard) {
-    options.push({
-      type: "OPS",
-      play: "PLAY_CARD",
-      cardId: bestCard.cardId,
-      score: bestScore,
-      confidence: 0.7,
-      bullets: [
-        `Beste kaart nu: ${bestCard.cardId}`,
-        ...(bestCard.bullets || []),
-      ].slice(0, 4),
-    });
+    const cat = String(ev?.category || "").toUpperCase();
+    const denColor = String(ev?.denColor || "").toUpperCase();
+    const id = String(ev?.id || "").toUpperCase();
+
+    if (tags.has("CATCH_ALL_YARD")) hasCatchAll = true;
+    if (tags.has("CATCH_DASHERS")) hasCatchDashers = true;
+
+    if (cat === "DEN" || id.startsWith("DEN_")) {
+      hasDenCheck = true;
+      if (myDen && denColor && denColor === myDen) denHit = true;
+    }
+
+    if (cat === "DOG" || tags.has("dog_attack")) hasDogThreat = true;
+    if (tags.has("target_lead_fox")) leadTarget = true;
   }
 
-  options.push({
+  return { tags, hasCatchAll, hasCatchDashers, hasDenCheck, denHit, hasDogThreat, leadTarget };
+}
+
+function riskFromRole(role, style) {
+  const r = String(role || "").toLowerCase();
+  if (r === "defense" || r === "info") return "LOW";
+  if (r === "tempo" || r === "control" || r === "utility") return style === "AGGRESSIVE" ? "MED" : "LOW";
+  if (r === "chaos") return style === "AGGRESSIVE" ? "HIGH" : "MED";
+  return "MED";
+}
+
+function confidenceFromScore(score) {
+  // 0..10 -> ~0.55..0.9 (clamped)
+  return clamp(0.55 + (score / 10) * 0.35, 0.5, 0.9);
+}
+
+function buildOpsContext({ view, upcoming, style }) {
+  const flags = getFlags(view);
+
+  const me = view?.me || {};
+  const game = view?.game || {};
+
+  const myDen = String(me?.color || me?.denColor || me?.den || "").toUpperCase();
+
+  const intel = collectUpcomingIntel(upcoming, myDen);
+
+  const opsLocked = !!(flags.lockOps || flags.opsLocked || flags.lockActions || flags.lockOpsCards);
+  const trackLocked = !!(flags.lockEvents || flags.trackLocked);
+
+  const inYard = !(me?.caught || me?.isCaught || me?.dashed || me?.isDashed);
+
+  const hand = Array.isArray(me?.hand) ? me.hand : [];
+  const handNames = hand.map(normalizeActionName).filter(Boolean);
+
+  // simpele threat score (hogere = meer reden om defensief te reageren)
+  let threat = 0;
+  if (intel.hasCatchAll) threat += 5;
+  if (intel.hasDogThreat) threat += 3;
+  if (intel.hasDenCheck) threat += 2;
+  if (intel.denHit) threat += 3;
+  if (intel.hasCatchDashers) threat += (style === "AGGRESSIVE" ? 3 : 2);
+
+  // turn-order info (voor Hold Still waarde)
+  const order = game?.opsTurnOrder || [];
+  const idx = typeof game?.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
+  const playersAfterMe = order.length ? Math.max(0, order.length - idx - 1) : 0;
+
+  const iAmLead = !!(me?.isLead || me?.lead === true || view?.isLead);
+
+  return {
+    me,
+    game,
+    flags,
+    myDen,
+    inYard,
+    handNames,
+    opsLocked,
+    trackLocked,
+    threat,
+    playersAfterMe,
+    intel,
+    iAmLead,
+  };
+}
+
+function typeBaseline(defType, style) {
+  // fallback als meta ontbreekt
+  const t = String(defType || "").toUpperCase();
+  if (style === "DEFENSIVE") {
+    if (t === "DEFENSE") return 2.8;
+    if (t === "INFO") return 2.0;
+    if (t === "UTILITY") return 1.4;
+    if (t === "TRICK") return 1.2;
+    return 1.0;
+  } else {
+    // AGGRESSIVE
+    if (t === "TRICK") return 2.4;
+    if (t === "UTILITY") return 2.0;
+    if (t === "INFO") return 1.6;
+    if (t === "DEFENSE") return 1.2;
+    return 1.0;
+  }
+}
+
+function scoreOneCard(cardName, def, ctx, style) {
+  const meta = def?.meta || {};
+  const role = meta.role || "utility";
+  const tags = safeArr(def?.tags);
+
+  // Basis: meta attack/defense, anders type baseline
+  let score =
+    style === "AGGRESSIVE"
+      ? (Number(meta.attackValue) || typeBaseline(def?.type, style))
+      : (Number(meta.defenseValue) || typeBaseline(def?.type, style));
+
+  const bullets = [];
+
+  // harde blocker
+  if (ctx.opsLocked) {
+    return {
+      type: "OPS",
+      play: "PLAY",
+      cardId: cardName,
+      score: -999,
+      confidence: 0.2,
+      riskLabel: "LOW",
+      bullets: ["Hold Still is actief → je kunt geen kaarten spelen (alleen PASS)."],
+    };
+  }
+
+  // timing bias (klein)
+  const timing = String(def?.timing || "anytime").toLowerCase();
+  if (timing === "after_event") score -= 0.6;
+  if (timing === "before_event") score += 0.2;
+
+  // === Heuristiek per bekende kaart/tag (mimi-set) ===
+
+  // Den Signal (defensief top bij threat)
+  if (cardName === "Den Signal" || tags.includes("DEN_IMMUNITY")) {
+    if (ctx.intel.hasCatchAll || ctx.intel.hasDogThreat || ctx.intel.hasDenCheck) score += 3.5;
+    if (ctx.threat >= 6) score += 1.5;
+    bullets.push("Den Signal: beschermt 1 Den-kleur tegen vang-events (deze ronde).");
+  }
+
+  // Molting Mask (uit den-hit ontsnappen)
+  if (cardName === "Molting Mask" || tags.includes("DEN_SWAP")) {
+    if (ctx.intel.denHit) score += 4.5;
+    else if (ctx.intel.hasDenCheck) score += 1.5;
+    bullets.push("Molting Mask: wisselt jouw Den-kleur (kan Den-check ontwijken).");
+  }
+
+  // Mask Swap (reset alle den kleuren)
+  if (cardName === "Mask Swap" || tags.includes("SHUFFLE_DEN_COLORS")) {
+    if (ctx.intel.hasDenCheck) score += 2.8;
+    if (ctx.threat >= 6) score += 0.8;
+    bullets.push("Mask Swap: husselt Den-kleuren in Yard (breekt targeting).");
+  }
+
+  // Hold Still (OPS lock, sterker als er spelers na jou komen)
+  if (cardName === "Hold Still" || tags.includes("LOCK_OPS")) {
+    score += Math.min(5, ctx.playersAfterMe);
+    if (ctx.threat >= 7 && style === "DEFENSIVE") score += 1.5;
+    bullets.push("Hold Still: stopt verdere Action Cards (alleen PASS).");
+  }
+
+  // Burrow Beacon (track lock)
+  if (cardName === "Burrow Beacon" || tags.includes("LOCK_EVENTS")) {
+    if (ctx.trackLocked) score -= 3.5;
+    else score += 2.2;
+    bullets.push("Burrow Beacon: lockt Event Track (stopt manipulatie).");
+  }
+
+  // Track manipulation (Kick Up Dust / Pack Tinker)
+  if (tags.includes("TRACK_MANIP") || tags.includes("SWAP_RANDOM") || tags.includes("SWAP_MANUAL")) {
+    if (ctx.trackLocked) {
+      score -= 6.5;
+      bullets.push("Event Track is gelocked → manipulatie werkt niet.");
+    } else {
+      score += ctx.threat >= 6 ? (style === "DEFENSIVE" ? 2.6 : 3.4) : (style === "AGGRESSIVE" ? 2.0 : 1.0);
+      bullets.push("Track manipulation: beïnvloedt toekomstige events.");
+    }
+  }
+
+  // Info cards (Scent Check / Nose for Trouble)
+  if (def?.type === "INFO" || tags.includes("INFO") || tags.includes("PEEK_DECISION") || tags.includes("PREDICT_EVENT")) {
+    score += style === "DEFENSIVE" ? 1.2 : 0.6;
+    if (ctx.intel.hasCatchDashers) score += 1.0;
+    bullets.push("Info: betere timing voor DECISION (DASH/BURROW/LURK).");
+  }
+
+  // Scout denial
+  if (tags.includes("BLOCK_SCOUT") || tags.includes("BLOCK_SCOUT_POS")) {
+    score += style === "AGGRESSIVE" ? 1.6 : 0.6;
+    bullets.push("Info-denial: voorkomt (gerichte) SCOUT info.");
+  }
+
+  // Alpha Call (lead safety)
+  if (tags.includes("SET_LEAD")) {
+    if (ctx.intel.leadTarget && ctx.iAmLead) score += 4.0;
+    else if (ctx.intel.leadTarget) score += 1.2;
+    bullets.push("Alpha Call: Lead wisselen (kan lead-target event ontwijken).");
+  }
+
+  // Follow the Tail (aggressive tempo)
+  if (tags.includes("COPY_DECISION_LATER")) {
+    score += style === "AGGRESSIVE" ? 1.6 : 0.2;
+    bullets.push("Follow the Tail: meeliften op andermans DECISION (tempo).");
+  }
+
+  // in-yard check (als je al caught/dashed bent: veel minder waarde)
+  if (!ctx.inYard) score -= 6;
+
+  // kleine penalty als kaart alleen maar “ROUND_EFFECT” is en threat laag (defensief)
+  if (style === "DEFENSIVE" && tags.includes("ROUND_EFFECT") && ctx.threat <= 2) score -= 0.8;
+
+  // fallback bullet (korte beschrijving)
+  if (def?.description && bullets.length < 3) bullets.push(def.description);
+
+  return {
+    type: "OPS",
+    play: "PLAY",
+    cardId: cardName,
+    score,
+    confidence: confidenceFromScore(score),
+    riskLabel: riskFromRole(role, style),
+    bullets: bullets.slice(0, 4),
+    meta: def?.meta || null,
+  };
+}
+
+function scorePass(ctx, style, profile) {
+  const w = profile?.weights || {};
+  let score = 2.2; // baseline
+
+  const bullets = ["PASS: je bewaart kaarten voor later."];
+
+  if (ctx.opsLocked) {
+    score = 10;
+    bullets.unshift("Hold Still is actief → PASS is de enige keuze.");
+  }
+
+  if (!ctx.handNames.length) {
+    score = 10;
+    bullets.unshift("Geen kaarten in hand → PASS.");
+  }
+
+  // defensief: threat laag → pass vaker ok
+  if (style === "DEFENSIVE" && ctx.threat <= 3) score += 1.0;
+
+  // aggressive: threat laag maar hand sterk → pass minder aantrekkelijk
+  if (style === "AGGRESSIVE" && ctx.threat <= 3) score -= 0.6;
+
+  // bestaand profielgewicht (optioneel)
+  score += Number(w.conserveOps || 0) * 0.0;
+
+  return {
     type: "OPS",
     play: "PASS",
-    score: passScore + (w.conserveOps ?? 0) * 0.0,
-    confidence: 0.65,
-    bullets: [
-      "PASS: je bewaart je kaarten voor een beter moment.",
-      ...(bestCard && bestScore < passScore
-        ? ["Je beste kaart scoort nu laag → bewaren is logisch."]
-        : []),
-    ].slice(0, 3),
+    cardId: null,
+    score,
+    confidence: confidenceFromScore(score),
+    riskLabel: "LOW",
+    bullets: bullets.slice(0, 4),
+  };
+}
+
+// EXPORT: OPS scoring met style support
+export function scoreOpsPlays({ view, upcoming, profile, style = "DEFENSIVE" }) {
+  const ctx = buildOpsContext({ view, upcoming, style });
+
+  const ranked = [];
+  ranked.push(scorePass(ctx, style, profile));
+
+  for (const name of ctx.handNames) {
+    const def = getActionDefByName(name);
+    if (!def) {
+      ranked.push({
+        type: "OPS",
+        play: "PLAY",
+        cardId: name,
+        score: 1.0,
+        confidence: 0.45,
+        riskLabel: "MED",
+        bullets: ["Onbekende kaart-definitie → lage score."],
+      });
+      continue;
+    }
+    ranked.push(scoreOneCard(name, def, ctx, style));
+  }
+
+  ranked.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+
+  // context regel bovenaan bullets (handig debug)
+  const ctxLine = `Context: threat=${ctx.threat} • trackLocked=${ctx.trackLocked ? "yes" : "no"} • opsLocked=${ctx.opsLocked ? "yes" : "no"} • style=${style}`;
+  ranked.forEach(r => {
+    r.bullets = [ctxLine, ...(r.bullets || [])].slice(0, 5);
   });
 
-  options.sort((a, b) => b.score - a.score);
-  return options;
+  return ranked;
 }
 
 // =====================
 // DECISION scoring
 // =====================
 function baseLoot(decision) {
-  // Decision beïnvloedt overleving / toekomstige loot (heuristiek)
   if (decision === "DASH") return 1.0;
   if (decision === "BURROW") return 0.6;
   return 0.3; // LURK
@@ -296,21 +506,17 @@ function baseRisk(decision, view, upcoming) {
   if (decision === "BURROW") risk += 0.10;
   if (decision === "LURK") risk += 0.05;
 
-  // Dashers gepakt?
   if (decision === "DASH" && (hasTag(upcoming, "targets_dashers") || hasTag(upcoming, "CATCH_DASHERS"))) {
     risk += 0.45;
   }
 
-  // Yard gevaar (algemeen)
   if (hasTag(upcoming, "yard_only") || hasTag(upcoming, "CATCH_ALL_YARD")) {
     if (decision === "DASH") risk += 0.25;
     if (decision === "LURK") risk += 0.15;
   }
 
-  // Lock events kan dash minder voorspelbaar maken
-  if (view?.flags?.lockEvents && decision === "DASH") risk += 0.10;
+  if ((view?.flags?.lockEvents || view?.flagsRound?.lockEvents) && decision === "DASH") risk += 0.10;
 
-  // DOG events: LURK/DASH risk iets omhoog
   if (hasTag(upcoming, "dog_attack")) {
     if (decision === "DASH") risk += 0.15;
     if (decision === "LURK") risk += 0.10;
@@ -326,7 +532,6 @@ function flexibility(decision) {
 }
 
 function conservePenalty(decision, view) {
-  // BURROW is schaars (1x per Raid)
   if (decision !== "BURROW") return 0;
   const rem = view?.me?.burrowRemaining ?? 1;
   if (rem <= 0) return 999;
