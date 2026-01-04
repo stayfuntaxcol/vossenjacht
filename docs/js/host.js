@@ -940,6 +940,9 @@ async function fillLeaderboardMonth(listEl) {
   top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
 }
 
+// Kleur-cycling voor Dens
+const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
+
 // ==== INIT RAID (eerste keer) ====
 
 function isInYardLocal(p) {
