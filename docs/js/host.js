@@ -187,18 +187,30 @@ function stopBotLoop() {
   botLastKey = null;
 }
 
+let botBusy = false;
+
 async function runBotsOnce() {
   if (botBusy) return;
-  if (!latestGame) return;
 
-  // alleen als bots aan staan
-  if (latestGame.botsEnabled !== true) return;
+  const game = latestGame;
+  if (!gameId || !game) return;
 
-  // stop bij einde
-  if (latestGame.status === "finished" || latestGame.phase === "END") {
-    stopBotLoop();
-    return;
+  // bots uit = niks doen
+  if (!game.botsEnabled) return;
+
+  // spel klaar = stoppen
+  if (game.status === "finished" || game.phase === "END") return;
+
+  botBusy = true;
+  try {
+    // 👇 HIER roep je jouw bot-logica aan
+    // await runBotLogic(game);
+  } catch (err) {
+    console.error("BOT error in runBotsOnce:", err);
+  } finally {
+    botBusy = false;
   }
+}
 
   // alleen tijdens actieve raid/round
   if (latestGame.status !== "round" && latestGame.status !== "raid") return;
@@ -1870,11 +1882,6 @@ async function acquireBotLock() {
     return false;
   }
 }
-
-async function runBotsOnce() {
-  const game = latestGame;
-  if (!gameId || !game) return;
-  if (!game.botsEnabled) return;
 
   // alleen draaien als iemand host/board open heeft
   const gotLock = await acquireBotLock();
