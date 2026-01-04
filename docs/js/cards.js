@@ -201,8 +201,18 @@ export const ACTION_DEFS = {
     type: "TRICK",
     phase: "ACTIONS",
     timing: "anytime",
-    description: "Tot het einde van deze ronde mag niemand de MOVE ‘SCOUT’ gebruiken.",
+    description:
+      "Tot het einde van deze ronde mag niemand de MOVE ‘SCOUT’ gebruiken.",
     tags: ["BLOCK_SCOUT", "ROUND_EFFECT"],
+    meta: {
+      role: "control", // control | defense | info | tempo | chaos | utility
+      affects: ["all_players"],
+      attackValue: 3,
+      defenseValue: 3,
+      triggers: ["when_opponents_need_info", "when_you_already_have_info"],
+      counters: [],
+      notes: "Info-denial. Sterk als anderen willen SCOUTen.",
+    },
   },
 
   "Den Signal": {
@@ -213,8 +223,18 @@ export const ACTION_DEFS = {
     type: "DEFENSE",
     phase: "ACTIONS",
     timing: "before_event",
-    description: "Kies een Den-kleur: vossen met die kleur zijn immuun voor vang-events uit de Event Track (deze ronde).",
+    description:
+      "Kies een Den-kleur: vossen met die kleur zijn immuun voor vang-events uit de Event Track (deze ronde).",
     tags: ["DEN_IMMUNITY", "ROUND_EFFECT"],
+    meta: {
+      role: "defense",
+      affects: ["den_color_group", "event_track"],
+      attackValue: 2,
+      defenseValue: 5,
+      triggers: ["when_catch_events_upcoming", "when_many_in_same_den", "when_dog_events_upcoming"],
+      counters: [],
+      notes: "Pure bescherming tegen Event-track vangacties.",
+    },
   },
 
   "No-Go Zone": {
@@ -225,8 +245,18 @@ export const ACTION_DEFS = {
     type: "TRICK",
     phase: "ACTIONS",
     timing: "anytime",
-    description: "Kies 1 positie op de Event Track: die positie mag deze ronde niet gescout worden.",
+    description:
+      "Kies 1 positie op de Event Track: die positie mag deze ronde niet gescout worden.",
     tags: ["BLOCK_SCOUT_POS", "ROUND_EFFECT"],
+    meta: {
+      role: "control",
+      affects: ["event_track", "all_players"],
+      attackValue: 3,
+      defenseValue: 2,
+      triggers: ["when_key_event_position_matters", "when_opponent_wants_scout", "when_you_hide_risk"],
+      counters: [],
+      notes: "Gerichte info-denial op 1 track-positie.",
+    },
   },
 
   "Kick Up Dust": {
@@ -237,8 +267,18 @@ export const ACTION_DEFS = {
     type: "TRICK",
     phase: "ACTIONS",
     timing: "anytime",
-    description: "Twee (toekomstige) Event Cards wisselen willekeurig van plek. Werkt niet als events gelocked zijn.",
+    description:
+      "Twee (toekomstige) Event Cards wisselen willekeurig van plek. Werkt niet als events gelocked zijn.",
     tags: ["TRACK_MANIP", "SWAP_RANDOM", "BLOCKED_BY_LOCK"],
+    meta: {
+      role: "chaos",
+      affects: ["event_track"],
+      attackValue: 4,
+      defenseValue: 2,
+      triggers: ["when_future_events_bad", "when_you_want_chaos", "when_opponents_planning"],
+      counters: ["LOCK_EVENTS"],
+      notes: "Chaos op future events. Kan ook defensief zijn als er iets dodelijks aankomt.",
+    },
   },
 
   "Burrow Beacon": {
@@ -249,8 +289,18 @@ export const ACTION_DEFS = {
     type: "DEFENSE",
     phase: "ACTIONS",
     timing: "anytime",
-    description: "Lock de Event Track: deze ronde kan de volgorde van Events niet meer veranderen.",
+    description:
+      "Lock de Event Track: deze ronde kan de volgorde van Events niet meer veranderen.",
     tags: ["LOCK_EVENTS", "ROUND_EFFECT"],
+    meta: {
+      role: "defense",
+      affects: ["event_track", "all_players"],
+      attackValue: 2,
+      defenseValue: 4,
+      triggers: ["when_track_is_favorable", "when_opponents_have_track_manip", "when_you_need_stability"],
+      counters: [],
+      notes: "Zet de situatie vast. Sterk als jij voordeel hebt of chaos wilt stoppen.",
+    },
   },
 
   "Molting Mask": {
@@ -261,8 +311,18 @@ export const ACTION_DEFS = {
     type: "TRICK",
     phase: "ACTIONS",
     timing: "anytime",
-    description: "Je Den-kleur verandert naar een andere willekeurige kleur (niet je huidige).",
+    description:
+      "Je Den-kleur verandert naar een andere willekeurige kleur (niet je huidige).",
     tags: ["DEN_SWAP", "SELF_EFFECT"],
+    meta: {
+      role: "utility",
+      affects: ["self"],
+      attackValue: 2,
+      defenseValue: 3,
+      triggers: ["when_targeted_by_den_event", "when_you_need_escape_den", "when_den_signal_active_elsewhere"],
+      counters: [],
+      notes: "Kleur-escape/flip. Vooral defensief tegen Den-targeting.",
+    },
   },
 
   "Hold Still": {
@@ -273,8 +333,18 @@ export const ACTION_DEFS = {
     type: "DEFENSE",
     phase: "ACTIONS",
     timing: "anytime",
-    description: "Vanaf nu mogen deze ronde geen nieuwe Action Cards meer worden gespeeld; alleen PASS.",
+    description:
+      "Vanaf nu mogen deze ronde geen nieuwe Action Cards meer worden gespeeld; alleen PASS.",
     tags: ["LOCK_OPS", "ROUND_EFFECT"],
+    meta: {
+      role: "tempo",
+      affects: ["ops_phase", "all_players"],
+      attackValue: 1,
+      defenseValue: 5,
+      triggers: ["when_you_are_ahead", "when_stop_counterplay", "when_ops_is_chaos"],
+      counters: [],
+      notes: "Freeze de OPS. Keihard als jij al goed staat en geen reactie wil toestaan.",
+    },
   },
 
   "Nose for Trouble": {
@@ -285,8 +355,18 @@ export const ACTION_DEFS = {
     type: "INFO",
     phase: "ACTIONS",
     timing: "anytime",
-    description: "Je voorspelt welk Event als volgende wordt onthuld (wordt gelogd).",
+    description:
+      "Je voorspelt welk Event als volgende wordt onthuld (wordt gelogd).",
     tags: ["PREDICT_EVENT", "INFO"],
+    meta: {
+      role: "info",
+      affects: ["self"],
+      attackValue: 1,
+      defenseValue: 1,
+      triggers: ["when_house_rules_reward_prediction"],
+      counters: [],
+      notes: "speler ontvangt een extra loot card als beloning bij een goede voorspelling.",
+    },
   },
 
   "Scent Check": {
@@ -297,8 +377,18 @@ export const ACTION_DEFS = {
     type: "INFO",
     phase: "ACTIONS",
     timing: "anytime",
-    description: "Bekijk de actuele DECISION van 1 andere vos; later krijg je die info opnieuw als jij beslist.",
+    description:
+      "Bekijk de actuele DECISION van 1 andere vos; later krijg je die info opnieuw als jij beslist.",
     tags: ["PEEK_DECISION", "INFO"],
+    meta: {
+      role: "info",
+      affects: ["self", "target_player"],
+      attackValue: 2,
+      defenseValue: 3,
+      triggers: ["when_before_decision", "when_need_predict_dashers", "when_target_is_leader_or_high_score"],
+      counters: [],
+      notes: "Info-voordeel: jij kan beter timen tussen LURK/BURROW/DASH.",
+    },
   },
 
   "Follow the Tail": {
@@ -309,8 +399,18 @@ export const ACTION_DEFS = {
     type: "UTILITY",
     phase: "ACTIONS",
     timing: "anytime",
-    description: "Aan het einde van DECISION wordt jouw definitieve DECISION gelijk aan die van de gekozen vos.",
+    description:
+      "Aan het einde van DECISION wordt jouw definitieve DECISION gelijk aan die van de gekozen vos.",
     tags: ["COPY_DECISION_LATER", "UTILITY"],
+    meta: {
+      role: "utility",
+      affects: ["self", "target_player"],
+      attackValue: 2,
+      defenseValue: 2,
+      triggers: ["when_uncertain", "when_follow_strong_player", "when_mindgame_possible"],
+      counters: [],
+      notes: "Meeliften of mindgame. Risico: je verliest controle over je eigen decision.",
+    },
   },
 
   "Alpha Call": {
@@ -323,6 +423,15 @@ export const ACTION_DEFS = {
     timing: "anytime",
     description: "Kies 1 vos als nieuwe Lead Fox.",
     tags: ["SET_LEAD", "UTILITY"],
+    meta: {
+      role: "control",
+      affects: ["lead_role", "target_player"],
+      attackValue: 3,
+      defenseValue: 3,
+      triggers: ["when_lead_is_targeted", "when_shift_threat_to_other", "when_you_want_control"],
+      counters: [],
+      notes: "Lead sturen: defensief (lead weg bij jou) of aanvallend (lead op ander zetten).",
+    },
   },
 
   "Pack Tinker": {
@@ -333,8 +442,18 @@ export const ACTION_DEFS = {
     type: "UTILITY",
     phase: "ACTIONS",
     timing: "anytime",
-    description: "Kies 2 toekomstige posities op de Event Track en wissel die om (werkt niet bij lock).",
+    description:
+      "Kies 2 toekomstige posities op de Event Track en wissel die om (werkt niet bij lock).",
     tags: ["TRACK_MANIP", "SWAP_MANUAL", "BLOCKED_BY_LOCK"],
+    meta: {
+      role: "control",
+      affects: ["event_track"],
+      attackValue: 4,
+      defenseValue: 3,
+      triggers: ["when_you_have_scout_info", "when_you_can_place_threat", "when_you_can_remove_threat_from_self"],
+      counters: ["LOCK_EVENTS"],
+      notes: "Gerichte track-control. Sterk met SCOUT-info; kan iemand ‘in het mes’ zetten of jezelf redden.",
+    },
   },
 
   "Mask Swap": {
@@ -345,90 +464,18 @@ export const ACTION_DEFS = {
     type: "TRICK",
     phase: "ACTIONS",
     timing: "anytime",
-    description: "Alle Den-kleuren van vossen in de Yard worden gehusseld en opnieuw uitgedeeld.",
+    description:
+      "Alle Den-kleuren van vossen in de Yard worden gehusseld en opnieuw uitgedeeld.",
     tags: ["SHUFFLE_DEN_COLORS", "ROUND_EFFECT"],
-  },
-};
-
-// 1 bron voor “uitleg in hand modal”
-export const ACTION_CARD_INFO = {
-  "Scatter!": {
-    moment: "ACTIONS-fase (jouw beurt).",
-    choice: null,
-    effect: "Tot het einde van deze ronde mag geen enkele vos de MOVE ‘SCOUT’ gebruiken.",
-    note: "Sterk vóórdat anderen hun MOVE willen kiezen.",
-  },
-  "Den Signal": {
-    moment: "ACTIONS-fase (jouw beurt).",
-    choice: "Kies één Den-kleur: RED, BLUE, GREEN of YELLOW.",
-    effect: "Alle vossen met die Den-kleur zijn deze ronde immuun voor vang-events vanuit de Event Track (bijv. Dog Charge).",
-    note: "Geldt alleen deze ronde en alleen tegen Event-gedreven vangacties.",
-  },
-  "No-Go Zone": {
-    moment: "ACTIONS-fase (jouw beurt).",
-    choice: "Kies één positie op de Event Track (bijv. 3 voor het 3e event).",
-    effect: "Die positie wordt een No-Go Zone: niemand mag daar deze ronde op SCOUTen.",
-    note: "Het event blijft liggen; alleen SCOUT-moves naar die positie zijn verboden.",
-  },
-  "Kick Up Dust": {
-    moment: "ACTIONS-fase (jouw beurt).",
-    choice: "Geen keuze nodig; het spel kiest willekeurig twee toekomstige Event-posities.",
-    effect: "Twee (toekomstige) Event Cards op de Event Track wisselen willekeurig van plek.",
-    note: "Werkt niet als Burrow Beacon (Event Track gelocked) al actief is.",
-  },
-  "Burrow Beacon": {
-    moment: "ACTIONS-fase (jouw beurt).",
-    choice: null,
-    effect: "De Event Track wordt gelocked: deze ronde kan de volgorde van Events niet meer veranderen.",
-    note: "Blokkeert o.a. SHIFT, Kick Up Dust en Pack Tinker voor de rest van de ronde.",
-  },
-  "Molting Mask": {
-    moment: "ACTIONS-fase (jouw beurt).",
-    choice: null,
-    effect: "Verander jouw Den-kleur in een andere willekeurige kleur (RED / BLUE / GREEN / YELLOW), anders dan je huidige.",
-    note: "Vanaf nu val je onder de Den-events en Dog-/Sheepdog-effects van je nieuwe kleur.",
-  },
-  "Hold Still": {
-    moment: "ACTIONS-fase (jouw beurt).",
-    choice: null,
-    effect: "Vanaf nu mogen deze ronde geen nieuwe Action Cards meer worden gespeeld; spelers mogen alleen nog PASS kiezen in de ACTIONS-fase.",
-    note: "Gebruik dit om de OPS-chaos te stoppen en te ‘freezen’.",
-  },
-  "Nose for Trouble": {
-    moment: "ACTIONS-fase (jouw beurt).",
-    choice: "Kies één Event uit de lijst waarvan jij denkt dat het als volgende wordt onthuld.",
-    effect: "Je voorspelt welk Event als volgende uitkomt. De voorspelling wordt gelogd in deze ronde.",
-    note: "Beloning/straffen horen bij jullie (huis)regels.",
-  },
-  "Scent Check": {
-    moment: "ACTIONS-fase (jouw beurt).",
-    choice: "Kies één andere vos die nog in de Yard zit.",
-    effect: "Je ziet direct de huidige DECISION van die vos. Later, zodra jij jouw DECISION kiest, krijg je opnieuw een pop-up met hun actuele keuze.",
-    note: "Je kopieert hun keuze niet; je krijgt alleen info.",
-  },
-  "Follow the Tail": {
-    moment: "ACTIONS-fase (jouw beurt).",
-    choice: "Kies één andere vos die nog in de Yard zit.",
-    effect: "Aan het einde van de DECISION-fase wordt jouw definitieve DECISION automatisch gelijk aan die van de gekozen vos.",
-    note: "Jij mag nog kiezen, maar bij reveal telt uiteindelijk de keuze van je ‘staart-leider’.",
-  },
-  "Alpha Call": {
-    moment: "ACTIONS-fase (jouw beurt).",
-    choice: "Kies één vos als nieuwe Lead Fox.",
-    effect: "De gekozen vos wordt de nieuwe Lead Fox.",
-    note: "De speciale rechten van de Lead Fox staan in de spelregels.",
-  },
-  "Pack Tinker": {
-    moment: "ACTIONS-fase (jouw beurt).",
-    choice: "Kies twee toekomstige posities op de Event Track om te wisselen.",
-    effect: "De Event Cards op die twee posities wisselen van plek.",
-    note: "Werkt niet als Burrow Beacon al actief is (Event Track gelocked).",
-  },
-  "Mask Swap": {
-    moment: "ACTIONS-fase (jouw beurt).",
-    choice: "Geen keuze nodig; alle vossen die nog in de Yard zitten doen automatisch mee.",
-    effect: "Alle Den-kleuren van vossen in de Yard worden gehusseld en opnieuw uitgedeeld.",
-    note: "Je weet niet welke kleur je terugkrijgt. Vang-events kunnen hierdoor plots anders uitpakken.",
+    meta: {
+      role: "chaos",
+      affects: ["all_yard_players"],
+      attackValue: 3,
+      defenseValue: 3,
+      triggers: ["when_den_targeting_upcoming", "when_break_den_synergy", "when_you_want_reset"],
+      counters: [],
+      notes: "Reset den-dynamiek. Goed om targeting te breken of chaos te creëren.",
+    },
   },
 };
 
