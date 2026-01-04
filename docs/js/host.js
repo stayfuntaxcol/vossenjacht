@@ -1965,42 +1965,9 @@ async function addBotToCurrentGame() {
       return;
     }
 
-    // ✅ Bots aanzetten op game-level (eenmalig / altijd ok)
-    await updateDoc(doc(db, "games", gameId), { botsEnabled: true });
-
-    // BOT speler toevoegen
     await addDoc(collection(db, "games", gameId, "players"), {
       name: "BOT Fox",
       isBot: true,
-      isHost: false,
-      uid: null,
-      score: 0,
-      joinedAt: serverTimestamp(),
-      joinOrder: null,
-      color: null,
-      inYard: true,
-      dashed: false,
-      burrowUsed: false,
-      decision: null,
-      hand: [],
-      loot: [],
-    });
-
-    console.log("BOT Fox toegevoegd + botsEnabled=true:", gameId);
-  } catch (err) {
-    console.error("Fout bij BOT toevoegen:", err);
-    alert("Er ging iets mis bij het toevoegen van een BOT.");
-  }
-}
-    const botNr = (latestPlayers || []).filter((p) => p.isBot).length + 1;
-
-    await addDoc(collection(db, "games", gameId, "players"), {
-      name: `BOT Fox ${botNr}`,
-      isBot: true,
-      botProfile: "BALANCED",     // "GREEDY" | "CAUTIOUS" | "BALANCED"
-      botDelayMin: 500,
-      botDelayMax: 1400,
-
       isHost: false,
       uid: null,
       score: 0,
