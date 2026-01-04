@@ -851,11 +851,12 @@ async function fillLeaderboardMonth(listEl) {
 
 // ==== INIT RAID (eerste keer) ====
 
-function isInYardForEvents(p) {
-  return p.inYard !== false && !p.dashed;
-}
 function isInYardLocal(p) {
-  return p.inYard !== false && !p.dashed;
+  return p?.inYard !== false && !p?.dashed;
+}
+
+function isInYardForEvents(p) {
+  return isInYardLocal(p);
 }
 
 async function initRaidIfNeeded(gameRef) {
@@ -1661,9 +1662,6 @@ let botTickScheduled = false;
 
 function isBotPlayer(p) {
   return !!p?.isBot;
-}
-function isInYardLocal(p) {
-  return p?.inYard !== false && !p?.dashed;
 }
 
 function canBotMove(game, p) {
