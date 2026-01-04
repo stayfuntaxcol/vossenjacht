@@ -1886,10 +1886,20 @@ async function acquireBotLock() {
     return false;
   }
 }
+ async function runBotsOnce() {
+  const game = latestGame;
+  if (!gameId || !game) return;
+
+  // bots uit = niks doen
+  if (game.botsEnabled !== true) return;
+
+  // spel klaar = stoppen
+  if (game.status === "finished" || game.phase === "END") return;
+
   const bots = (latestPlayers || []).filter(isBotPlayer);
   if (!bots.length) return;
 
-  // ✅ Belangrijk: doe eerst “is er werk?” check, pas dan lock schrijven
+  // ✅ eerst checken of er werk is, pas dan lock schrijven
   let workNeeded = false;
 
   if (game.phase === "MOVE" && game.status === "round") {
@@ -1906,9 +1916,38 @@ async function acquireBotLock() {
 
   if (!workNeeded) return;
 
-  // ✅ Lock (zodat maar 1 host/board runner bot-acties uitvoert)
   const gotLock = await acquireBotLock();
   if (!gotLock) return;
+
+  // 1) MOVE
+  if (game.phase === "MOVE" && game.status === "round") {
+    for (const bot of bots) {
+      if (!canBotMove(game, bot)) continue;
+      await botDoMove(bot.id);
+    }
+    return;
+  }
+
+  // 2) ACTIONS -> PASS
+  if (game.phase === "ACTIONS" && game.status === "round") {
+    const turnId = isBotOpsTurn(game);
+    if (!turnId) return;
+
+    const bot = bots.find((b) => b.id === turnId);
+    if (!bot) return;
+
+    await botDoPass(bot.id);
+    return;
+  }
+
+  // 3) DECISION
+  if (game.phase === "DECISION" && game.status === "round") {
+    for (const bot of bots) {
+      if (!canBotDecide(game, bot)) continue;
+      await botDoDecision(bot.id);
+    }
+  }
+}
 
   // 1) MOVE: alle bots die nog mogen
   if (game.phase === "MOVE" && game.status === "round") {
