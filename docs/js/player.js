@@ -1571,8 +1571,6 @@ function closeLootModal() {
 // Advisor Hint Overlay — Lead Fox style
 // ==========================================
 
-import { getActionDefByName } from "./cards.js"; // pas pad aan als nodig
-
 let _hintOverlayEl = null;
 let _hintPanelEl = null;
 
