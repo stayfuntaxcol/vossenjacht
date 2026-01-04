@@ -479,6 +479,9 @@ export const ACTION_DEFS = {
   },
 };
 
+// fallback: als je (nog) geen uitgebreide info-map gebruikt
+export const ACTION_CARD_INFO = {};
+
 // ======================
 // ACTION LOOKUP (alias-proof)
 // ======================
@@ -539,7 +542,25 @@ export function getActionDefByName(nameOrId) {
 
 export function getActionInfoByName(nameOrId) {
   const key = actionNameFromAny(nameOrId);
-  return ACTION_CARD_INFO[key] || null;
+
+  // Als er wel een map is: gebruik die
+  const fromMap =
+    (typeof ACTION_CARD_INFO !== "undefined" && ACTION_CARD_INFO)
+      ? ACTION_CARD_INFO[key]
+      : null;
+
+  if (fromMap) return fromMap;
+
+  // Fallback: bouw iets bruikbaars uit ACTION_DEFS
+  const def = getActionDefByName(key);
+  if (!def) return null;
+
+  return {
+    moment: def.phase ? `${def.phase}-fase.` : "ACTIONS-fase.",
+    choice: null,
+    effect: def.description || def.text || "",
+    note: def.timing ? `Timing: ${def.timing}` : "",
+  };
 }
 
 export function getActionIdByName(nameOrId) {
