@@ -1615,18 +1615,19 @@ async function startNewRaidFromBoard() {
   try {
     const code = generateCode();
 
-    const gameRefLocal = await addDoc(collection(db, "games"), {
-      code,
-      status: "lobby",
-      phase: "MOVE",
-      round: 0,
-      currentEventId: null,
-      createdAt: serverTimestamp(),
-      hostUid: null,
-      raidStarted: false,
-      raidEndedByRooster: false,
-      roosterSeen: 0,
-    });
+const gameRefLocal = await addDoc(collection(db, "games"), {
+  code,
+  status: "lobby",
+  phase: "MOVE",
+  round: 0,
+  currentEventId: null,
+  createdAt: serverTimestamp(),
+  hostUid: null,
+  raidStarted: false,
+  raidEndedByRooster: false,
+  roosterSeen: 0,
+  botsEnabled: true, 
+  });
 
     const newGameId = gameRefLocal.id;
     gameId = newGameId;
