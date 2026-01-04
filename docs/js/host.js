@@ -186,7 +186,6 @@ function stopBotLoop() {
   botBusy = false;
   botLastKey = null;
 }
-
 async function runBotsOnce() {
   if (botBusy) return;
 
@@ -194,82 +193,70 @@ async function runBotsOnce() {
   if (!gameId || !game) return;
 
   // bots uit = niks doen
-  if (!game.botsEnabled) return;
+  if (game.botsEnabled !== true) return;
 
   // spel klaar = niks doen
   if (game.status === "finished" || game.phase === "END") return;
 
+  const bots = (latestPlayers || []).filter((p) => !!p?.isBot);
+  if (!bots.length) return;
+
+  // ✅ eerst checken of er werk is (voorkomt “bot spam”)
+  let workNeeded = false;
+
+  if (game.status === "round" && game.phase === "MOVE") {
+    workNeeded = bots.some((b) => canBotMove(game, b));
+  } else if (game.status === "round" && game.phase === "ACTIONS") {
+    const turnId = isBotOpsTurn(game);
+    workNeeded = !!turnId && bots.some((b) => b.id === turnId);
+  } else if (game.status === "round" && game.phase === "DECISION") {
+    workNeeded = bots.some((b) => canBotDecide(game, b));
+  } else {
+    return; // andere fases: geen bot-werk
+  }
+
+  if (!workNeeded) return;
+
   botBusy = true;
   try {
-    await botMaybePassInActions(game);
+    // ✅ lock: maar 1 scherm (host/board) voert bot acties uit
+    const gotLock = await acquireBotLock();
+    if (!gotLock) return;
+
+    // 1) MOVE
+    if (game.phase === "MOVE") {
+      for (const bot of bots) {
+        if (!canBotMove(game, bot)) continue;
+        await botDoMove(bot.id);
+      }
+      return;
+    }
+
+    // 2) ACTIONS -> PASS (veilig)
+    if (game.phase === "ACTIONS") {
+      const turnId = isBotOpsTurn(game);
+      if (!turnId) return;
+
+      const bot = bots.find((b) => b.id === turnId);
+      if (!bot) return;
+
+      await botDoPass(bot.id);
+      return;
+    }
+
+    // 3) DECISION
+    if (game.phase === "DECISION") {
+      for (const bot of bots) {
+        if (!canBotDecide(game, bot)) continue;
+        await botDoDecision(bot.id);
+      }
+    }
   } catch (err) {
     console.error("BOT error in runBotsOnce:", err);
   } finally {
     botBusy = false;
   }
 }
-
-// Bot-logic: alleen voorbeeld -> PASS in ACTIONS als bot aan de beurt is
-async function botMaybePassInActions(game) {
-  // alleen tijdens actieve raid/round
-  if (game.status !== "round" && game.status !== "raid") return;
-
-  // Alleen ACTIONS voorbeeld
-  if (game.phase !== "ACTIONS") return;
-
-  const order = game.opsTurnOrder || [];
-  const idx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
-  const turnId = order[idx];
-  if (!turnId) return;
-
-  const p = (latestPlayers || []).find((x) => x.id === turnId);
-  if (!p || !p.isBot) return;
-
-  // Anti-spam sleutel: dezelfde turn-state -> maar 1 actie
-  const key = `${gameId}|r${game.round}|ACTIONS|${turnId}|i${idx}`;
-  if (botLastKey === key) return;
-  botLastKey = key;
-
-  await botPassOpsTurn(p, game);
-}
-
-// Bot doet PASS (werkt zonder extra snapshots/loops)
-async function botPassOpsTurn(botPlayer, game) {
-  if (!gameRef) return;
-
-  const order = game.opsTurnOrder || [];
-  const idx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
-
-  const nextIdx = Math.min(idx + 1, order.length); // niet voorbij einde
-  const passes = typeof game.opsConsecutivePasses === "number" ? game.opsConsecutivePasses : 0;
-
-  await updateDoc(gameRef, {
-    opsTurnIndex: nextIdx,
-    opsConsecutivePasses: passes + 1,
-  });
-
-  // registreren in actions-collectie (net als spelers)
-  await addDoc(collection(db, "games", gameId, "actions"), {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    playerId: botPlayer.id,
-    playerName: botPlayer.name || "BOT Fox",
-    choice: "PASS",
-    createdAt: serverTimestamp(),
-  });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "BOT",
-    message: `${botPlayer.name || "BOT Fox"} speelt: PASS`,
-  });
-}
-
-// Kleur-cycling voor Dens
-const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
-
-let latestPlayersCacheForScoreboard = [];
 
 // ==== QR: URL maken richting lobby (index.html) ====
 
@@ -1884,98 +1871,6 @@ async function acquireBotLock() {
   } catch (e) {
     console.warn("[BOTS] lock tx failed", e);
     return false;
-  }
-}
- async function runBotsOnce() {
-  const game = latestGame;
-  if (!gameId || !game) return;
-
-  // bots uit = niks doen
-  if (game.botsEnabled !== true) return;
-
-  // spel klaar = stoppen
-  if (game.status === "finished" || game.phase === "END") return;
-
-  const bots = (latestPlayers || []).filter(isBotPlayer);
-  if (!bots.length) return;
-
-  // ✅ eerst checken of er werk is, pas dan lock schrijven
-  let workNeeded = false;
-
-  if (game.phase === "MOVE" && game.status === "round") {
-    workNeeded = bots.some((b) => canBotMove(game, b));
-  } else if (game.phase === "ACTIONS" && game.status === "round") {
-    const turnId = isBotOpsTurn(game);
-    if (turnId) workNeeded = bots.some((b) => b.id === turnId);
-  } else if (game.phase === "DECISION" && game.status === "round") {
-    workNeeded = bots.some((b) => canBotDecide(game, b));
-  } else {
-    // andere fases: bots doen niets
-    return;
-  }
-
-  if (!workNeeded) return;
-
-  const gotLock = await acquireBotLock();
-  if (!gotLock) return;
-
-  // 1) MOVE
-  if (game.phase === "MOVE" && game.status === "round") {
-    for (const bot of bots) {
-      if (!canBotMove(game, bot)) continue;
-      await botDoMove(bot.id);
-    }
-    return;
-  }
-
-  // 2) ACTIONS -> PASS
-  if (game.phase === "ACTIONS" && game.status === "round") {
-    const turnId = isBotOpsTurn(game);
-    if (!turnId) return;
-
-    const bot = bots.find((b) => b.id === turnId);
-    if (!bot) return;
-
-    await botDoPass(bot.id);
-    return;
-  }
-
-  // 3) DECISION
-  if (game.phase === "DECISION" && game.status === "round") {
-    for (const bot of bots) {
-      if (!canBotDecide(game, bot)) continue;
-      await botDoDecision(bot.id);
-    }
-  }
-}
-
-  // 1) MOVE: alle bots die nog mogen
-  if (game.phase === "MOVE" && game.status === "round") {
-    for (const bot of bots) {
-      if (!canBotMove(game, bot)) continue;
-      await botDoMove(bot.id);
-    }
-    return;
-  }
-
-  // 2) ACTIONS: alleen als bot aan de beurt is -> PASS
-  if (game.phase === "ACTIONS" && game.status === "round") {
-    const turnId = isBotOpsTurn(game);
-    if (!turnId) return;
-
-    const bot = bots.find((b) => b.id === turnId);
-    if (!bot) return;
-
-    await botDoPass(bot.id);
-    return;
-  }
-
-  // 3) DECISION: alle bots zonder decision
-  if (game.phase === "DECISION" && game.status === "round") {
-    for (const bot of bots) {
-      if (!canBotDecide(game, bot)) continue;
-      await botDoDecision(bot.id);
-    }
   }
 }
 
