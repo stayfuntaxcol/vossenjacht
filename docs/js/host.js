@@ -18,6 +18,7 @@ import {
   limit,
   addDoc,           // ← toevoegen
   serverTimestamp,  // ← toevoegen
+  runTransaction, // ✅ toevoegen
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const db = getFirestore();
@@ -1105,7 +1106,7 @@ initAuth(async (authUser) => {
 
     const game = snap.data();
     latestGame = { id: snap.id, ...game };
-
+    
     currentRoundNumber = game.round || 0;
     currentPhase       = game.phase || "MOVE";
 
@@ -1113,7 +1114,9 @@ initAuth(async (authUser) => {
       game.currentEventId && game.phase === "REVEAL"
         ? getEventById(game.currentEventId)
         : null;
-
+    
+    scheduleBotTick();
+    
     // In REVEAL-fase: active event groot tonen
 if (game.phase === "REVEAL" && game.currentEventId) {
   if (game.currentEventId !== lastRevealedEventId) {
@@ -1240,7 +1243,8 @@ if (game.phase === "REVEAL" && game.currentEventId) {
     });
     latestPlayers = players;
 
-    renderPlayerZones();
+   renderPlayerZones();
+   scheduleBotTick();
   });
 
   // ==== LOGPANEL ====
@@ -1645,6 +1649,316 @@ const gameRefLocal = await addDoc(collection(db, "games"), {
   }
 }
 
+// ===============================
+// BOT RUNNER (minimal)
+// - MOVE: snatch/forage
+// - ACTIONS: PASS only (veilig)
+// - DECISION: lurk/burrow/dash simple
+// ===============================
+
+let hostUid = null;
+let botTickScheduled = false;
+
+function isBotPlayer(p) {
+  return !!p?.isBot;
+}
+function isInYardLocal(p) {
+  return p?.inYard !== false && !p?.dashed;
+}
+
+function canBotMove(game, p) {
+  if (!game || !p) return false;
+  if (game.status !== "round") return false;
+  if (game.phase !== "MOVE") return false;
+  if (game.raidEndedByRooster) return false;
+  if (!isInYardLocal(p)) return false;
+
+  const moved = Array.isArray(game.movedPlayerIds) ? game.movedPlayerIds : [];
+  return !moved.includes(p.id);
+}
+
+function canBotDecide(game, p) {
+  if (!game || !p) return false;
+  if (game.status !== "round") return false;
+  if (game.phase !== "DECISION") return false;
+  if (game.raidEndedByRooster) return false;
+  if (!isInYardLocal(p)) return false;
+  if (p.decision) return false;
+  return true;
+}
+
+function isBotOpsTurn(game) {
+  if (!game) return null;
+  if (game.status !== "round") return null;
+  if (game.phase !== "ACTIONS") return null;
+  const order = game.opsTurnOrder || [];
+  if (!order.length) return null;
+  const idx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
+  if (idx < 0 || idx >= order.length) return null;
+  return order[idx];
+}
+
+async function logBot(gameId, payload) {
+  // actions entry
+  await addDoc(collection(db, "games", gameId, "actions"), {
+    ...payload,
+    createdAt: serverTimestamp(),
+  });
+  // community log
+  await addLog(gameId, {
+    round: payload.round ?? 0,
+    phase: payload.phase ?? "",
+    kind: "BOT",
+    playerId: payload.playerId,
+    message: payload.message || `${payload.playerName || "BOT"}: ${payload.choice}`,
+  });
+}
+
+function scheduleBotTick() {
+  if (botTickScheduled) return;
+  botTickScheduled = true;
+  setTimeout(async () => {
+    botTickScheduled = false;
+    try {
+      await runBotsOnce();
+    } catch (e) {
+      console.warn("[BOTS] runBotsOnce error", e);
+    }
+  }, 250);
+}
+
+async function acquireBotLock() {
+  if (!gameId) return false;
+
+  const ref = doc(db, "games", gameId);
+  const now = Date.now();
+  const me = hostUid || "anon";
+
+  try {
+    const ok = await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return false;
+      const g = snap.data();
+
+      if (!g?.botsEnabled) return false;
+
+      const lockUntil = Number(g.botsLockUntil || 0);
+      const lockBy = String(g.botsLockBy || "");
+
+      // locked by other and not expired
+      if (lockUntil > now && lockBy && lockBy !== me) return false;
+
+      tx.update(ref, {
+        botsLockUntil: now + 1500,
+        botsLockBy: me,
+      });
+      return true;
+    });
+
+    return ok === true;
+  } catch (e) {
+    console.warn("[BOTS] lock tx failed", e);
+    return false;
+  }
+}
+
+async function runBotsOnce() {
+  const game = latestGame;
+  if (!gameId || !game) return;
+  if (!game.botsEnabled) return;
+
+  // alleen draaien als iemand host/board open heeft
+  const gotLock = await acquireBotLock();
+  if (!gotLock) return;
+
+  const bots = (latestPlayers || []).filter((p) => isBotPlayer(p));
+
+  if (!bots.length) return;
+
+  // 1) MOVE: alle bots die nog mogen
+  if (game.phase === "MOVE" && game.status === "round") {
+    for (const bot of bots) {
+      if (!canBotMove(game, bot)) continue;
+      await botDoMove(bot.id);
+    }
+    return;
+  }
+
+  // 2) ACTIONS: alleen als bot aan de beurt is -> PASS
+  if (game.phase === "ACTIONS" && game.status === "round") {
+    const turnId = isBotOpsTurn(game);
+    if (!turnId) return;
+
+    const bot = bots.find((b) => b.id === turnId);
+    if (!bot) return;
+
+    // opsLocked? dan sowieso PASS
+    await botDoPass(bot.id);
+    return;
+  }
+
+  // 3) DECISION: alle bots zonder decision
+  if (game.phase === "DECISION" && game.status === "round") {
+    for (const bot of bots) {
+      if (!canBotDecide(game, bot)) continue;
+      await botDoDecision(bot.id);
+    }
+  }
+}
+
+async function botDoMove(botId) {
+  const gRef = doc(db, "games", gameId);
+  const pRef = doc(db, "games", gameId, "players", botId);
+
+  await runTransaction(db, async (tx) => {
+    const gSnap = await tx.get(gRef);
+    const pSnap = await tx.get(pRef);
+    if (!gSnap.exists() || !pSnap.exists()) return;
+
+    const g = gSnap.data();
+    const p = { id: pSnap.id, ...pSnap.data() };
+
+    if (!canBotMove(g, p)) return;
+
+    const moved = Array.isArray(g.movedPlayerIds) ? [...g.movedPlayerIds] : [];
+
+    // simpele keuze:
+    // - als bot weinig kaarten heeft -> FORAGE (2)
+    // - anders SNATCH
+    const hand = Array.isArray(p.hand) ? [...p.hand] : [];
+    const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
+    const lootDeck = Array.isArray(g.lootDeck) ? [...g.lootDeck] : [];
+    const loot = Array.isArray(p.loot) ? [...p.loot] : [];
+
+    let choice = "MOVE_SNATCH_FROM_DECK";
+    let msg = "";
+
+    if (hand.length < 2 && actionDeck.length) {
+      let drawn = 0;
+      for (let i = 0; i < 2; i++) {
+        if (!actionDeck.length) break;
+        hand.push(actionDeck.pop());
+        drawn++;
+      }
+      choice = `MOVE_FORAGE_${drawn}cards`;
+      msg = `BOT deed FORAGE (${drawn} kaart(en))`;
+      tx.update(pRef, { hand });
+      tx.update(gRef, { actionDeck, movedPlayerIds: [...new Set([...moved, botId])] });
+    } else {
+      if (!lootDeck.length) return; // geen loot -> bot kan niks
+      const card = lootDeck.pop();
+      loot.push(card);
+      msg = `BOT deed SNATCH (${card.t || "Loot"} ${card.v ?? ""})`;
+      tx.update(pRef, { loot });
+      tx.update(gRef, { lootDeck, movedPlayerIds: [...new Set([...moved, botId])] });
+    }
+
+    // log buiten tx kan niet -> we zetten “pending log” in window en loggen erna
+    tx.update(gRef, { botsLastTickAt: Date.now() });
+
+    // hacky but ok: attach for after-transaction
+    window.__botLastLog = { round: g.round || 0, phase: "MOVE", playerId: botId, playerName: p.name || "BOT", choice, message: msg };
+  });
+
+  // log outside transaction
+  if (window.__botLastLog) {
+    const payload = window.__botLastLog;
+    window.__botLastLog = null;
+    await logBot(gameId, payload);
+  }
+}
+
+async function botDoPass(botId) {
+  const gRef = doc(db, "games", gameId);
+  const pRef = doc(db, "games", gameId, "players", botId);
+
+  await runTransaction(db, async (tx) => {
+    const gSnap = await tx.get(gRef);
+    const pSnap = await tx.get(pRef);
+    if (!gSnap.exists() || !pSnap.exists()) return;
+
+    const g = gSnap.data();
+    const p = { id: pSnap.id, ...pSnap.data() };
+
+    const order = g.opsTurnOrder || [];
+    const idx = typeof g.opsTurnIndex === "number" ? g.opsTurnIndex : 0;
+    if (g.phase !== "ACTIONS" || g.status !== "round") return;
+    if (!order.length || order[idx] !== botId) return;
+
+    const nextIndex = (idx + 1) % order.length;
+    const passes = Number(g.opsConsecutivePasses || 0) + 1;
+
+    tx.update(gRef, {
+      opsTurnIndex: nextIndex,
+      opsConsecutivePasses: passes,
+      botsLastTickAt: Date.now(),
+    });
+
+    window.__botLastLog = {
+      round: g.round || 0,
+      phase: "ACTIONS",
+      playerId: botId,
+      playerName: p.name || "BOT",
+      choice: "ACTION_PASS",
+      message: `BOT kiest PASS`,
+    };
+  });
+
+  if (window.__botLastLog) {
+    const payload = window.__botLastLog;
+    window.__botLastLog = null;
+    await logBot(gameId, payload);
+  }
+}
+
+async function botDoDecision(botId) {
+  const pRef = doc(db, "games", gameId, "players", botId);
+  const gRef = doc(db, "games", gameId);
+
+  await runTransaction(db, async (tx) => {
+    const gSnap = await tx.get(gRef);
+    const pSnap = await tx.get(pRef);
+    if (!gSnap.exists() || !pSnap.exists()) return;
+
+    const g = gSnap.data();
+    const p = { id: pSnap.id, ...pSnap.data() };
+
+    if (!canBotDecide(g, p)) return;
+
+    const loot = Array.isArray(p.loot) ? p.loot : [];
+    const lootPts = loot.reduce((sum, c) => sum + (Number(c?.v) || 0), 0);
+
+    let kind = "LURK";
+
+    // simpele heuristiek:
+    // - als rooster bijna eindigt en bot heeft loot -> DASH
+    if ((g.roosterSeen || 0) >= 2 && lootPts >= 3) kind = "DASH";
+    // - soms BURROW als nog niet gebruikt
+    else if (!p.burrowUsed && Math.random() < 0.15) kind = "BURROW";
+
+    const update = { decision: kind };
+    if (kind === "BURROW" && !p.burrowUsed) update.burrowUsed = true;
+
+    tx.update(pRef, update);
+    tx.update(gRef, { botsLastTickAt: Date.now() });
+
+    window.__botLastLog = {
+      round: g.round || 0,
+      phase: "DECISION",
+      playerId: botId,
+      playerName: p.name || "BOT",
+      choice: `DECISION_${kind}`,
+      message: `BOT kiest ${kind}`,
+    };
+  });
+
+  if (window.__botLastLog) {
+    const payload = window.__botLastLog;
+    window.__botLastLog = null;
+    await logBot(gameId, payload);
+  }
+}
+
 // BOT-speler toevoegen aan de huidige game
 async function addBotToCurrentGame() {
   try {
@@ -1653,6 +1967,33 @@ async function addBotToCurrentGame() {
       return;
     }
 
+    // ✅ Bots aanzetten op game-level (eenmalig / altijd ok)
+    await updateDoc(doc(db, "games", gameId), { botsEnabled: true });
+
+    // BOT speler toevoegen
+    await addDoc(collection(db, "games", gameId, "players"), {
+      name: "BOT Fox",
+      isBot: true,
+      isHost: false,
+      uid: null,
+      score: 0,
+      joinedAt: serverTimestamp(),
+      joinOrder: null,
+      color: null,
+      inYard: true,
+      dashed: false,
+      burrowUsed: false,
+      decision: null,
+      hand: [],
+      loot: [],
+    });
+
+    console.log("BOT Fox toegevoegd + botsEnabled=true:", gameId);
+  } catch (err) {
+    console.error("Fout bij BOT toevoegen:", err);
+    alert("Er ging iets mis bij het toevoegen van een BOT.");
+  }
+}
     const botNr = (latestPlayers || []).filter((p) => p.isBot).length + 1;
 
     await addDoc(collection(db, "games", gameId, "players"), {
