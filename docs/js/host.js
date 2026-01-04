@@ -1649,9 +1649,15 @@ async function addBotToCurrentGame() {
       return;
     }
 
+    const botNr = (latestPlayers || []).filter((p) => p.isBot).length + 1;
+
     await addDoc(collection(db, "games", gameId, "players"), {
-      name: "BOT Fox",
+      name: `BOT Fox ${botNr}`,
       isBot: true,
+      botProfile: "BALANCED",     // "GREEDY" | "CAUTIOUS" | "BALANCED"
+      botDelayMin: 500,
+      botDelayMax: 1400,
+
       isHost: false,
       uid: null,
       score: 0,
@@ -1666,10 +1672,9 @@ async function addBotToCurrentGame() {
       loot: [],
     });
 
-    console.log("BOT Fox toegevoegd aan game:", gameId);
+    console.log("BOT toegevoegd aan game:", gameId);
   } catch (err) {
     console.error("Fout bij BOT toevoegen:", err);
     alert("Er ging iets mis bij het toevoegen van een BOT.");
   }
 }
-
