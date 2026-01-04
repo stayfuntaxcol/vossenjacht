@@ -1886,17 +1886,6 @@ async function acquireBotLock() {
     return false;
   }
 }
-
-async function runBotsOnce() {
-  const game = latestGame;
-  if (!gameId || !game) return;
-
-  // bots uit = niks doen
-  if (game.botsEnabled !== true) return;
-
-  // spel klaar = stoppen
-  if (game.status === "finished" || game.phase === "END") return;
-
   const bots = (latestPlayers || []).filter(isBotPlayer);
   if (!bots.length) return;
 
