@@ -1458,16 +1458,6 @@ async function botDoOpsTurn(botId) {
               : `BOT speelt Action Card: ${cardName}`,
         };
         return;
-
-    logPayload = {
-      round: roundNum,
-      phase: "ACTIONS",
-      playerId: botId,
-      playerName: p.name || "BOT",
-      choice: "ACTION_PASS",
-      message: "BOT kiest PASS",
-    };
-  });
       
 // ===============================
 // BOT DECISION
