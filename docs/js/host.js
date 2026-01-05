@@ -1281,7 +1281,7 @@ async function botDoMove(botId) {
 // - Na action play: opsConsecutivePasses reset naar 0
 // - Anders PASS: opsConsecutivePasses++
 // ===============================
-const BOT_ACTION_PROB = 0.45;
+const BOT_ACTION_PROB = 0.65;
 
 async function botDoOpsTurn(botId) {
   const gRef = doc(db, "games", gameId);
