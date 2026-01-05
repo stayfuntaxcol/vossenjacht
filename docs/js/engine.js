@@ -474,6 +474,21 @@ export async function resolveAfterReveal(gameId) {
   // Event-specifieke logica
   // =======================================
 
+  const flags = game.flagsRound || {};
+const denImmune = flags.denImmune || {};
+
+if (eventId && eventId.startsWith("DEN_")) {
+  const denColor = eventId.replace("DEN_", ""); // "RED" | "BLUE" | "GREEN" | "YELLOW"
+  const isImmune = !!denImmune[denColor];
+
+  if (isImmune) {
+    // ✅ Skip / neutraliseer Den effect
+    // (optioneel) log toevoegen
+    // await addLog(gameId, { round: game.round||0, phase:"REVEAL", kind:"SYSTEM", message:`Den ${denColor} is immune (Den Signal).` });
+
+    return; // of: ga door zonder Den-effect toe te passen
+  }
+
   if (eventId.startsWith("DEN_")) {
     const color = eventId.substring(4); // RED / BLUE / GREEN / YELLOW
     for (const p of players) {
