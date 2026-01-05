@@ -1,7 +1,4 @@
 // host.js — VOSSENJACHT (FULL FEATURE PARITY + AUTONOMOUS BOTS incl. Action Cards)
-// - Behoudt (vrijwel) alle UI/overlays/scoreboard/leaderboards/log/event-poster/QR/new-raid/add-bot uit je originele host.js
-// - Fixes bots: werken in status "raid" én "round", draaien ook in mode=board, lock voorkomt dubbel-run,
-//   bots spelen (simpel) Action Cards in OPS en eindigen OPS met PASS (consecutive-pass logic klopt).
 
 import { initAuth } from "./firebase.js";
 import { getEventById, CARD_BACK } from "./cards.js";
@@ -128,7 +125,7 @@ let latestGame = null;
 let currentLeadFoxId = null;
 let currentLeadFoxName = "";
 
-// Scoreboard cache (bestond impliciet in je file; nu expliciet)
+// Scoreboard cache
 let latestPlayersCacheForScoreboard = [];
 
 // Kleur-cycling voor Dens
@@ -178,8 +175,6 @@ function closeEventPoster() {
 if (eventPosterCloseBtn && eventPosterOverlay) {
   eventPosterCloseBtn.addEventListener("click", closeEventPoster);
 }
-
-// Klik op de donkere achtergrond sluit ook
 if (eventPosterOverlay) {
   eventPosterOverlay.addEventListener("click", (e) => {
     if (e.target === eventPosterOverlay) closeEventPoster();
@@ -223,43 +218,27 @@ function openQrOverlay() {
   if (!qrJoinOverlay) return;
   qrJoinOverlay.classList.add("is-open");
 }
-
 function closeQrOverlay() {
   if (!qrJoinOverlay) return;
   qrJoinOverlay.classList.remove("is-open");
 }
-
-// QR overlay show/hide
-if (qrJoinToggleBtn && qrJoinOverlay) {
-  qrJoinToggleBtn.addEventListener("click", openQrOverlay);
-}
-if (qrJoinCloseBtn && qrJoinOverlay) {
-  qrJoinCloseBtn.addEventListener("click", closeQrOverlay);
-}
+if (qrJoinToggleBtn && qrJoinOverlay) qrJoinToggleBtn.addEventListener("click", openQrOverlay);
+if (qrJoinCloseBtn && qrJoinOverlay) qrJoinCloseBtn.addEventListener("click", closeQrOverlay);
 
 // ===============================
 // Score overlay show/hide
 // ===============================
 function openScoreOverlay() {
   if (!scoreOverlay) return;
-  if (latestGame) {
-    // async, maar ok
-    renderFinalScoreboard(latestGame);
-  }
+  if (latestGame) renderFinalScoreboard(latestGame);
   scoreOverlay.classList.remove("hidden");
 }
-
 function closeScoreOverlay() {
   if (!scoreOverlay) return;
   scoreOverlay.classList.add("hidden");
 }
-
-if (showScoreboardBtn && scoreOverlay) {
-  showScoreboardBtn.addEventListener("click", openScoreOverlay);
-}
-if (scoreOverlayCloseBtn && scoreOverlay) {
-  scoreOverlayCloseBtn.addEventListener("click", closeScoreOverlay);
-}
+if (showScoreboardBtn && scoreOverlay) showScoreboardBtn.addEventListener("click", openScoreOverlay);
+if (scoreOverlayCloseBtn && scoreOverlay) scoreOverlayCloseBtn.addEventListener("click", closeScoreOverlay);
 
 // ===============================
 // Deck helpers
@@ -398,7 +377,6 @@ function renderEventTrack(game) {
 }
 
 function renderStatusCards(game) {
-  // Phase
   if (phaseCard) {
     const phase = game.phase || "–";
     phaseCard.innerHTML = `
@@ -408,7 +386,6 @@ function renderStatusCards(game) {
     `;
   }
 
-  // Lead Fox
   if (leadFoxCard) {
     const name = currentLeadFoxName || "–";
     leadFoxCard.innerHTML = `
@@ -418,24 +395,17 @@ function renderStatusCards(game) {
     `;
   }
 
-  // Rooster – alleen statuskaart
   if (roosterCard) {
     const roosterSeenRaw = game.roosterSeen || 0;
     const stateIndex = Math.max(0, Math.min(roosterSeenRaw, 3));
 
     roosterCard.innerHTML = "";
-    roosterCard.classList.remove(
-      "rooster-state-0",
-      "rooster-state-1",
-      "rooster-state-2",
-      "rooster-state-3"
-    );
+    roosterCard.classList.remove("rooster-state-0", "rooster-state-1", "rooster-state-2", "rooster-state-3");
     roosterCard.classList.add(`rooster-state-${stateIndex}`);
   }
 
   const flags = game.flagsRound || {};
 
-  // Beacon – alleen OFF/ON status art
   if (beaconCard) {
     const on = !!flags.lockEvents;
     beaconCard.innerHTML = "";
@@ -443,7 +413,6 @@ function renderStatusCards(game) {
     beaconCard.classList.add(on ? "beacon-on" : "beacon-off");
   }
 
-  // Scatter – alleen OFF/ON status art
   if (scatterCard) {
     const on = !!flags.scatter;
     scatterCard.innerHTML = "";
@@ -451,7 +420,6 @@ function renderStatusCards(game) {
     scatterCard.classList.add(on ? "scatter-on" : "scatter-off");
   }
 
-  // Sack – empty/half/full
   if (sackCard) {
     const sack = Array.isArray(game.sack) ? game.sack : [];
     const count = sack.length;
@@ -467,7 +435,6 @@ function renderStatusCards(game) {
     sackCard.classList.add(stateClass);
   }
 
-  // Loot Deck
   if (lootDeckCard) {
     const lootDeck = Array.isArray(game.lootDeck) ? game.lootDeck : [];
     lootDeckCard.innerHTML = `
@@ -476,7 +443,6 @@ function renderStatusCards(game) {
     `;
   }
 
-  // Action Deck
   if (actionDeckCard) {
     const actionDeck = Array.isArray(game.actionDeck) ? game.actionDeck : [];
     actionDeckCard.innerHTML = `
@@ -511,15 +477,7 @@ async function renderFinalScoreboard(game) {
     const storedScore = typeof p.score === "number" ? p.score : baseScore;
     const bonus = Math.max(0, storedScore - baseScore);
 
-    return {
-      ...p,
-      eggs,
-      hens,
-      prize,
-      baseScore,
-      totalScore: storedScore,
-      bonus,
-    };
+    return { ...p, eggs, hens, prize, baseScore, totalScore: storedScore, bonus };
   });
 
   enriched.sort((a, b) => b.totalScore - a.totalScore);
@@ -538,8 +496,7 @@ async function renderFinalScoreboard(game) {
   section.appendChild(h2);
 
   const pIntro = document.createElement("p");
-  pIntro.textContent =
-    "Het spel is afgelopen. Dit is de eindranglijst (Eieren, Kippen, Prize Kippen en Bonus):";
+  pIntro.textContent = "Het spel is afgelopen. Dit is de eindranglijst (Eieren, Kippen, Prize Kippen en Bonus):";
   pIntro.className = "scoreboard-intro";
   section.appendChild(pIntro);
 
@@ -588,7 +545,6 @@ async function renderFinalScoreboard(game) {
 
   section.appendChild(table);
 
-  // Multi-leaderboards onder score-tabel
   const leaderboardSection = document.createElement("div");
   leaderboardSection.className = "leaderboard-section-multi";
   leaderboardSection.innerHTML = `
@@ -614,7 +570,6 @@ async function renderFinalScoreboard(game) {
 
   await loadLeaderboardsMulti();
 
-  // Daarna dezelfde inhoud in de popup zetten
   if (scoreOverlayContent) {
     const scoreboardClone = section.cloneNode(true);
     scoreOverlayContent.innerHTML = "";
@@ -624,15 +579,12 @@ async function renderFinalScoreboard(game) {
 
 function calcLeaderboardScore(data) {
   if (!data) return 0;
-
   const eggs = Number(data.eggs || 0);
   const hens = Number(data.hens || 0);
   const prize = Number(data.prize || 0);
   const bonus = Number(data.bonus || 0);
-
   const baseFromCounts = eggs + hens * 2 + prize * 3;
   const stored = Number(data.score || 0);
-
   return Math.max(stored, baseFromCounts + bonus);
 }
 
@@ -642,7 +594,6 @@ function appendLeaderboardRow(listEl, rank, data) {
   const prize = data.prize || 0;
   const bonus = data.bonus || 0;
   const score = calcLeaderboardScore(data);
-
   if (score <= 0) return;
 
   let dateLabel = "";
@@ -717,7 +668,6 @@ async function fillLeaderboardAllTime(listEl) {
   }
 
   docsArr.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
-
   let rank = 1;
   docsArr.forEach((data) => appendLeaderboardRow(listEl, rank++, data));
 }
@@ -758,7 +708,6 @@ async function fillLeaderboardToday(listEl) {
 
   docsArr.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
   const top = docsArr.slice(0, 10);
-
   top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
 }
 
@@ -798,7 +747,6 @@ async function fillLeaderboardMonth(listEl) {
 
   docsArr.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
   const top = docsArr.slice(0, 25);
-
   top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
 }
 
@@ -815,9 +763,7 @@ async function initRaidIfNeeded(gameRefParam) {
   const playersCol = collection(db, "games", gameId, "players");
   const playersSnap = await getDocs(playersCol);
   const players = [];
-  playersSnap.forEach((pDoc) => {
-    players.push({ id: pDoc.id, ...pDoc.data() });
-  });
+  playersSnap.forEach((pDoc) => players.push({ id: pDoc.id, ...pDoc.data() }));
 
   if (!players.length) {
     alert("Geen spelers gevonden. Laat eerst spelers joinen voordat je de raid start.");
@@ -852,9 +798,8 @@ async function initRaidIfNeeded(gameRefParam) {
   sorted.forEach((p, index) => {
     const color = DEN_COLORS[(index + colorOffset) % DEN_COLORS.length];
     const hand = [];
-    for (let k = 0; k < 3; k++) {
-      if (actionDeck.length) hand.push(actionDeck.pop());
-    }
+    for (let k = 0; k < 3; k++) if (actionDeck.length) hand.push(actionDeck.pop());
+
     const pref = doc(db, "games", gameId, "players", p.id);
     updates.push(
       updateDoc(pref, {
@@ -866,7 +811,6 @@ async function initRaidIfNeeded(gameRefParam) {
         decision: null,
         hand,
         loot: [],
-        // bot helper (harmless)
         opsActionPlayedRound: null,
       })
     );
@@ -877,7 +821,6 @@ async function initRaidIfNeeded(gameRefParam) {
 
   const leadIndex = Math.floor(Math.random() * sorted.length);
 
-  // ✅ botsEnabled NIET resetten naar false
   const botsEnabled = game.botsEnabled === true;
 
   updates.push(
@@ -904,7 +847,6 @@ async function initRaidIfNeeded(gameRefParam) {
       opsTurnOrder: [],
       opsTurnIndex: 0,
       opsConsecutivePasses: 0,
-      // safe discard pile
       actionDiscard: [],
     })
   );
@@ -930,22 +872,18 @@ function renderPlayerZones() {
 
   const players = [...latestPlayers];
 
-  // Labels bewaren
   const caughtLabel = caughtZone.querySelector(".player-zone-label");
   const dashLabel = dashZone.querySelector(".player-zone-label");
 
-  // Zones leegmaken
   yardZone.innerHTML = "";
   caughtZone.innerHTML = "";
   dashZone.innerHTML = "";
 
-  // Labels terugzetten
   if (caughtLabel) caughtZone.appendChild(caughtLabel);
   if (dashLabel) dashZone.appendChild(dashLabel);
 
   if (!players.length) return;
 
-  // volgorde op joinOrder
   const ordered = [...players].sort((a, b) => {
     const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
     const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
@@ -955,14 +893,10 @@ function renderPlayerZones() {
   const activeOrdered = ordered.filter(isInYardLocal);
   const baseList = activeOrdered.length ? activeOrdered : [];
 
-  // LeadIndex uit latestGame
-  let leadIdx =
-    latestGame && typeof latestGame.leadIndex === "number" ? latestGame.leadIndex : 0;
-
+  let leadIdx = latestGame && typeof latestGame.leadIndex === "number" ? latestGame.leadIndex : 0;
   if (leadIdx < 0) leadIdx = 0;
   if (baseList.length) leadIdx = leadIdx % baseList.length;
 
-  // bepaal huidige Lead Fox
   currentLeadFoxId = null;
   currentLeadFoxName = "";
 
@@ -974,32 +908,21 @@ function renderPlayerZones() {
     }
   }
 
-  // statuskaarten bijwerken (Lead Fox naam)
   if (latestGame) renderStatusCards(latestGame);
 
-  // kaarten in zones plaatsen
   ordered.forEach((p) => {
     let zoneType = "yard";
 
     if (latestGame && latestGame.raidEndedByRooster) {
-      if (p.dashed) zoneType = "dash";
-      else zoneType = "caught";
+      zoneType = p.dashed ? "dash" : "caught";
     } else {
-      if (p.dashed) zoneType = "dash";
-      else if (p.inYard === false) zoneType = "caught";
-      else zoneType = "yard";
+      zoneType = p.dashed ? "dash" : p.inYard === false ? "caught" : "yard";
     }
 
     const isLead = currentLeadFoxId && p.id === currentLeadFoxId;
-
     const footerBase = zoneType === "yard" ? "IN YARD" : zoneType === "dash" ? "DASHED" : "CAUGHT";
 
-    const card = renderPlayerSlotCard(p, {
-      size: "medium",
-      footer: footerBase,
-      isLead,
-    });
-
+    const card = renderPlayerSlotCard(p, { size: "medium", footer: footerBase, isLead });
     if (!card) return;
 
     if (zoneType === "yard") yardZone.appendChild(card);
@@ -1007,7 +930,6 @@ function renderPlayerZones() {
     else caughtZone.appendChild(card);
   });
 
-  // Als spel klaar is → eindscore tonen
   if (latestGame && isGameFinished(latestGame)) {
     renderFinalScoreboard(latestGame);
   }
@@ -1053,7 +975,6 @@ async function startNewRaidFromBoard() {
     alert("Er ging iets mis bij het starten van een nieuwe Raid.");
   }
 }
-
 if (newRaidBtn) newRaidBtn.addEventListener("click", startNewRaidFromBoard);
 
 // ===============================
@@ -1062,28 +983,24 @@ if (newRaidBtn) newRaidBtn.addEventListener("click", startNewRaidFromBoard);
 let hostUid = null;
 let botTickScheduled = false;
 
-// botRunnerId met storage fallback
+// Base bot action chance (hand bonus wordt binnen botDoOpsTurn opgeteld)
+const BOT_ACTION_PROB = 0.65;
+
 let botRunnerId = null;
 try {
   botRunnerId = localStorage.getItem("botRunnerId");
 } catch (e) {
   botRunnerId = null;
 }
-
 if (!botRunnerId) {
   const rnd =
-    globalThis.crypto && crypto.randomUUID
-      ? crypto.randomUUID()
-      : String(Math.random()).slice(2) + "-" + Date.now();
+    globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + "-" + Date.now();
   botRunnerId = rnd;
   try {
     localStorage.setItem("botRunnerId", botRunnerId);
-  } catch (e) {
-    // ignore
-  }
+  } catch (e) {}
 }
 
-// BOT LOOP (1x starten)
 let botInterval = null;
 let botBusy = false;
 
@@ -1091,14 +1008,12 @@ function startBotLoop() {
   if (botInterval) return;
   botInterval = setInterval(runBotsOnce, 900);
 }
-
 function stopBotLoop() {
   if (!botInterval) return;
   clearInterval(botInterval);
   botInterval = null;
   botBusy = false;
 }
-
 function scheduleBotTick() {
   if (botTickScheduled) return;
   botTickScheduled = true;
@@ -1227,7 +1142,6 @@ async function botDoMove(botId) {
     const lootDeck = Array.isArray(g.lootDeck) ? [...g.lootDeck] : [];
     const loot = Array.isArray(p.loot) ? [...p.loot] : [];
 
-    // Strategie: als hand klein -> forage 2, anders snatch loot
     if (hand.length < 2 && actionDeck.length) {
       let drawn = 0;
       for (let i = 0; i < 2; i++) {
@@ -1276,17 +1190,55 @@ async function botDoMove(botId) {
 }
 
 // ===============================
-// BOT ACTIONS (OPS): play action OR PASS
-// - Bots spelen max 1 kaart per ronde in OPS (per bot)
-// - Na action play: opsConsecutivePasses reset naar 0
-// - Anders PASS: opsConsecutivePasses++
+// BOT ACTIONS (OPS): helpers + play action OR PASS
 // ===============================
-const base = typeof BOT_ACTION_PROB === "number" ? BOT_ACTION_PROB : 0.65;
-const handBonus = Math.min(0.25, Math.max(0, (hand.length - 1) * 0.08)); // +8% per extra kaart
-const prob = Math.min(0.95, base + handBonus);
+const BOT_SIMPLE_EFFECTS = new Set([
+  "Burrow Beacon",
+  "Scatter!",
+  "Scent Check",
+  "Follow the Tail",
+  "Den Signal",
+  "Pack Tinker",
+]);
 
-let willPlay = !alreadyPlayed && hand.length && Math.random() < prob;
+function pickBotActionName(hand) {
+  const names = (hand || []).map((c) => c?.name).filter(Boolean);
+  if (!names.length) return null;
 
+  const preferred = names.filter((n) => BOT_SIMPLE_EFFECTS.has(n));
+  if (preferred.length) return preferred[Math.floor(Math.random() * preferred.length)];
+  return names[Math.floor(Math.random() * names.length)];
+}
+
+function lootPoints(p) {
+  const loot = Array.isArray(p?.loot) ? p.loot : [];
+  return loot.reduce((sum, c) => sum + (Number(c?.v) || 0), 0);
+}
+
+function pickBestTargetPlayerId(botId) {
+  const candidates = (latestPlayers || []).filter((x) => x?.id && x.id !== botId && isInYardLocal(x));
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => lootPoints(b) - lootPoints(a));
+  return candidates[0].id;
+}
+
+function pickPackTinkerIndices(game) {
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const revealed = Array.isArray(game?.eventRevealed) ? game.eventRevealed : track.map(() => false);
+
+  const hidden = [];
+  for (let i = 0; i < track.length; i++) {
+    if (!revealed[i]) hidden.push(i);
+  }
+  if (hidden.length < 2) return null;
+
+  const nextIdx = typeof game.eventIndex === "number" ? game.eventIndex : hidden[0];
+  const a = hidden.includes(nextIdx) ? nextIdx : hidden[0];
+  let b = hidden[hidden.length - 1];
+  if (b === a) b = hidden[0];
+
+  return [a, b];
+}
 
 async function botDoOpsTurn(botId) {
   const gRef = doc(db, "games", gameId);
@@ -1318,34 +1270,32 @@ async function botDoOpsTurn(botId) {
     const discard = Array.isArray(g.actionDiscard) ? [...g.actionDiscard] : [];
     const flagsRound = g.flagsRound ? { ...g.flagsRound } : {};
 
-    let willPlay = !alreadyPlayed && hand.length && Math.random() < BOT_ACTION_PROB;
+    // ✅ kansberekening hoort HIER (hand/alreadyPlayed bestaan hier pas)
+    const base = typeof g.botActionProb === "number" ? g.botActionProb : BOT_ACTION_PROB;
+    const handBonus = Math.min(0.25, Math.max(0, (hand.length - 1) * 0.08)); // +8% per extra kaart
+    const prob = Math.min(0.95, base + handBonus);
+    let willPlay = !alreadyPlayed && hand.length > 0 && Math.random() < prob;
 
     if (willPlay) {
       const cardName = pickBotActionName(hand);
       if (!cardName) {
         willPlay = false;
       } else {
-        // remove 1 instance from hand
         const removeIdx = hand.findIndex((c) => c?.name === cardName);
         if (removeIdx >= 0) hand.splice(removeIdx, 1);
 
-        // discard
         discard.push({ name: cardName, by: botId, round: roundNum, at: Date.now() });
-
-        // draw 1 replacement (optioneel)
         if (actionDeck.length) hand.push(actionDeck.pop());
 
-        // extra game updates (voor cards die meer doen dan flags)
         const extraGameUpdates = {};
 
-        // effecten
         if (cardName === "Burrow Beacon") {
           flagsRound.lockEvents = true;
         }
 
         if (cardName === "Scatter!") {
           flagsRound.scatter = true;
-          extraGameUpdates.scatterArmed = true; // <-- geen extra tx.update nodig
+          extraGameUpdates.scatterArmed = true;
         }
 
         if (cardName === "Scent Check") {
@@ -1355,12 +1305,14 @@ async function botDoOpsTurn(botId) {
         }
 
         if (cardName === "Follow the Tail") {
-          const ft = flagsRound.followTail ? { ...flagsRound.followTail } : {};
-          ft[botId] = true;
-          flagsRound.followTail = ft;
+          const targetId = pickBestTargetPlayerId(botId);
+          if (targetId) {
+            const ft = flagsRound.followTail ? { ...flagsRound.followTail } : {};
+            ft[botId] = targetId; // ✅ followerId -> targetId (engine verwacht dit)
+            flagsRound.followTail = ft;
+          }
         }
 
-        // Den Signal: maakt jouw DEN kleur immune tegen DEN_* event
         if (cardName === "Den Signal") {
           const denImmune = flagsRound.denImmune ? { ...flagsRound.denImmune } : {};
           const myColor = p.color;
@@ -1368,7 +1320,6 @@ async function botDoOpsTurn(botId) {
           flagsRound.denImmune = denImmune;
         }
 
-        // Pack Tinker: swap 2 hidden event cards (alleen als events niet gelocked zijn)
         if (cardName === "Pack Tinker") {
           if (!flagsRound.lockEvents) {
             const pair = pickPackTinkerIndices(g);
@@ -1378,19 +1329,12 @@ async function botDoOpsTurn(botId) {
               if (trackNow[i1] && trackNow[i2]) {
                 [trackNow[i1], trackNow[i2]] = [trackNow[i2], trackNow[i1]];
                 extraGameUpdates.eventTrack = trackNow;
-                extraGameUpdates.lastPackTinker = {
-                  by: botId,
-                  i1,
-                  i2,
-                  round: roundNum,
-                  at: Date.now(),
-                };
+                extraGameUpdates.lastPackTinker = { by: botId, i1, i2, round: roundNum, at: Date.now() };
               }
             }
           }
         }
 
-        // update player + game, reset pass-chain
         tx.update(pRef, { hand, opsActionPlayedRound: roundNum });
         tx.update(gRef, {
           actionDeck,
@@ -1412,6 +1356,8 @@ async function botDoOpsTurn(botId) {
               ? `BOT speelt Pack Tinker (swap ${extraGameUpdates.lastPackTinker.i1 + 1} ↔ ${extraGameUpdates.lastPackTinker.i2 + 1})`
               : cardName === "Den Signal"
               ? `BOT speelt Den Signal (DEN ${p.color || "?"} immune)`
+              : cardName === "Follow the Tail"
+              ? `BOT speelt Follow the Tail`
               : `BOT speelt Action Card: ${cardName}`,
         };
         return;
@@ -1438,7 +1384,7 @@ async function botDoOpsTurn(botId) {
   if (logPayload) await logBot(gameId, logPayload);
 }
 
- // ===============================
+// ===============================
 // BOT DECISION
 // ===============================
 async function botDoDecision(botId) {
@@ -1465,18 +1411,11 @@ async function botDoDecision(botId) {
 
     const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
-    // kans groeit per ronde + extra als je meer loot hebt + als rooster vaker gezien is
-    let dashProb =
-      0.05 +              // basis 5%
-      roundNum * 0.06 +   // +6% per ronde
-      lootPts * 0.05 +    // +5% per lootpunt
-      roosterSeen * 0.10; // +10% per roosterSeen
-
+    let dashProb = 0.05 + roundNum * 0.06 + lootPts * 0.05 + roosterSeen * 0.10;
     dashProb = clamp(dashProb, 0, 0.85);
 
     let kind = "LURK";
 
-    // (optioneel) alleen DASH als je überhaupt buit hebt
     if (lootPts > 0 && Math.random() < dashProb) {
       kind = "DASH";
     } else if (!p.burrowUsed && Math.random() < 0.15) {
@@ -1516,7 +1455,6 @@ async function runBotsOnce() {
   const bots = (latestPlayers || []).filter((p) => isBotPlayer(p));
   if (!bots.length) return;
 
-  // werk nodig?
   let workNeeded = false;
 
   if (game.phase === "MOVE") {
@@ -1577,25 +1515,41 @@ async function addBotToCurrentGame() {
       return;
     }
 
+    const gSnap = await getDoc(doc(db, "games", gameId));
+    if (!gSnap.exists()) return;
+    const g = gSnap.data();
+
+    const playersSnap = await getDocs(collection(db, "games", gameId, "players"));
+    const players = [];
+    playersSnap.forEach((pDoc) => players.push({ id: pDoc.id, ...pDoc.data() }));
+
+    const maxJoin = players.reduce((m, p) => (typeof p.joinOrder === "number" ? Math.max(m, p.joinOrder) : m), -1);
+    const joinOrder = maxJoin + 1;
+    const color = DEN_COLORS[joinOrder % DEN_COLORS.length];
+
+    let actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
+    const hand = [];
+    for (let i = 0; i < 3; i++) if (actionDeck.length) hand.push(actionDeck.pop());
+
     await addDoc(collection(db, "games", gameId, "players"), {
-      name: "BOT Fox",
+      name: `BOT Fox ${joinOrder + 1}`,
       isBot: true,
       isHost: false,
       uid: null,
       score: 0,
       joinedAt: serverTimestamp(),
-      joinOrder: null,
-      color: null,
+      joinOrder,
+      color,
       inYard: true,
       dashed: false,
       burrowUsed: false,
       decision: null,
-      hand: [],
+      hand,
       loot: [],
       opsActionPlayedRound: null,
     });
 
-    await updateDoc(doc(db, "games", gameId), { botsEnabled: true });
+    await updateDoc(doc(db, "games", gameId), { botsEnabled: true, actionDeck });
 
     console.log("BOT toegevoegd aan game:", gameId);
   } catch (err) {
@@ -1603,7 +1557,6 @@ async function addBotToCurrentGame() {
     alert("Er ging iets mis bij het toevoegen van een BOT.");
   }
 }
-
 if (addBotBtn) addBotBtn.addEventListener("click", addBotToCurrentGame);
 
 // ===============================
@@ -1618,10 +1571,8 @@ initAuth(async (authUser) => {
 
   if (!gameId || !gameRef || !playersColRef) return;
 
-  // botloop altijd starten; lock voorkomt dubbel (host/board)
   startBotLoop();
 
-  // ==== GAME SNAPSHOT ====
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
       if (gameInfo) gameInfo.textContent = "Spel niet gevonden";
@@ -1634,10 +1585,8 @@ initAuth(async (authUser) => {
     currentRoundNumber = game.round || 0;
     currentPhase = game.phase || "MOVE";
 
-    // Stop bots bij einde
     if (isGameFinished(game)) stopBotLoop();
 
-    // In REVEAL-fase: active event groot tonen
     if (game.phase === "REVEAL" && game.currentEventId) {
       if (game.currentEventId !== lastRevealedEventId) {
         lastRevealedEventId = game.currentEventId;
@@ -1647,10 +1596,8 @@ initAuth(async (authUser) => {
       lastRevealedEventId = null;
     }
 
-    // zones opnieuw tekenen (Lead Fox kan wisselen)
     renderPlayerZones();
 
-    // Start-knop blokkeren als spel al klaar is
     if (startBtn) {
       startBtn.disabled = game.status === "finished" || game.raidEndedByRooster === true;
     }
@@ -1658,22 +1605,16 @@ initAuth(async (authUser) => {
     renderEventTrack(game);
     renderStatusCards(game);
 
-    // QR-code updaten
     if (game.code) renderJoinQr(game);
 
     let extraStatus = "";
     if (game.raidEndedByRooster) extraStatus = " – Raid geëindigd door Rooster Crow (limiet bereikt)";
-    if (game.status === "finished") {
-      extraStatus = extraStatus ? extraStatus + " – spel afgelopen." : " – spel afgelopen.";
-    }
+    if (game.status === "finished") extraStatus = extraStatus ? extraStatus + " – spel afgelopen." : " – spel afgelopen.";
 
     if (gameInfo) {
-      gameInfo.textContent =
-        `Code: ${game.code} – Status: ${game.status} – ` +
-        `Ronde: ${currentRoundNumber} – Fase: ${currentPhase}${extraStatus}`;
+      gameInfo.textContent = `Code: ${game.code} – Status: ${game.status} – Ronde: ${currentRoundNumber} – Fase: ${currentPhase}${extraStatus}`;
     }
 
-    // Spel afgelopen → eindscore tonen & actions-stoppen
     if (isGameFinished(game)) {
       if (unsubActions) {
         unsubActions();
@@ -1739,19 +1680,15 @@ initAuth(async (authUser) => {
     });
   });
 
-  // ==== PLAYERS SNAPSHOT → alleen data, daarna renderPlayerZones ====
   onSnapshot(playersColRef, (snapshot) => {
     const players = [];
-    snapshot.forEach((pDoc) => {
-      players.push({ id: pDoc.id, ...pDoc.data() });
-    });
+    snapshot.forEach((pDoc) => players.push({ id: pDoc.id, ...pDoc.data() }));
     latestPlayers = players;
 
     renderPlayerZones();
     scheduleBotTick();
   });
 
-  // ==== LOGPANEL ====
   if (!isBoardOnly) {
     const logCol = collection(db, "games", gameId, "log");
     const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
@@ -1769,16 +1706,14 @@ initAuth(async (authUser) => {
       entries.forEach((e) => {
         const div = document.createElement("div");
         div.className = "log-line";
-        div.textContent = `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${
-          e.message ?? ""
-        }`;
+        div.textContent = `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${e.message ?? ""}`;
         inner.appendChild(div);
       });
       logPanel.appendChild(inner);
     });
   }
 
-  // ==== START ROUND (met Lead Fox rotatie) ====
+  // ==== START ROUND ====
   if (startBtn) {
     startBtn.addEventListener("click", async () => {
       const game = await initRaidIfNeeded(gameRef);
@@ -1889,8 +1824,7 @@ initAuth(async (authUser) => {
             round: roundNumber,
             phase: "DECISION",
             kind: "SYSTEM",
-            message:
-              "Geen actieve vossen in de Yard na MOVE – OPS wordt overgeslagen. Door naar DECISION.",
+            message: "Geen actieve vossen in de Yard na MOVE – OPS wordt overgeslagen. Door naar DECISION.",
           });
           return;
         }
