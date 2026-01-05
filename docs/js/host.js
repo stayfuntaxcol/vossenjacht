@@ -1284,7 +1284,14 @@ async function botDoMove(botId) {
 const BOT_ACTION_PROB = 0.45;
 
 // simpele, veilige effecten (alle overige: alleen discard+log)
-const BOT_SIMPLE_EFFECTS = new Set(["Burrow Beacon", "Scatter!", "Scent Check", "Follow the Tail"]);
+const BOT_SIMPLE_EFFECTS = new Set([
+  "Burrow Beacon",
+  "Scatter!",
+  "Scent Check",
+  "Follow the Tail",
+  "Den Signal",
+  "Pack Tinker",
+]);
 
 function pickBotActionName(hand) {
   const names = (hand || []).map((c) => c?.name).filter(Boolean);
@@ -1293,6 +1300,40 @@ function pickBotActionName(hand) {
   const preferred = names.filter((n) => BOT_SIMPLE_EFFECTS.has(n));
   if (preferred.length) return preferred[Math.floor(Math.random() * preferred.length)];
   return names[Math.floor(Math.random() * names.length)];
+}
+function lootPoints(p) {
+  const loot = Array.isArray(p?.loot) ? p.loot : [];
+  return loot.reduce((sum, c) => sum + (Number(c?.v) || 0), 0);
+}
+
+function pickBestTargetPlayerId(botId) {
+  const candidates = (latestPlayers || [])
+    .filter((x) => x?.id && x.id !== botId && isInYardLocal(x));
+
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) => lootPoints(b) - lootPoints(a));
+  return candidates[0].id;
+}
+
+function pickPackTinkerIndices(game) {
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const revealed = Array.isArray(game?.eventRevealed)
+    ? game.eventRevealed
+    : track.map(() => false);
+
+  const hidden = [];
+  for (let i = 0; i < track.length; i++) {
+    if (!revealed[i]) hidden.push(i);
+  }
+  if (hidden.length < 2) return null;
+
+  const nextIdx = typeof game.eventIndex === "number" ? game.eventIndex : hidden[0];
+  const a = hidden.includes(nextIdx) ? nextIdx : hidden[0];
+  let b = hidden[hidden.length - 1];
+  if (b === a) b = hidden[0];
+
+  return [a, b];
 }
 
 async function botDoOpsTurn(botId) {
@@ -1336,29 +1377,60 @@ async function botDoOpsTurn(botId) {
         const removeIdx = hand.findIndex((c) => c?.name === cardName);
         if (removeIdx >= 0) hand.splice(removeIdx, 1);
 
-        // discard
+               // discard
         discard.push({ name: cardName, by: botId, round: roundNum, at: Date.now() });
 
         // draw 1 replacement (optioneel)
         if (actionDeck.length) hand.push(actionDeck.pop());
 
-        // simpele effecten (veilig)
+        // extra game updates (voor cards die meer doen dan flags)
+        const extraGameUpdates = {};
+
+        // effecten
         if (cardName === "Burrow Beacon") {
           flagsRound.lockEvents = true;
         }
+
         if (cardName === "Scatter!") {
           flagsRound.scatter = true;
           tx.update(gRef, { scatterArmed: true });
         }
+
         if (cardName === "Scent Check") {
           const arr = Array.isArray(flagsRound.scentChecks) ? [...flagsRound.scentChecks] : [];
           if (!arr.includes(botId)) arr.push(botId);
           flagsRound.scentChecks = arr;
         }
+
         if (cardName === "Follow the Tail") {
           const ft = flagsRound.followTail ? { ...flagsRound.followTail } : {};
           ft[botId] = true;
           flagsRound.followTail = ft;
+        }
+
+        // ✅ Den Signal (aanname): maakt jouw DEN kleur immune tegen DEN_* event
+        // Als jouw engine denImmune per playerId gebruikt ipv per kleur: pas dit aan.
+        if (cardName === "Den Signal") {
+          const denImmune = flagsRound.denImmune ? { ...flagsRound.denImmune } : {};
+          const myColor = p.color;
+          if (myColor) denImmune[myColor] = true;
+          flagsRound.denImmune = denImmune;
+        }
+
+        // ✅ Pack Tinker: swap 2 hidden event cards (alleen als events niet gelocked zijn)
+        if (cardName === "Pack Tinker") {
+          if (!flagsRound.lockEvents) {
+            const pair = pickPackTinkerIndices(g);
+            if (pair) {
+              const [i1, i2] = pair;
+              const trackNow = Array.isArray(g.eventTrack) ? [...g.eventTrack] : [];
+              if (trackNow[i1] && trackNow[i2]) {
+                [trackNow[i1], trackNow[i2]] = [trackNow[i2], trackNow[i1]];
+                extraGameUpdates.eventTrack = trackNow;
+                extraGameUpdates.lastPackTinker = { by: botId, i1, i2, round: roundNum, at: Date.now() };
+              }
+            }
+          }
         }
 
         // update player + game, reset pass-chain
@@ -1369,6 +1441,7 @@ async function botDoOpsTurn(botId) {
           flagsRound,
           opsTurnIndex: nextIndex,
           opsConsecutivePasses: 0,
+          ...extraGameUpdates,
         });
 
         logPayload = {
@@ -1377,19 +1450,14 @@ async function botDoOpsTurn(botId) {
           playerId: botId,
           playerName: p.name || "BOT",
           choice: `ACTION_PLAY_${cardName}`,
-          message: `BOT speelt Action Card: ${cardName}`,
+          message:
+            cardName === "Pack Tinker" && extraGameUpdates.lastPackTinker
+              ? `BOT speelt Pack Tinker (swap ${extraGameUpdates.lastPackTinker.i1 + 1} ↔ ${extraGameUpdates.lastPackTinker.i2 + 1})`
+              : cardName === "Den Signal"
+              ? `BOT speelt Den Signal (DEN ${p.color || "?"} immune)`
+              : `BOT speelt Action Card: ${cardName}`,
         };
         return;
-      }
-    }
-
-    // PASS
-    const passes = Number(g.opsConsecutivePasses || 0) + 1;
-
-    tx.update(gRef, {
-      opsTurnIndex: nextIndex,
-      opsConsecutivePasses: passes,
-    });
 
     logPayload = {
       round: roundNum,
@@ -2010,9 +2078,3 @@ initAuth(async (authUser) => {
     });
   }
 });
-
-// ===============================
-// Safety: listeners buttons exist
-// ===============================
-if (newRaidBtn) newRaidBtn.addEventListener("click", startNewRaidFromBoard);
-if (addBotBtn) addBotBtn.addEventListener("click", addBotToCurrentGame);
