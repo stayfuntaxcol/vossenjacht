@@ -1281,7 +1281,12 @@ async function botDoMove(botId) {
 // - Na action play: opsConsecutivePasses reset naar 0
 // - Anders PASS: opsConsecutivePasses++
 // ===============================
-const BOT_ACTION_PROB = 0.65;
+const base = typeof BOT_ACTION_PROB === "number" ? BOT_ACTION_PROB : 0.65;
+const handBonus = Math.min(0.25, Math.max(0, (hand.length - 1) * 0.08)); // +8% per extra kaart
+const prob = Math.min(0.95, base + handBonus);
+
+let willPlay = !alreadyPlayed && hand.length && Math.random() < prob;
+
 
 async function botDoOpsTurn(botId) {
   const gRef = doc(db, "games", gameId);
