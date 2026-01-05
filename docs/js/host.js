@@ -1283,59 +1283,6 @@ async function botDoMove(botId) {
 // ===============================
 const BOT_ACTION_PROB = 0.45;
 
-// simpele, veilige effecten (alle overige: alleen discard+log)
-const BOT_SIMPLE_EFFECTS = new Set([
-  "Burrow Beacon",
-  "Scatter!",
-  "Scent Check",
-  "Follow the Tail",
-  "Den Signal",
-  "Pack Tinker",
-]);
-
-function pickBotActionName(hand) {
-  const names = (hand || []).map((c) => c?.name).filter(Boolean);
-  if (!names.length) return null;
-
-  const preferred = names.filter((n) => BOT_SIMPLE_EFFECTS.has(n));
-  if (preferred.length) return preferred[Math.floor(Math.random() * preferred.length)];
-  return names[Math.floor(Math.random() * names.length)];
-}
-function lootPoints(p) {
-  const loot = Array.isArray(p?.loot) ? p.loot : [];
-  return loot.reduce((sum, c) => sum + (Number(c?.v) || 0), 0);
-}
-
-function pickBestTargetPlayerId(botId) {
-  const candidates = (latestPlayers || [])
-    .filter((x) => x?.id && x.id !== botId && isInYardLocal(x));
-
-  if (!candidates.length) return null;
-
-  candidates.sort((a, b) => lootPoints(b) - lootPoints(a));
-  return candidates[0].id;
-}
-
-function pickPackTinkerIndices(game) {
-  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
-  const revealed = Array.isArray(game?.eventRevealed)
-    ? game.eventRevealed
-    : track.map(() => false);
-
-  const hidden = [];
-  for (let i = 0; i < track.length; i++) {
-    if (!revealed[i]) hidden.push(i);
-  }
-  if (hidden.length < 2) return null;
-
-  const nextIdx = typeof game.eventIndex === "number" ? game.eventIndex : hidden[0];
-  const a = hidden.includes(nextIdx) ? nextIdx : hidden[0];
-  let b = hidden[hidden.length - 1];
-  if (b === a) b = hidden[0];
-
-  return [a, b];
-}
-
 async function botDoOpsTurn(botId) {
   const gRef = doc(db, "games", gameId);
   const pRef = doc(db, "games", gameId, "players", botId);
@@ -1377,7 +1324,7 @@ async function botDoOpsTurn(botId) {
         const removeIdx = hand.findIndex((c) => c?.name === cardName);
         if (removeIdx >= 0) hand.splice(removeIdx, 1);
 
-               // discard
+        // discard
         discard.push({ name: cardName, by: botId, round: roundNum, at: Date.now() });
 
         // draw 1 replacement (optioneel)
@@ -1393,7 +1340,7 @@ async function botDoOpsTurn(botId) {
 
         if (cardName === "Scatter!") {
           flagsRound.scatter = true;
-          tx.update(gRef, { scatterArmed: true });
+          extraGameUpdates.scatterArmed = true; // <-- geen extra tx.update nodig
         }
 
         if (cardName === "Scent Check") {
@@ -1408,8 +1355,7 @@ async function botDoOpsTurn(botId) {
           flagsRound.followTail = ft;
         }
 
-        // ✅ Den Signal (aanname): maakt jouw DEN kleur immune tegen DEN_* event
-        // Als jouw engine denImmune per playerId gebruikt ipv per kleur: pas dit aan.
+        // Den Signal: maakt jouw DEN kleur immune tegen DEN_* event
         if (cardName === "Den Signal") {
           const denImmune = flagsRound.denImmune ? { ...flagsRound.denImmune } : {};
           const myColor = p.color;
@@ -1417,7 +1363,7 @@ async function botDoOpsTurn(botId) {
           flagsRound.denImmune = denImmune;
         }
 
-        // ✅ Pack Tinker: swap 2 hidden event cards (alleen als events niet gelocked zijn)
+        // Pack Tinker: swap 2 hidden event cards (alleen als events niet gelocked zijn)
         if (cardName === "Pack Tinker") {
           if (!flagsRound.lockEvents) {
             const pair = pickPackTinkerIndices(g);
@@ -1427,7 +1373,13 @@ async function botDoOpsTurn(botId) {
               if (trackNow[i1] && trackNow[i2]) {
                 [trackNow[i1], trackNow[i2]] = [trackNow[i2], trackNow[i1]];
                 extraGameUpdates.eventTrack = trackNow;
-                extraGameUpdates.lastPackTinker = { by: botId, i1, i2, round: roundNum, at: Date.now() };
+                extraGameUpdates.lastPackTinker = {
+                  by: botId,
+                  i1,
+                  i2,
+                  round: roundNum,
+                  at: Date.now(),
+                };
               }
             }
           }
@@ -1458,7 +1410,29 @@ async function botDoOpsTurn(botId) {
               : `BOT speelt Action Card: ${cardName}`,
         };
         return;
-      
+      }
+    }
+
+    // PASS
+    const passes = Number(g.opsConsecutivePasses || 0) + 1;
+    tx.update(gRef, {
+      opsTurnIndex: nextIndex,
+      opsConsecutivePasses: passes,
+    });
+
+    logPayload = {
+      round: roundNum,
+      phase: "ACTIONS",
+      playerId: botId,
+      playerName: p.name || "BOT",
+      choice: "ACTION_PASS",
+      message: "BOT kiest PASS",
+    };
+  });
+
+  if (logPayload) await logBot(gameId, logPayload);
+}
+  
 // ===============================
 // BOT DECISION
 // ===============================
