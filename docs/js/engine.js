@@ -32,19 +32,29 @@ function shuffleArray(array) {
 // LOCKED (reeds onthuld) vs FUTURE (nog dicht)
 function splitTrackByStatus(game) {
   const track = Array.isArray(game.eventTrack) ? [...game.eventTrack] : [];
-  const eventIndex =
-    typeof game.eventIndex === "number" ? game.eventIndex : 0;
+  const eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
 
   return {
     track,
     eventIndex,
-    locked: track.slice(0, eventIndex),   // al gespeeld
-    future: track.slice(eventIndex),      // nog te komen
+    locked: track.slice(0, eventIndex), // al gespeeld
+    future: track.slice(eventIndex), // nog te komen
   };
 }
 
 function isInYardForEvents(p) {
-  return p.inYard !== false && !p.dashed;
+  return p?.inYard !== false && !p?.dashed;
+}
+
+function normalizeColorKey(c) {
+  if (!c) return "";
+  return String(c).trim().toUpperCase();
+}
+
+function isDenImmune(flagsRound, color) {
+  const key = normalizeColorKey(color);
+  const map = flagsRound?.denImmune || {};
+  return !!(map[key] || map[key.toLowerCase()]);
 }
 
 function calcLootStats(loot) {
@@ -55,15 +65,11 @@ function calcLootStats(loot) {
   let points = 0;
 
   for (const card of items) {
-    const t = card.t || "";
-    const v = card.v || 0;
-    if (t === "Egg") {
-      eggs++;
-    } else if (t === "Hen") {
-      hens++;
-    } else if (t === "Prize Hen") {
-      prize++;
-    }
+    const t = card?.t || "";
+    const v = Number(card?.v || 0);
+    if (t === "Egg") eggs++;
+    else if (t === "Hen") hens++;
+    else if (t === "Prize Hen") prize++;
     points += v;
   }
   return { eggs, hens, prize, points };
@@ -90,11 +96,8 @@ async function writePlayers(gameId, players) {
 //
 // Loot komt uit lootDeck. Als er te weinig kaarten zijn,
 // delen we eerlijk in rondes.
-
 function applyHiddenNestEvent(players, lootDeck) {
-  const dashers = players.filter(
-    (p) => isInYardForEvents(p) && p.decision === "DASH"
-  );
+  const dashers = players.filter((p) => isInYardForEvents(p) && p.decision === "DASH");
   const n = dashers.length;
 
   let targetEach = 0;
@@ -103,9 +106,7 @@ function applyHiddenNestEvent(players, lootDeck) {
   else if (n === 3) targetEach = 1;
   else targetEach = 0;
 
-  if (!targetEach || !dashers.length || !lootDeck.length) {
-    return null;
-  }
+  if (!targetEach || !dashers.length || !lootDeck.length) return null;
 
   const grantedMap = new Map();
   dashers.forEach((p) => grantedMap.set(p.id, 0));
@@ -125,9 +126,7 @@ function applyHiddenNestEvent(players, lootDeck) {
   const results = [];
   for (const fox of dashers) {
     const c = grantedMap.get(fox.id) || 0;
-    if (c > 0) {
-      results.push({ player: fox, count: c });
-    }
+    if (c > 0) results.push({ player: fox, count: c });
   }
   return results.length ? results : null;
 }
@@ -141,27 +140,30 @@ export async function applyPackTinker(gameId, indexA, indexB) {
   if (!snap.exists()) return;
   const game = snap.data();
 
+  // ✅ Burrow Beacon / lockEvents → track mag niet meer veranderen
+  const flags = game.flagsRound || {};
+  if (flags.lockEvents) {
+    await addLog(gameId, {
+      round: game.round || 0,
+      phase: game.phase || "ACTIONS",
+      kind: "ACTION",
+      message: "Pack Tinker had geen effect – Burrow Beacon is actief, de Event Track is gelocked.",
+    });
+    return;
+  }
+
   const { track, eventIndex } = splitTrackByStatus(game);
   const len = track.length;
-
   if (len === 0) return;
 
   // Alleen future-kaarten zijn toegestaan
-  if (
-    indexA < eventIndex ||
-    indexB < eventIndex ||
-    indexA >= len ||
-    indexB >= len
-  ) {
-    console.warn(
-      "Pack Tinker: poging om een al onthulde Event kaart te verplaatsen is geblokkeerd."
-    );
+  if (indexA < eventIndex || indexB < eventIndex || indexA >= len || indexB >= len) {
+    console.warn("Pack Tinker: poging om een al onthulde Event kaart te verplaatsen is geblokkeerd.");
     return;
   }
 
   // Swappen
   [track[indexA], track[indexB]] = [track[indexB], track[indexA]];
-
   await updateDoc(gameRef, { eventTrack: track });
 
   await addLog(gameId, {
@@ -188,8 +190,7 @@ export async function applyKickUpDust(gameId) {
       round: game.round || 0,
       phase: game.phase || "ACTIONS",
       kind: "ACTION",
-      message:
-        "Kick Up Dust had geen effect – Burrow Beacon is actief, de Event Track is gelocked.",
+      message: "Kick Up Dust had geen effect – Burrow Beacon is actief, de Event Track is gelocked.",
     });
     return;
   }
@@ -203,8 +204,7 @@ export async function applyKickUpDust(gameId) {
       round: game.round || 0,
       phase: game.phase || "ACTIONS",
       kind: "ACTION",
-      message:
-        "Kick Up Dust had nauwelijks effect – er zijn te weinig toekomstige Event kaarten om te schudden.",
+      message: "Kick Up Dust had nauwelijks effect – er zijn te weinig toekomstige Event kaarten om te schudden.",
     });
     return;
   }
@@ -219,24 +219,14 @@ export async function applyKickUpDust(gameId) {
     round: game.round || 0,
     phase: game.phase || "ACTIONS",
     kind: "ACTION",
-    message:
-      "Kick Up Dust: de toekomstige Event kaarten zijn opnieuw geschud. Onthulde kaarten blijven op hun plek.",
+    message: "Kick Up Dust: de toekomstige Event kaarten zijn opnieuw geschud. Onthulde kaarten blijven op hun plek.",
   });
 }
 
 // =======================================
 // Scoring & einde raid
 // =======================================
-
-async function scoreRaidAndFinish(
-  gameId,
-  gameRef,
-  game,
-  players,
-  lootDeck,
-  sack,
-  reason
-) {
+async function scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, reason) {
   const round = game.round || 0;
 
   let bestPoints = -Infinity;
@@ -260,13 +250,8 @@ async function scoreRaidAndFinish(
   await writePlayers(gameId, players);
 
   const sorted = [...players].sort((a, b) => (b.score || 0) - (a.score || 0));
-
   const summary = sorted
-    .map((p, idx) => {
-      return `${idx + 1}. ${p.name || "Vos"} – ${p.score || 0} punten (P:${
-        p.prize || 0
-      } H:${p.hens || 0} E:${p.eggs || 0})`;
-    })
+    .map((p, idx) => `${idx + 1}. ${p.name || "Vos"} – ${p.score || 0} punten (P:${p.prize || 0} H:${p.hens || 0} E:${p.eggs || 0})`)
     .join(" | ");
 
   const winnerNames = winners.map((w) => w.name || "Vos").join(", ");
@@ -278,38 +263,17 @@ async function scoreRaidAndFinish(
     message: `Raid eindigt (${reason}). Winnaar(s): ${winnerNames}. Stand: ${summary}`,
   });
 
-  await updateDoc(gameRef, {
-    status: "finished",
-    phase: "END",
-    lootDeck,
-    sack,
-  });
-
+  await updateDoc(gameRef, { status: "finished", phase: "END", lootDeck, sack });
   await saveLeaderboardForGame(gameId);
 }
 
 // Rooster-limiet: 3e Rooster Crow
-async function endRaidByRooster(
-  gameId,
-  gameRef,
-  game,
-  players,
-  lootDeck,
-  sack,
-  event,
-  round
-) {
+async function endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, event, round) {
   const dashers = players
     .filter((p) => isInYardForEvents(p) && p.decision === "DASH")
     .sort((a, b) => {
-      const ao =
-        typeof a.joinOrder === "number"
-          ? a.joinOrder
-          : Number.MAX_SAFE_INTEGER;
-      const bo =
-        typeof b.joinOrder === "number"
-          ? b.joinOrder
-          : Number.MAX_SAFE_INTEGER;
+      const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+      const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
       return ao - bo;
     });
 
@@ -341,30 +305,19 @@ async function endRaidByRooster(
   }
 
   for (const p of players) {
-    if (isInYardForEvents(p) && p.decision === "DASH") {
-      p.dashed = true;
-    }
+    if (isInYardForEvents(p) && p.decision === "DASH") p.dashed = true;
     p.decision = null;
   }
 
   sack = [];
   game.raidEndedByRooster = true;
 
-  await scoreRaidAndFinish(
-    gameId,
-    gameRef,
-    game,
-    players,
-    lootDeck,
-    sack,
-    "Rooster Crow limiet bereikt"
-  );
+  await scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, "Rooster Crow limiet bereikt");
 }
 
 // =======================================
 // resolveAfterReveal
 // =======================================
-
 export async function resolveAfterReveal(gameId) {
   const gameRef = doc(db, "games", gameId);
   const snap = await getDoc(gameRef);
@@ -380,14 +333,13 @@ export async function resolveAfterReveal(gameId) {
   const playersCol = collection(db, "games", gameId, "players");
   const playersSnap = await getDocs(playersCol);
   const players = [];
-  playersSnap.forEach((pDoc) => {
-    players.push({ id: pDoc.id, ...pDoc.data() });
-  });
+  playersSnap.forEach((pDoc) => players.push({ id: pDoc.id, ...pDoc.data() }));
   if (!players.length) return;
 
   const ev = getEventById(eventId);
   let lootDeck = [...(game.lootDeck || [])];
   let sack = [...(game.sack || [])];
+
   let flagsRound = {
     lockEvents: false,
     scatter: false,
@@ -402,24 +354,12 @@ export async function resolveAfterReveal(gameId) {
 
   // ====== Rooster: limiet-check (3e crow) ======
   if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
-    await endRaidByRooster(
-      gameId,
-      gameRef,
-      game,
-      players,
-      lootDeck,
-      sack,
-      ev,
-      round
-    );
+    await endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, ev, round);
     return;
   }
 
   // ====== Nose for Trouble – juiste voorspelling? ======
-  const predictions = Array.isArray(flagsRound.predictions)
-    ? flagsRound.predictions
-    : [];
-
+  const predictions = Array.isArray(flagsRound.predictions) ? flagsRound.predictions : [];
   if (predictions.length && lootDeck.length) {
     for (const pred of predictions) {
       if (pred.eventId !== eventId) continue;
@@ -436,9 +376,7 @@ export async function resolveAfterReveal(gameId) {
         phase: "REVEAL",
         kind: "EVENT",
         playerId: p.id,
-        message: `${
-          p.name || "Vos"
-        } had Nose for Trouble juist en krijgt extra buit.`,
+        message: `${p.name || "Vos"} had Nose for Trouble juist en krijgt extra buit.`,
       });
     }
   }
@@ -460,11 +398,7 @@ export async function resolveAfterReveal(gameId) {
           phase: "REVEAL",
           kind: "EVENT",
           playerId: follower.id,
-          message: `${
-            follower.name || "Vos"
-          } volgt de keuze van ${target.name || "een vos"} (Follow the Tail: ${
-            target.decision
-          }).`,
+          message: `${follower.name || "Vos"} volgt de keuze van ${target.name || "een vos"} (Follow the Tail: ${target.decision}).`,
         });
       }
     }
@@ -474,91 +408,57 @@ export async function resolveAfterReveal(gameId) {
   // Event-specifieke logica
   // =======================================
 
-  const flags = game.flagsRound || {};
-const denImmune = flags.denImmune || {};
-
-if (eventId && eventId.startsWith("DEN_")) {
-  const denColor = eventId.replace("DEN_", ""); // "RED" | "BLUE" | "GREEN" | "YELLOW"
-  const isImmune = !!denImmune[denColor];
-
-  if (isImmune) {
-    // ✅ Skip / neutraliseer Den effect
-    // (optioneel) log toevoegen
-    // await addLog(gameId, { round: game.round||0, phase:"REVEAL", kind:"SYSTEM", message:`Den ${denColor} is immune (Den Signal).` });
-
-    return; // of: ga door zonder Den-effect toe te passen
-  }
-
   if (eventId.startsWith("DEN_")) {
-    const color = eventId.substring(4); // RED / BLUE / GREEN / YELLOW
-    for (const p of players) {
-      if (!isInYardForEvents(p)) continue;
-      if (p.color !== color) continue;
+    const color = normalizeColorKey(eventId.substring(4)); // RED / BLUE / GREEN / YELLOW
 
-      const immune =
-        flagsRound.denImmune &&
-        (flagsRound.denImmune[color] ||
-          flagsRound.denImmune[color.toLowerCase()]);
-
-      if (immune) {
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: p.id,
-          message: `${
-            p.name || "Vos"
-          } negeert dit Den-event dankzij Den Signal.`,
-        });
-        continue;
-      }
-
-      if (p.decision === "BURROW") {
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: p.id,
-          message: `${p.name || "Vos"} overleeft in zijn hol (BURROW).`,
-        });
-        continue;
-      }
-
-      if (p.decision === "DASH") {
-        continue;
-      }
-
-      p.inYard = false;
-      p.loot = [];
+    // Optioneel: snelle log als het hele Den-event geneutraliseerd is
+    if (isDenImmune(flagsRound, color)) {
       await addLog(gameId, {
         round,
         phase: "REVEAL",
         kind: "EVENT",
-        playerId: p.id,
-        message: `${
-          p.name || "Vos"
-        } wordt gepakt bij ${ev ? ev.title : "Den-event"} en verliest alle buit.`,
+        message: `Den ${color} is immune door Den Signal – niemand wordt gepakt.`,
       });
+    } else {
+      for (const p of players) {
+        if (!isInYardForEvents(p)) continue;
+        if (normalizeColorKey(p.color) !== color) continue;
+
+        if (p.decision === "BURROW") {
+          await addLog(gameId, {
+            round,
+            phase: "REVEAL",
+            kind: "EVENT",
+            playerId: p.id,
+            message: `${p.name || "Vos"} overleeft in zijn hol (BURROW).`,
+          });
+          continue;
+        }
+
+        if (p.decision === "DASH") continue;
+
+        p.inYard = false;
+        p.loot = [];
+        await addLog(gameId, {
+          round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          playerId: p.id,
+          message: `${p.name || "Vos"} wordt gepakt bij ${ev ? ev.title : "Den-event"} en verliest alle buit.`,
+        });
+      }
     }
   } else if (eventId === "DOG_CHARGE") {
-    // Eerste Sheepdog Charge – iedereen in de Yard, behalve BURROW / Den Signal / DASH
     for (const p of players) {
       if (!isInYardForEvents(p)) continue;
 
-      const immune =
-        flagsRound.denImmune &&
-        (flagsRound.denImmune[p.color] ||
-          flagsRound.denImmune[(p.color || "").toLowerCase()]);
-
-      if (immune) {
+      if (isDenImmune(flagsRound, p.color)) {
         await addLog(gameId, {
           round,
           phase: "REVEAL",
           kind: "EVENT",
           playerId: p.id,
-          message: `${
-            p.name || "Vos"
-          } ontsnapt aan de herderhond dankzij Den Signal.`,
+          message: `${p.name || "Vos"} ontsnapt aan de herderhond dankzij Den Signal.`,
         });
         continue;
       }
@@ -569,17 +469,12 @@ if (eventId && eventId.startsWith("DEN_")) {
           phase: "REVEAL",
           kind: "EVENT",
           playerId: p.id,
-          message: `${
-            p.name || "Vos"
-          } duikt onder de grond en ontwijkt de herderhond.`,
+          message: `${p.name || "Vos"} duikt onder de grond en ontwijkt de herderhond.`,
         });
         continue;
       }
 
-      if (p.decision === "DASH") {
-        // Dashers rennen net op tijd weg
-        continue;
-      }
+      if (p.decision === "DASH") continue;
 
       p.inYard = false;
       p.loot = [];
@@ -588,13 +483,10 @@ if (eventId && eventId.startsWith("DEN_")) {
         phase: "REVEAL",
         kind: "EVENT",
         playerId: p.id,
-        message: `${
-          p.name || "Vos"
-        } wordt onder de voet gelopen door de herderhond en verliest alle buit.`,
+        message: `${p.name || "Vos"} wordt onder de voet gelopen door de herderhond en verliest alle buit.`,
       });
     }
   } else if (eventId === "SHEEPDOG_PATROL") {
-    // Patrol: specifiek op jacht naar Dashers – BURROW/Den Signal helpen niet
     for (const p of players) {
       if (!isInYardForEvents(p)) continue;
       if (p.decision !== "DASH") continue;
@@ -607,30 +499,20 @@ if (eventId && eventId.startsWith("DEN_")) {
         phase: "REVEAL",
         kind: "EVENT",
         playerId: p.id,
-        message: `${
-          p.name || "Vos"
-        } wordt tijdens de Sheepdog Patrol gepakt terwijl hij probeert te dashen en verliest alle buit.`,
+        message: `${p.name || "Vos"} wordt tijdens de Sheepdog Patrol gepakt terwijl hij probeert te dashen en verliest alle buit.`,
       });
     }
   } else if (eventId === "SECOND_CHARGE") {
-    // Tweede Sheepdog Charge – zelfde effect als DOG_CHARGE
     for (const p of players) {
       if (!isInYardForEvents(p)) continue;
 
-      const immune =
-        flagsRound.denImmune &&
-        (flagsRound.denImmune[p.color] ||
-          flagsRound.denImmune[(p.color || "").toLowerCase()]);
-
-      if (immune) {
+      if (isDenImmune(flagsRound, p.color)) {
         await addLog(gameId, {
           round,
           phase: "REVEAL",
           kind: "EVENT",
           playerId: p.id,
-          message: `${
-            p.name || "Vos"
-          } ontsnapt aan de tweede herderhond-charge dankzij Den Signal.`,
+          message: `${p.name || "Vos"} ontsnapt aan de tweede herderhond-charge dankzij Den Signal.`,
         });
         continue;
       }
@@ -641,16 +523,12 @@ if (eventId && eventId.startsWith("DEN_")) {
           phase: "REVEAL",
           kind: "EVENT",
           playerId: p.id,
-          message: `${
-            p.name || "Vos"
-          } schuilt opnieuw in zijn hol en ontwijkt de tweede charge.`,
+          message: `${p.name || "Vos"} schuilt opnieuw in zijn hol en ontwijkt de tweede charge.`,
         });
         continue;
       }
 
-      if (p.decision === "DASH") {
-        continue;
-      }
+      if (p.decision === "DASH") continue;
 
       p.inYard = false;
       p.loot = [];
@@ -659,19 +537,14 @@ if (eventId && eventId.startsWith("DEN_")) {
         phase: "REVEAL",
         kind: "EVENT",
         playerId: p.id,
-        message: `${
-          p.name || "Vos"
-        } wordt alsnog ingehaald bij de Second Charge en verliest alle buit.`,
+        message: `${p.name || "Vos"} wordt alsnog ingehaald bij de Second Charge en verliest alle buit.`,
       });
     }
   } else if (eventId === "HIDDEN_NEST") {
-    // Nieuwe, vereenvoudigde Hidden Nest logica
     const results = applyHiddenNestEvent(players, lootDeck);
 
     if (results && results.length) {
-      const parts = results.map((r) => {
-        return `${r.player.name || "Vos"} (+${r.count})`;
-      });
+      const parts = results.map((r) => `${r.player.name || "Vos"} (+${r.count})`);
       await addLog(gameId, {
         round,
         phase: "REVEAL",
@@ -685,8 +558,7 @@ if (eventId && eventId.startsWith("DEN_")) {
         phase: "REVEAL",
         kind: "EVENT",
         cardId: eventId,
-        message:
-          "Hidden Nest had geen effect – het aantal dashers was niet 1, 2 of 3 (of er was geen loot meer).",
+        message: "Hidden Nest had geen effect – het aantal dashers was niet 1, 2 of 3 (of er was geen loot meer).",
       });
     }
   } else if (eventId === "GATE_TOLL") {
@@ -694,7 +566,7 @@ if (eventId && eventId.startsWith("DEN_")) {
       if (!isInYardForEvents(p)) continue;
       if (p.decision === "DASH") continue;
 
-      const loot = p.loot || [];
+      const loot = Array.isArray(p.loot) ? [...p.loot] : [];
       if (loot.length > 0) {
         loot.pop();
         p.loot = loot;
@@ -712,29 +584,20 @@ if (eventId && eventId.startsWith("DEN_")) {
           phase: "REVEAL",
           kind: "EVENT",
           playerId: p.id,
-          message: `${
-            p.name || "Vos"
-          } kan de tol niet betalen en wordt gepakt bij het hek.`,
+          message: `${p.name || "Vos"} kan de tol niet betalen en wordt gepakt bij het hek.`,
         });
       }
     }
   } else if (eventId === "MAGPIE_SNITCH") {
     const ordered = [...players].sort((a, b) => {
-      const ao =
-        typeof a.joinOrder === "number"
-          ? a.joinOrder
-          : Number.MAX_SAFE_INTEGER;
-      const bo =
-        typeof b.joinOrder === "number"
-          ? b.joinOrder
-          : Number.MAX_SAFE_INTEGER;
+      const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+      const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
       return ao - bo;
     });
 
     let lead = null;
     if (ordered.length) {
-      const idx =
-        typeof game.leadIndex === "number" ? game.leadIndex : 0;
+      const idx = typeof game.leadIndex === "number" ? game.leadIndex : 0;
       lead = ordered[idx] || ordered[0];
     }
 
@@ -745,9 +608,7 @@ if (eventId && eventId.startsWith("DEN_")) {
           phase: "REVEAL",
           kind: "EVENT",
           playerId: lead.id,
-          message: `Magpie Snitch ziet de Lead Fox, maar ${
-            lead.name || "de vos"
-          } zit veilig in zijn hol.`,
+          message: `Magpie Snitch ziet de Lead Fox, maar ${lead.name || "de vos"} zit veilig in zijn hol.`,
         });
       } else if (lead.decision !== "DASH") {
         lead.inYard = false;
@@ -757,9 +618,7 @@ if (eventId && eventId.startsWith("DEN_")) {
           phase: "REVEAL",
           kind: "EVENT",
           playerId: lead.id,
-          message: `Magpie Snitch verraadt de Lead Fox – ${
-            lead.name || "de vos"
-          } wordt gepakt en verliest alle buit.`,
+          message: `Magpie Snitch verraadt de Lead Fox – ${lead.name || "de vos"} wordt gepakt en verliest alle buit.`,
         });
       } else {
         await addLog(gameId, {
@@ -767,7 +626,7 @@ if (eventId && eventId.startsWith("DEN_")) {
           phase: "REVEAL",
           kind: "EVENT",
           playerId: lead.id,
-          message: `Magpie Snitch vindt niets – de Lead Fox is al aan het dashen.`,
+          message: "Magpie Snitch vindt niets – de Lead Fox is al aan het dashen.",
         });
       }
     }
@@ -780,8 +639,7 @@ if (eventId && eventId.startsWith("DEN_")) {
         round,
         phase: "REVEAL",
         kind: "EVENT",
-        message:
-          "Paint-Bomb Nest: alle buit in de Sack gaat terug naar de loot-deck.",
+        message: "Paint-Bomb Nest: alle buit in de Sack gaat terug naar de loot-deck.",
       });
     }
   } else if (eventId === "ROOSTER_CROW") {
@@ -791,7 +649,6 @@ if (eventId && eventId.startsWith("DEN_")) {
   // =======================================
   // Na event: dashers markeren + flags resetten
   // =======================================
-
   for (const p of players) {
     if (isInYardForEvents(p) && p.decision === "DASH") {
       p.dashed = true;
@@ -830,43 +687,28 @@ if (eventId && eventId.startsWith("DEN_")) {
   // =======================================
   // Einde-voorwaarden
   // =======================================
-
   const alive = players.filter(isInYardForEvents);
 
   if (alive.length === 0) {
-    // geen vossen meer in de Yard: dashers die niet gepakt zijn verdelen de Sack
-    const dashersSurviving = players.filter(
-      (p) => p.dashed && p.inYard !== false
-    );
+    const dashersSurviving = players.filter((p) => p.dashed && p.inYard !== false);
 
     if (dashersSurviving.length && sack.length) {
-      // randomize Sack
       sack = shuffleArray(sack);
 
       const orderedAll = [...players].sort((a, b) => {
-        const ao =
-          typeof a.joinOrder === "number"
-            ? a.joinOrder
-            : Number.MAX_SAFE_INTEGER;
-        const bo =
-          typeof b.joinOrder === "number"
-            ? b.joinOrder
-            : Number.MAX_SAFE_INTEGER;
+        const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+        const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
         return ao - bo;
       });
 
       const survivorIds = new Set(dashersSurviving.map((p) => p.id));
-      const survivorsOrdered = orderedAll.filter((p) =>
-        survivorIds.has(p.id)
-      );
+      const survivorsOrdered = orderedAll.filter((p) => survivorIds.has(p.id));
 
       let startIdx = 0;
       if (typeof game.leadIndex === "number") {
         const leadCandidate = orderedAll[game.leadIndex] || null;
         if (leadCandidate && survivorIds.has(leadCandidate.id)) {
-          const idxInSurvivors = survivorsOrdered.findIndex(
-            (p) => p.id === leadCandidate.id
-          );
+          const idxInSurvivors = survivorsOrdered.findIndex((p) => p.id === leadCandidate.id);
           if (idxInSurvivors >= 0) startIdx = idxInSurvivors;
         }
       }
@@ -883,8 +725,7 @@ if (eventId && eventId.startsWith("DEN_")) {
         round,
         phase: "REVEAL",
         kind: "EVENT",
-        message:
-          "De laatste vos is uit de Yard – de overgebleven dashers verdelen de Sack.",
+        message: "De laatste vos is uit de Yard – de overgebleven dashers verdelen de Sack.",
       });
     } else {
       await addLog(gameId, {
@@ -895,15 +736,7 @@ if (eventId && eventId.startsWith("DEN_")) {
       });
     }
 
-    await scoreRaidAndFinish(
-      gameId,
-      gameRef,
-      game,
-      players,
-      lootDeck,
-      sack,
-      "Geen vossen meer in de Yard"
-    );
+    await scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, "Geen vossen meer in de Yard");
     return;
   }
 
@@ -915,31 +748,18 @@ if (eventId && eventId.startsWith("DEN_")) {
       kind: "SYSTEM",
       message: "Alle Event Cards zijn gespeeld. De raid eindigt.",
     });
-    await scoreRaidAndFinish(
-      gameId,
-      gameRef,
-      game,
-      players,
-      lootDeck,
-      sack,
-      "Event deck leeg"
-    );
+    await scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, "Event deck leeg");
     return;
   }
 
   // Lead fox doorgeven (simpele rotatie)
   const ordered = [...players].sort((a, b) => {
-    const ao =
-      typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
-    const bo =
-      typeof b.joinOrder === "number"
-        ? b.joinOrder
-        : Number.MAX_SAFE_INTEGER;
+    const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+    const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
     return ao - bo;
   });
 
-  let newLeadIndex =
-    typeof game.leadIndex === "number" ? game.leadIndex : 0;
+  let newLeadIndex = typeof game.leadIndex === "number" ? game.leadIndex : 0;
 
   if (ordered.length) {
     newLeadIndex = (newLeadIndex + 1) % ordered.length;
@@ -966,4 +786,61 @@ if (eventId && eventId.startsWith("DEN_")) {
     movedPlayerIds: [],
     leadIndex: newLeadIndex,
   });
+}
+
+// =======================================
+// Leaderboard opslag
+// =======================================
+export async function saveLeaderboardForGame(gameId) {
+  try {
+    const gameRef = doc(db, "games", gameId);
+    const gameSnap = await getDoc(gameRef);
+    if (!gameSnap.exists()) return;
+
+    const game = gameSnap.data();
+
+    // voorkom dubbele writes
+    if (game.leaderboardWritten) return;
+
+    // alleen schrijven als het spel écht klaar is
+    if (game.status !== "finished" && !game.raidEndedByRooster) return;
+
+    const playersSnap = await getDocs(collection(db, "games", gameId, "players"));
+
+    const leaderboardEntries = [];
+    playersSnap.forEach((pDoc) => {
+      const p = pDoc.data();
+
+      const eggs = p.eggs || 0;
+      const hens = p.hens || 0;
+      const prize = p.prize || 0;
+
+      const baseScore = eggs + hens * 2 + prize * 3;
+      const storedScore = typeof p.score === "number" ? p.score : baseScore;
+      const bonus = Math.max(0, storedScore - baseScore);
+
+      leaderboardEntries.push({
+        name: p.name || "Fox",
+        score: storedScore,
+        eggs,
+        hens,
+        prize,
+        bonus,
+        gameId,
+        gameCode: game.code || "",
+        playedAt: serverTimestamp(),
+      });
+    });
+
+    // Alleen entries met een echte score > 0 opslaan
+    for (const entry of leaderboardEntries) {
+      const s = typeof entry.score === "number" ? entry.score : 0;
+      if (s <= 0) continue;
+      await addDoc(collection(db, "leaderboard"), entry);
+    }
+
+    await updateDoc(gameRef, { leaderboardWritten: true });
+  } catch (err) {
+    console.error("saveLeaderboardForGame failed", err);
+  }
 }
