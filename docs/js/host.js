@@ -1437,8 +1437,8 @@ async function botDoOpsTurn(botId) {
 
   if (logPayload) await logBot(gameId, logPayload);
 }
-  
-// ===============================
+
+ // ===============================
 // BOT DECISION
 // ===============================
 async function botDoDecision(botId) {
@@ -1460,9 +1460,28 @@ async function botDoDecision(botId) {
     const loot = Array.isArray(p.loot) ? p.loot : [];
     const lootPts = loot.reduce((sum, c) => sum + (Number(c?.v) || 0), 0);
 
+    const roundNum = Number(g.round || 0);
+    const roosterSeen = Number(g.roosterSeen || 0);
+
+    const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+
+    // kans groeit per ronde + extra als je meer loot hebt + als rooster vaker gezien is
+    let dashProb =
+      0.05 +              // basis 5%
+      roundNum * 0.06 +   // +6% per ronde
+      lootPts * 0.05 +    // +5% per lootpunt
+      roosterSeen * 0.10; // +10% per roosterSeen
+
+    dashProb = clamp(dashProb, 0, 0.85);
+
     let kind = "LURK";
-    if ((g.roosterSeen || 0) >= 2 && lootPts >= 3) kind = "DASH";
-    else if (!p.burrowUsed && Math.random() < 0.15) kind = "BURROW";
+
+    // (optioneel) alleen DASH als je überhaupt buit hebt
+    if (lootPts > 0 && Math.random() < dashProb) {
+      kind = "DASH";
+    } else if (!p.burrowUsed && Math.random() < 0.15) {
+      kind = "BURROW";
+    }
 
     const update = { decision: kind };
     if (kind === "BURROW" && !p.burrowUsed) update.burrowUsed = true;
@@ -1475,7 +1494,7 @@ async function botDoDecision(botId) {
       playerId: botId,
       playerName: p.name || "BOT",
       choice: `DECISION_${kind}`,
-      message: `BOT kiest ${kind}`,
+      message: `BOT kiest ${kind} (dashProb=${dashProb.toFixed(2)} loot=${lootPts} rooster=${roosterSeen})`,
     };
   });
 
