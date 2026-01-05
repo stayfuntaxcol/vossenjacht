@@ -1468,10 +1468,7 @@ async function botDoOpsTurn(botId) {
       message: "BOT kiest PASS",
     };
   });
-
-  if (logPayload) await logBot(gameId, logPayload);
-}
-
+      
 // ===============================
 // BOT DECISION
 // ===============================
