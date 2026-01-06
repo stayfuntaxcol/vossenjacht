@@ -122,6 +122,50 @@ function labelDecision(x) {
 }
 
 // ------------------------------
+// ✅ NEW: Forceer verschil tussen DEF & AGG als top-pick gelijk is
+// ------------------------------
+function pickDistinctPair(rankedDef, rankedAgg, keyFn, fallbackDef, fallbackAgg) {
+  let bestDef = safeBest(rankedDef, fallbackDef);
+  let bestAgg = safeBest(rankedAgg, fallbackAgg);
+
+  const kDef = keyFn(bestDef);
+  const kAgg = keyFn(bestAgg);
+
+  let forced = false;
+
+  if (kDef && kAgg && kDef === kAgg) {
+    // probeer AGG te verschuiven naar eerstvolgende andere keuze
+    const altAgg = (Array.isArray(rankedAgg) ? rankedAgg : []).find(
+      (x) => keyFn(x) && keyFn(x) !== kDef
+    );
+    if (altAgg) {
+      bestAgg = altAgg;
+      forced = true;
+    } else {
+      // anders DEF verschuiven
+      const altDef = (Array.isArray(rankedDef) ? rankedDef : []).find(
+        (x) => keyFn(x) && keyFn(x) !== kAgg
+      );
+      if (altDef) {
+        bestDef = altDef;
+        forced = true;
+      }
+    }
+  }
+
+  return { bestDef, bestAgg, forced };
+}
+
+// ------------------------------
+// ✅ NEW: kleine “focus” bullets zodat DEF/AGG nooit identiek zijn
+// ------------------------------
+function styleFocusBullet(style) {
+  if (style === "DEF") return "DEF focus: risico dempen en kaarten bewaren.";
+  if (style === "AGG") return "AGG focus: tempo en buit maximaliseren.";
+  return null;
+}
+
+// ------------------------------
 // Game helpers: lead fox & revealed dens
 // ------------------------------
 const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
@@ -425,7 +469,7 @@ function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
   // Speciaal: “bonus-event voor DASH” (Hidden Nest) – niet benoemen, wel uitleg
   if (riskMeta.nextId === "HIDDEN_NEST") {
     lines.push("Let op: volgende kaart is een **DASH-bonus event**. Bonus werkt alleen als 1–3 spelers DASH kiezen (3/2/1 loot).");
-    lines.push("Strategie: vaak beter om dit bonus-event later te zetten (Pack Tinker / SHIFT), zodat je niet direct uit de Yard vertrekt.");
+    lines.push("Strategie: vaak beter om dit bonus-event later te zetten (Pack Tinker / SHIFT), zodat je niet direct vertrekt uit de Yard.");
   }
 
   // Speciaal: Rooster-event vroeg → vaak beter naar achteren om meer rondes te krijgen
@@ -534,8 +578,14 @@ export function getAdvisorHint({
     const rankedDef = scoreMoveMoves({ view, upcoming: upcomingPeek, profile: profileDef }) || [];
     const rankedAgg = scoreMoveMoves({ view, upcoming: upcomingPeek, profile: profileAgg }) || [];
 
-    const bestDef = safeBest(rankedDef, { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" });
-    const bestAgg = safeBest(rankedAgg, { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" });
+    // ✅ force distinct (op move)
+    const { bestDef, bestAgg, forced } = pickDistinctPair(
+      rankedDef,
+      rankedAgg,
+      (x) => String(x?.move || ""),
+      { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" },
+      { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" }
+    );
 
     const defBullets = sanitizeBullets(bestDef.bullets || []);
     const aggBullets = sanitizeBullets(bestAgg.bullets || []);
@@ -560,9 +610,12 @@ export function getAdvisorHint({
         ...headerLinesCompact(view, riskMeta),
         ...riskBullets,
         `DEFENSIEF: ${labelMove(bestDef)} (${bestDef.riskLabel ?? "?"})`,
+        styleFocusBullet("DEF"),
         ...defBullets,
         `AANVALLEND: ${labelMove(bestAgg)} (${bestAgg.riskLabel ?? "?"})`,
+        styleFocusBullet("AGG"),
         ...aggBullets,
+        ...(forced ? ["(Advisor: Aggressief advies is bewust gedifferentieerd t.o.v. defensief.)"] : []),
         ...sanitizeBullets(strat),
       ].filter(Boolean).slice(0, 10),
       alternatives: [
@@ -572,6 +625,7 @@ export function getAdvisorHint({
       debug: {
         phase: view.phase,
         hand: handMeta,
+        forcedDistinct: forced,
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           probNextDanger: riskMeta.probNextDanger,
@@ -590,8 +644,18 @@ export function getAdvisorHint({
     const defRanked = scoreOpsPlays({ view, upcoming: upcomingPeek, profile: profileDef, style: "DEFENSIVE" }) || [];
     const aggRanked = scoreOpsPlays({ view, upcoming: upcomingPeek, profile: profileAgg, style: "AGGRESSIVE" }) || [];
 
-    const bestDef = safeBest(defRanked, { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" });
-    const bestAgg = safeBest(aggRanked, { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" });
+    // ✅ force distinct (op play)
+    const { bestDef, bestAgg, forced } = pickDistinctPair(
+      defRanked,
+      aggRanked,
+      (x) => {
+        if (!x) return "PASS";
+        if (x.play === "PASS") return "PASS";
+        return String(x.cardId || x.cardName || x.name || "?");
+      },
+      { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" },
+      { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" }
+    );
 
     const labelDef = labelPlay(bestDef);
     const labelAgg = labelPlay(bestAgg);
@@ -614,10 +678,14 @@ export function getAdvisorHint({
         ...(handMeta.lineUnknown ? [handMeta.lineUnknown] : []),
 
         `DEFENSIEF: ${labelDef} (${bestDef.riskLabel ?? "?"})`,
+        styleFocusBullet("DEF"),
         ...sanitizeBullets(bestDef.bullets || []),
 
         `AANVALLEND: ${labelAgg} (${bestAgg.riskLabel ?? "?"})`,
+        styleFocusBullet("AGG"),
         ...sanitizeBullets(bestAgg.bullets || []),
+
+        ...(forced ? ["(Advisor: Aggressief advies is bewust gedifferentieerd t.o.v. defensief.)"] : []),
 
         ...tactical,
       ].filter(Boolean).slice(0, 10),
@@ -638,6 +706,7 @@ export function getAdvisorHint({
       debug: {
         phase: view.phase,
         hand: handMeta,
+        forcedDistinct: forced,
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           probNextDanger: riskMeta.probNextDanger,
@@ -656,8 +725,14 @@ export function getAdvisorHint({
     const rankedDef = scoreDecisions({ view, upcoming: upcomingPeek, profile: profileDef }) || [];
     const rankedAgg = scoreDecisions({ view, upcoming: upcomingPeek, profile: profileAgg }) || [];
 
-    const bestDef = safeBest(rankedDef, { decision: "—", riskLabel: "MED" });
-    const bestAgg = safeBest(rankedAgg, { decision: "—", riskLabel: "MED" });
+    // ✅ force distinct (op decision)
+    const { bestDef, bestAgg, forced } = pickDistinctPair(
+      rankedDef,
+      rankedAgg,
+      (x) => String(x?.decision || ""),
+      { decision: "—", riskLabel: "MED" },
+      { decision: "—", riskLabel: "MED" }
+    );
 
     const tactical = decisionTacticalAdvice({ view, riskMeta });
 
@@ -675,7 +750,10 @@ export function getAdvisorHint({
         ...riskBullets,
         ...sanitizeBullets(extraBurrowWarn),
         `DEFENSIEF: ${labelDecision(bestDef)} (${bestDef.riskLabel ?? "?"})`,
+        styleFocusBullet("DEF"),
         `AANVALLEND: ${labelDecision(bestAgg)} (${bestAgg.riskLabel ?? "?"})`,
+        styleFocusBullet("AGG"),
+        ...(forced ? ["(Advisor: Aggressief advies is bewust gedifferentieerd t.o.v. defensief.)"] : []),
         ...tactical,
       ].filter(Boolean).slice(0, 10),
       alternatives: [
@@ -685,6 +763,7 @@ export function getAdvisorHint({
       debug: {
         phase: view.phase,
         hand: handMeta,
+        forcedDistinct: forced,
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           probNextDanger: riskMeta.probNextDanger,
