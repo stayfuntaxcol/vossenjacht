@@ -2763,3 +2763,4 @@ if (btnHint) {
 } else {
   console.warn("[HINT] btnHint niet gevonden in DOM");
 }
+});
