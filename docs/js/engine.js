@@ -403,6 +403,24 @@ export async function resolveAfterReveal(gameId) {
       }
     }
   }
+  
+  // ====== Hold Still – target kan deze ronde niet DASHen ======
+const holdStill = flagsRound.holdStill || {};
+for (const pl of players) {
+  if (!isInYardForEvents(pl)) continue;
+  if (!holdStill[pl.id]) continue;
+
+  if (pl.decision === "DASH") {
+    pl.decision = "LURK";
+    await addLog(gameId, {
+      round,
+      phase: "REVEAL",
+      kind: "EVENT",
+      playerId: pl.id,
+      message: `${pl.name || "Vos"} kan niet dashen door Hold Still en blijft LURK.`,
+    });
+  }
+}
 
   // =======================================
   // Event-specifieke logica
@@ -671,6 +689,9 @@ export async function resolveAfterReveal(gameId) {
   flagsRound.opsLocked = false;
   flagsRound.followTail = {};
   flagsRound.scentChecks = [];
+  flagsRound.holdStill = {};
+  flagsRound.noPeek = false;
+  flagsRound.opsLocked = false;
 
   // Extra loot in de Sack voor volgende ronde
   if (lootDeck.length) {
