@@ -785,11 +785,12 @@ async function initRaidIfNeeded(gameRefParam) {
     lockEvents: false,
     scatter: false,
     denImmune: {},
-    noPeek: [],
+    noPeek: false,
     predictions: [],
     opsLocked: false,
     followTail: {},
     scentChecks: [],
+    holdStill: {},   
   };
 
   const colorOffset = Math.floor(Math.random() * DEN_COLORS.length);
@@ -984,7 +985,67 @@ let hostUid = null;
 let botTickScheduled = false;
 
 // Base bot action chance (hand bonus wordt binnen botDoOpsTurn opgeteld)
-const BOT_ACTION_PROB = 0.65;
+const BOT_ACTION_PROB_BASE = 0.65; // hoger = vaker action i.p.v. pass
+
+const BOT_PREFERRED_ACTIONS = new Set([
+  "Den Signal",
+  "Nose for Trouble",
+  "Kick Up Dust",
+  "Pack Tinker",
+  "Hold Still",
+  "Mask Swap",
+  "Follow the Tail",
+  "Scent Check",
+  "Burrow Beacon",
+  "Scatter!",
+  "No-Go Zone",
+  "Alpha Call",
+  "Molting Mask",
+]);
+
+function botActionProb(handLen) {
+  const base = BOT_ACTION_PROB_BASE;
+  const handBonus = Math.min(0.25, Math.max(0, (handLen - 1) * 0.08)); // +8% per extra kaart
+  return Math.min(0.95, base + handBonus);
+}
+
+function pickBotActionName(hand) {
+  const names = (hand || []).map((c) => c?.name).filter(Boolean);
+  if (!names.length) return null;
+
+  const preferred = names.filter((n) => BOT_PREFERRED_ACTIONS.has(n));
+  if (preferred.length) return preferred[Math.floor(Math.random() * preferred.length)];
+
+  return names[Math.floor(Math.random() * names.length)];
+}
+
+function pickFutureEventIdForPrediction(game) {
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const idx = typeof game?.eventIndex === "number" ? game.eventIndex : 0;
+  if (!track.length || idx >= track.length) return null;
+
+  // bot is “slim”: voorspelt meestal de eerstvolgende
+  if (Math.random() < 0.75) return track[idx];
+
+  // anders random future
+  const future = track.slice(idx).filter(Boolean);
+  if (!future.length) return null;
+  return future[Math.floor(Math.random() * future.length)];
+}
+
+function shuffleFutureTrackInTx(game) {
+  const track = Array.isArray(game?.eventTrack) ? [...game.eventTrack] : [];
+  const idx = typeof game?.eventIndex === "number" ? game.eventIndex : 0;
+  if (track.length <= 1) return null;
+
+  const locked = track.slice(0, idx);
+  const future = track.slice(idx);
+
+  if (future.length <= 1) return null;
+
+  const shuffledFuture = shuffleArray(future);
+  return [...locked, ...shuffledFuture];
+}
 
 let botRunnerId = null;
 try {
@@ -1256,6 +1317,9 @@ async function botDoOpsTurn(botId) {
 
     if (!isActiveRaidStatus(g.status) || g.phase !== "ACTIONS") return;
 
+    // OPS locked? dan niks meer spelen
+    if (g.flagsRound?.opsLocked) return;
+
     const order = g.opsTurnOrder || [];
     const idx = typeof g.opsTurnIndex === "number" ? g.opsTurnIndex : 0;
     if (!order.length || order[idx] !== botId) return;
@@ -1268,26 +1332,45 @@ async function botDoOpsTurn(botId) {
     const hand = Array.isArray(p.hand) ? [...p.hand] : [];
     const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
     const discard = Array.isArray(g.actionDiscard) ? [...g.actionDiscard] : [];
-    const flagsRound = g.flagsRound ? { ...g.flagsRound } : {};
 
-    // ✅ kansberekening hoort HIER (hand/alreadyPlayed bestaan hier pas)
-    const base = typeof g.botActionProb === "number" ? g.botActionProb : BOT_ACTION_PROB;
-    const handBonus = Math.min(0.25, Math.max(0, (hand.length - 1) * 0.08)); // +8% per extra kaart
-    const prob = Math.min(0.95, base + handBonus);
+    // flagsRound altijd “gevuld”
+    const flagsRound = {
+      lockEvents: false,
+      scatter: false,
+      denImmune: {},
+      noPeek: false,
+      predictions: [],
+      opsLocked: false,
+      followTail: {},
+      scentChecks: [],
+      holdStill: {},
+      ...(g.flagsRound || {}),
+    };
+
+    const prob = botActionProb(hand.length);
     let willPlay = !alreadyPlayed && hand.length > 0 && Math.random() < prob;
 
+    // ---- probeer action te spelen ----
     if (willPlay) {
       const cardName = pickBotActionName(hand);
       if (!cardName) {
         willPlay = false;
       } else {
+        // remove 1 instance from hand
         const removeIdx = hand.findIndex((c) => c?.name === cardName);
         if (removeIdx >= 0) hand.splice(removeIdx, 1);
 
+        // discard
         discard.push({ name: cardName, by: botId, round: roundNum, at: Date.now() });
+
+        // draw 1 replacement (standaard)
         if (actionDeck.length) hand.push(actionDeck.pop());
 
         const extraGameUpdates = {};
+
+        // =========================
+        // EFFECTS
+        // =========================
 
         if (cardName === "Burrow Beacon") {
           flagsRound.lockEvents = true;
@@ -1306,16 +1389,19 @@ async function botDoOpsTurn(botId) {
 
         if (cardName === "Follow the Tail") {
           const targetId = pickBestTargetPlayerId(botId);
-          if (targetId) {
+          if (!targetId) {
+            // geen target → behandel alsof je niet speelde
+            willPlay = false;
+          } else {
             const ft = flagsRound.followTail ? { ...flagsRound.followTail } : {};
-            ft[botId] = targetId; // ✅ followerId -> targetId (engine verwacht dit)
+            ft[botId] = targetId; // ✅ belangrijk: targetId
             flagsRound.followTail = ft;
           }
         }
 
         if (cardName === "Den Signal") {
           const denImmune = flagsRound.denImmune ? { ...flagsRound.denImmune } : {};
-          const myColor = p.color;
+          const myColor = String(p.color || "").toUpperCase();
           if (myColor) denImmune[myColor] = true;
           flagsRound.denImmune = denImmune;
         }
@@ -1335,36 +1421,127 @@ async function botDoOpsTurn(botId) {
           }
         }
 
-        tx.update(pRef, { hand, opsActionPlayedRound: roundNum });
-        tx.update(gRef, {
-          actionDeck,
-          actionDiscard: discard,
-          flagsRound,
-          opsTurnIndex: nextIndex,
-          opsConsecutivePasses: 0,
-          ...extraGameUpdates,
-        });
+        if (cardName === "Kick Up Dust") {
+          if (flagsRound.lockEvents) {
+            // geen effect
+          } else {
+            const newTrack = shuffleFutureTrackInTx(g);
+            if (newTrack) extraGameUpdates.eventTrack = newTrack;
+          }
+        }
 
-        logPayload = {
-          round: roundNum,
-          phase: "ACTIONS",
-          playerId: botId,
-          playerName: p.name || "BOT",
-          choice: `ACTION_PLAY_${cardName}`,
-          message:
-            cardName === "Pack Tinker" && extraGameUpdates.lastPackTinker
-              ? `BOT speelt Pack Tinker (swap ${extraGameUpdates.lastPackTinker.i1 + 1} ↔ ${extraGameUpdates.lastPackTinker.i2 + 1})`
-              : cardName === "Den Signal"
-              ? `BOT speelt Den Signal (DEN ${p.color || "?"} immune)`
-              : cardName === "Follow the Tail"
-              ? `BOT speelt Follow the Tail`
-              : `BOT speelt Action Card: ${cardName}`,
-        };
-        return;
+        if (cardName === "Nose for Trouble") {
+          const eventId = pickFutureEventIdForPrediction(g);
+          if (eventId) {
+            const preds = Array.isArray(flagsRound.predictions) ? [...flagsRound.predictions] : [];
+            // 1 prediction per speler per ronde
+            const filtered = preds.filter((x) => x?.playerId !== botId);
+            filtered.push({ playerId: botId, eventId, round: roundNum, at: Date.now() });
+            flagsRound.predictions = filtered;
+            extraGameUpdates.lastPrediction = { by: botId, eventId };
+          }
+        }
+
+        if (cardName === "Molting Mask") {
+          // “Geen hidden event peek/SCOUT” deze ronde
+          flagsRound.noPeek = true;
+        }
+
+        if (cardName === "Alpha Call") {
+          // extra draw (bovenop replacement)
+          if (actionDeck.length) hand.push(actionDeck.pop());
+        }
+
+        if (cardName === "No-Go Zone") {
+          // OPS meteen locken (handig om fase te versnellen)
+          flagsRound.opsLocked = true;
+          // zodat host meteen ACTIONS→DECISION kan
+          extraGameUpdates.opsConsecutivePasses = order.length;
+        }
+
+        if (cardName === "Hold Still") {
+          const targetId = pickBestTargetPlayerId(botId);
+          if (targetId) {
+            const hs = flagsRound.holdStill ? { ...flagsRound.holdStill } : {};
+            hs[targetId] = true;
+            flagsRound.holdStill = hs;
+            extraGameUpdates.lastHoldStill = { by: botId, targetId };
+          }
+        }
+
+        if (cardName === "Mask Swap") {
+          const targetId = pickBestTargetPlayerId(botId);
+          if (targetId) {
+            const tRef = doc(db, "games", gameId, "players", targetId);
+            const tSnap = await tx.get(tRef);
+            if (tSnap.exists()) {
+              const t = { id: tSnap.id, ...tSnap.data() };
+              const a = String(p.color || "").toUpperCase();
+              const b = String(t.color || "").toUpperCase();
+              if (a && b && a !== b) {
+                tx.update(tRef, { color: a });
+                // pRef updaten we hieronder, maar color moet ook:
+                p.color = b;
+                extraGameUpdates.lastMaskSwap = { by: botId, targetId, a, b };
+              }
+            }
+          }
+        }
+
+        // als Follow the Tail faalde → terug naar PASS-flow (maar discard/hand rollback!)
+        if (!willPlay) {
+          // rollback hand/discard replacement: simpelste is "pass" zonder wijzigingen
+          // (we stoppen dus met action en doen PASS hieronder)
+        } else {
+          // update player + game (action gespeeld)
+          const playerUpdate = { hand, opsActionPlayedRound: roundNum };
+          if (p.color) playerUpdate.color = p.color; // voor Mask Swap case
+
+          tx.update(pRef, playerUpdate);
+
+          tx.update(gRef, {
+            actionDeck,
+            actionDiscard: discard,
+            flagsRound,
+            opsTurnIndex: nextIndex,
+            opsConsecutivePasses: 0,
+            ...extraGameUpdates,
+          });
+
+          // log
+          let msg = `BOT speelt Action Card: ${cardName}`;
+          if (cardName === "Pack Tinker" && extraGameUpdates.lastPackTinker) {
+            msg = `BOT speelt Pack Tinker (swap ${extraGameUpdates.lastPackTinker.i1 + 1} ↔ ${extraGameUpdates.lastPackTinker.i2 + 1})`;
+          } else if (cardName === "Den Signal") {
+            msg = `BOT speelt Den Signal (DEN ${p.color || "?"} immune)`;
+          } else if (cardName === "Kick Up Dust") {
+            msg = flagsRound.lockEvents
+              ? "BOT speelt Kick Up Dust (geen effect: Burrow Beacon actief)"
+              : "BOT speelt Kick Up Dust (future events geschud)";
+          } else if (cardName === "Nose for Trouble" && extraGameUpdates.lastPrediction) {
+            msg = `BOT speelt Nose for Trouble (voorspelt: ${extraGameUpdates.lastPrediction.eventId})`;
+          } else if (cardName === "Hold Still" && extraGameUpdates.lastHoldStill) {
+            msg = `BOT speelt Hold Still (target: ${extraGameUpdates.lastHoldStill.targetId})`;
+          } else if (cardName === "Mask Swap" && extraGameUpdates.lastMaskSwap) {
+            msg = `BOT speelt Mask Swap (wisselt ${extraGameUpdates.lastMaskSwap.a} ↔ ${extraGameUpdates.lastMaskSwap.b})`;
+          } else if (cardName === "No-Go Zone") {
+            msg = "BOT speelt No-Go Zone (OPS locked)";
+          }
+
+          logPayload = {
+            round: roundNum,
+            phase: "ACTIONS",
+            playerId: botId,
+            playerName: p.name || "BOT",
+            choice: `ACTION_PLAY_${cardName}`,
+            message: msg,
+          };
+          return;
+        }
       }
     }
 
-    // PASS
+    // ---- PASS ----
     const passes = Number(g.opsConsecutivePasses || 0) + 1;
     tx.update(gRef, {
       opsTurnIndex: nextIndex,
@@ -1372,7 +1549,7 @@ async function botDoOpsTurn(botId) {
     });
 
     logPayload = {
-      round: roundNum,
+      round: Number(g.round || 0),
       phase: "ACTIONS",
       playerId: botId,
       playerName: p.name || "BOT",
@@ -1911,11 +2088,12 @@ initAuth(async (authUser) => {
         const active = latestPlayers.filter(isInYardForEvents);
         const activeCount = active.length;
         const passes = game.opsConsecutivePasses || 0;
+        const opsLocked = !!game.flagsRound?.opsLocked;
 
-        if (activeCount > 0 && passes < activeCount) {
-          alert(`OPS-fase is nog bezig: opeenvolgende PASSes: ${passes}/${activeCount}.`);
-          return;
-        }
+        if (!opsLocked && activeCount > 0 && passes < activeCount) {
+        alert(`OPS-fase is nog bezig: opeenvolgende PASSes: ${passes}/${activeCount}.`);
+        return;
+      }
 
         await updateDoc(gameRef, { phase: "DECISION" });
 
