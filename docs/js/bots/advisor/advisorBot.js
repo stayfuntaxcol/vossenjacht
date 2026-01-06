@@ -542,6 +542,9 @@ export function getAdvisorHint({
   const profileAgg = deriveProfile(baseProfile, "AGGRESSIVE");
 
   const view = buildPlayerView({ game, me, players, actions });
+  console.log("[advisor] view keys:", Object.keys(view || {}));
+  console.log("[advisor] view sample:", view);
+
   const phase = normalizePhase(view.phase);
 
   // advisor mag intern “peek” (2 upcoming), maar we tonen nooit IDs/titels
