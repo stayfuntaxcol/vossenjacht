@@ -26,6 +26,70 @@ function normalizePhase(phase) {
 }
 
 // ------------------------------
+// View adapter: jouw buildPlayerView() shape -> advisor shape
+// buildPlayerView geeft: { phase, round, eventTrack, eventCursor, flags, me, playersPublic }
+// advisor verwacht: view.game, view.me, view.players, view.phase, view.round
+// ------------------------------
+function adaptAdvisorView(rawView, fallback = {}) {
+  const r = rawView || {};
+  const fbGame = fallback.game || {};
+  const fbMe = fallback.me || null;
+  const fbPlayers = Array.isArray(fallback.players) ? fallback.players : [];
+
+  const phase = r.phase ?? fbGame.phase ?? "MOVE";
+  const round = r.round ?? fbGame.round ?? 0;
+
+  const eventTrack = Array.isArray(r.eventTrack)
+    ? r.eventTrack
+    : Array.isArray(fbGame.eventTrack)
+    ? fbGame.eventTrack
+    : [];
+
+  // eventCursor is jouw pointer; advisor helpers gebruiken game.eventIndex
+  const eventIndexRaw =
+    r.eventCursor ?? r.eventIndex ?? fbGame.eventIndex ?? 0;
+  const eventIndex = Number.isFinite(Number(eventIndexRaw)) ? Number(eventIndexRaw) : 0;
+
+  const flagsRound = r.flags ?? fbGame.flagsRound ?? {};
+
+  const me = r.me ?? fbMe;
+  const playersPublic = Array.isArray(r.playersPublic)
+    ? r.playersPublic
+    : Array.isArray(r.players)
+    ? r.players
+    : fbPlayers;
+
+  // bouw een "game" object met de keys die advisor code verwacht
+  const game = {
+    ...fbGame,
+    phase,
+    round,
+    eventTrack,
+    eventIndex,
+    flagsRound,
+
+    // laat deze door als ze bestaan (handig voor kansen)
+    roosterSeen: r.roosterSeen ?? fbGame.roosterSeen ?? 0,
+    leadIndex: r.leadIndex ?? fbGame.leadIndex ?? 0,
+    eventRevealed: r.eventRevealed ?? fbGame.eventRevealed ?? null,
+  };
+
+  // return: behoud raw keys + voeg aliases toe
+  return {
+    ...r,
+    game,
+    me,
+    players: playersPublic,
+    playersPublic,
+    phase,
+    round,
+    eventTrack,
+    eventCursor: eventIndex,
+    flags: flagsRound,
+  };
+}
+
+// ------------------------------
 // Hand -> action names (strings of objects)
 // ------------------------------
 function normalizeActionName(x) {
@@ -119,50 +183,6 @@ function labelMove(x) {
 
 function labelDecision(x) {
   return x?.decision || "—";
-}
-
-// ------------------------------
-// ✅ NEW: Forceer verschil tussen DEF & AGG als top-pick gelijk is
-// ------------------------------
-function pickDistinctPair(rankedDef, rankedAgg, keyFn, fallbackDef, fallbackAgg) {
-  let bestDef = safeBest(rankedDef, fallbackDef);
-  let bestAgg = safeBest(rankedAgg, fallbackAgg);
-
-  const kDef = keyFn(bestDef);
-  const kAgg = keyFn(bestAgg);
-
-  let forced = false;
-
-  if (kDef && kAgg && kDef === kAgg) {
-    // probeer AGG te verschuiven naar eerstvolgende andere keuze
-    const altAgg = (Array.isArray(rankedAgg) ? rankedAgg : []).find(
-      (x) => keyFn(x) && keyFn(x) !== kDef
-    );
-    if (altAgg) {
-      bestAgg = altAgg;
-      forced = true;
-    } else {
-      // anders DEF verschuiven
-      const altDef = (Array.isArray(rankedDef) ? rankedDef : []).find(
-        (x) => keyFn(x) && keyFn(x) !== kAgg
-      );
-      if (altDef) {
-        bestDef = altDef;
-        forced = true;
-      }
-    }
-  }
-
-  return { bestDef, bestAgg, forced };
-}
-
-// ------------------------------
-// ✅ NEW: kleine “focus” bullets zodat DEF/AGG nooit identiek zijn
-// ------------------------------
-function styleFocusBullet(style) {
-  if (style === "DEF") return "DEF focus: risico dempen en kaarten bewaren.";
-  if (style === "AGG") return "AGG focus: tempo en buit maximaliseren.";
-  return null;
 }
 
 // ------------------------------
@@ -377,7 +397,7 @@ function headerLinesCompact(view, riskMeta) {
 // Extra adviesregels (based on jouw nieuwe regels)
 // ------------------------------
 function buildRiskMeta({ game, me, players, upcomingPeek }) {
-  const myColor = String(me?.color || "").toUpperCase();
+  const myColor = String(me?.color || me?.den || "").toUpperCase();
   const roosterSeen = Number(game?.roosterSeen || 0);
 
   const lootCount = getLootCount(me);
@@ -410,9 +430,8 @@ function buildRiskMeta({ game, me, players, upcomingPeek }) {
       : 0;
 
   // peek (advisor mag intern weten, maar nooit benoemen)
-  const nextId = upcomingPeek?.[0]?.id || null;
+  const nextId = upcomingPeek?.[0]?.id || upcomingPeek?.[0] || null;
   const nextIsDanger = nextId ? isDangerousEventForMe(nextId, ctx) : false;
-
   const nextLabel = nextId ? (nextIsDanger ? "GEVAARLIJK" : "VEILIG") : "—";
 
   return {
@@ -436,7 +455,7 @@ function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
   const has = (name) => handNames.includes(name);
 
   const myColor = riskMeta.ctx.myColor || "?";
-  const flags = view?.game?.flagsRound || {};
+  const flags = view?.game?.flagsRound || view?.flags || {};
   const denImmune = flags?.denImmune || {};
   const denSignalActiveForMe = !!denImmune[myColor] || !!denImmune[String(myColor).toLowerCase()];
 
@@ -469,10 +488,10 @@ function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
   // Speciaal: “bonus-event voor DASH” (Hidden Nest) – niet benoemen, wel uitleg
   if (riskMeta.nextId === "HIDDEN_NEST") {
     lines.push("Let op: volgende kaart is een **DASH-bonus event**. Bonus werkt alleen als 1–3 spelers DASH kiezen (3/2/1 loot).");
-    lines.push("Strategie: vaak beter om dit bonus-event later te zetten (Pack Tinker / SHIFT), zodat je niet direct vertrekt uit de Yard.");
+    lines.push("Strategie: vaak beter om dit bonus-event later te zetten (Pack Tinker / SHIFT), zodat je niet direct uit de Yard vertrekt.");
   }
 
-  // Speciaal: Rooster-event vroeg → vaak beter naar achteren om meer rondes te krijgen
+  // Speciaal: Rooster-event
   if (riskMeta.nextId === "ROOSTER_CROW") {
     if ((view?.game?.roosterSeen || 0) >= 2) {
       lines.push("Alarm: een **3e rooster-event** is gevaarlijk (raid eindigt). Probeer dit naar achteren te schuiven (Pack Tinker / SHIFT).");
@@ -490,10 +509,9 @@ function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
 function decisionTacticalAdvice({ view, riskMeta }) {
   const lines = [];
   const g = view?.game || {};
-  const me = view?.me || {};
   const myColor = riskMeta.ctx.myColor || "";
 
-  const flags = g.flagsRound || {};
+  const flags = g.flagsRound || view?.flags || {};
   const denImmune = flags.denImmune || {};
   const denSignalActiveForMe = !!denImmune[myColor] || !!denImmune[String(myColor).toLowerCase()];
 
@@ -505,9 +523,8 @@ function decisionTacticalAdvice({ view, riskMeta }) {
 
   // Bonus-event voor DASH (Hidden Nest) => hoog DASH advies (aggressief), maar met nuance
   if (riskMeta.nextId === "HIDDEN_NEST") {
-    const active = Array.isArray(view?.players)
-      ? view.players.filter((p) => p?.inYard !== false && !p?.dashed)
-      : [];
+    const all = Array.isArray(view?.players) ? view.players : (Array.isArray(view?.playersPublic) ? view.playersPublic : []);
+    const active = all.filter((p) => p?.inYard !== false && !p?.dashed);
     const activeCount = active.length;
 
     lines.push("Aggressief: **DASH** kan hier extra loot opleveren (alleen als 1–3 spelers DASH kiezen: 3/2/1).");
@@ -541,14 +558,16 @@ export function getAdvisorHint({
   const profileDef = deriveProfile(baseProfile, "DEFENSIVE");
   const profileAgg = deriveProfile(baseProfile, "AGGRESSIVE");
 
-  const view = buildPlayerView({ game, me, players, actions });
-  console.log("[advisor] view keys:", Object.keys(view || {}));
-  console.log("[advisor] view sample:", view);
+  // 1) raw view uit jouw builder
+  const rawView = buildPlayerView({ game, me, players, actions });
 
-  const phase = normalizePhase(view.phase);
+  // 2) adapter: maakt view.game/view.players etc consistent
+  const view = adaptAdvisorView(rawView, { game, me, players });
+
+  const phase = normalizePhase(view.phase || view.game?.phase);
 
   // advisor mag intern “peek” (2 upcoming), maar we tonen nooit IDs/titels
-  const upcomingPeek = getUpcomingEvents(view, 2);
+  const upcomingPeek = getUpcomingEvents(view, 2) || [];
 
   // hand normaliseren voor scoring + debug
   const handMeta = summarizeHandRecognition(view.me || me || {});
@@ -581,14 +600,8 @@ export function getAdvisorHint({
     const rankedDef = scoreMoveMoves({ view, upcoming: upcomingPeek, profile: profileDef }) || [];
     const rankedAgg = scoreMoveMoves({ view, upcoming: upcomingPeek, profile: profileAgg }) || [];
 
-    // ✅ force distinct (op move)
-    const { bestDef, bestAgg, forced } = pickDistinctPair(
-      rankedDef,
-      rankedAgg,
-      (x) => String(x?.move || ""),
-      { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" },
-      { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" }
-    );
+    const bestDef = safeBest(rankedDef, { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" });
+    const bestAgg = safeBest(rankedAgg, { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" });
 
     const defBullets = sanitizeBullets(bestDef.bullets || []);
     const aggBullets = sanitizeBullets(bestAgg.bullets || []);
@@ -613,12 +626,9 @@ export function getAdvisorHint({
         ...headerLinesCompact(view, riskMeta),
         ...riskBullets,
         `DEFENSIEF: ${labelMove(bestDef)} (${bestDef.riskLabel ?? "?"})`,
-        styleFocusBullet("DEF"),
         ...defBullets,
         `AANVALLEND: ${labelMove(bestAgg)} (${bestAgg.riskLabel ?? "?"})`,
-        styleFocusBullet("AGG"),
         ...aggBullets,
-        ...(forced ? ["(Advisor: Aggressief advies is bewust gedifferentieerd t.o.v. defensief.)"] : []),
         ...sanitizeBullets(strat),
       ].filter(Boolean).slice(0, 10),
       alternatives: [
@@ -628,7 +638,6 @@ export function getAdvisorHint({
       debug: {
         phase: view.phase,
         hand: handMeta,
-        forcedDistinct: forced,
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           probNextDanger: riskMeta.probNextDanger,
@@ -647,18 +656,8 @@ export function getAdvisorHint({
     const defRanked = scoreOpsPlays({ view, upcoming: upcomingPeek, profile: profileDef, style: "DEFENSIVE" }) || [];
     const aggRanked = scoreOpsPlays({ view, upcoming: upcomingPeek, profile: profileAgg, style: "AGGRESSIVE" }) || [];
 
-    // ✅ force distinct (op play)
-    const { bestDef, bestAgg, forced } = pickDistinctPair(
-      defRanked,
-      aggRanked,
-      (x) => {
-        if (!x) return "PASS";
-        if (x.play === "PASS") return "PASS";
-        return String(x.cardId || x.cardName || x.name || "?");
-      },
-      { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" },
-      { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" }
-    );
+    const bestDef = safeBest(defRanked, { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" });
+    const bestAgg = safeBest(aggRanked, { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" });
 
     const labelDef = labelPlay(bestDef);
     const labelAgg = labelPlay(bestAgg);
@@ -681,14 +680,10 @@ export function getAdvisorHint({
         ...(handMeta.lineUnknown ? [handMeta.lineUnknown] : []),
 
         `DEFENSIEF: ${labelDef} (${bestDef.riskLabel ?? "?"})`,
-        styleFocusBullet("DEF"),
         ...sanitizeBullets(bestDef.bullets || []),
 
         `AANVALLEND: ${labelAgg} (${bestAgg.riskLabel ?? "?"})`,
-        styleFocusBullet("AGG"),
         ...sanitizeBullets(bestAgg.bullets || []),
-
-        ...(forced ? ["(Advisor: Aggressief advies is bewust gedifferentieerd t.o.v. defensief.)"] : []),
 
         ...tactical,
       ].filter(Boolean).slice(0, 10),
@@ -709,7 +704,6 @@ export function getAdvisorHint({
       debug: {
         phase: view.phase,
         hand: handMeta,
-        forcedDistinct: forced,
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           probNextDanger: riskMeta.probNextDanger,
@@ -728,14 +722,8 @@ export function getAdvisorHint({
     const rankedDef = scoreDecisions({ view, upcoming: upcomingPeek, profile: profileDef }) || [];
     const rankedAgg = scoreDecisions({ view, upcoming: upcomingPeek, profile: profileAgg }) || [];
 
-    // ✅ force distinct (op decision)
-    const { bestDef, bestAgg, forced } = pickDistinctPair(
-      rankedDef,
-      rankedAgg,
-      (x) => String(x?.decision || ""),
-      { decision: "—", riskLabel: "MED" },
-      { decision: "—", riskLabel: "MED" }
-    );
+    const bestDef = safeBest(rankedDef, { decision: "—", riskLabel: "MED" });
+    const bestAgg = safeBest(rankedAgg, { decision: "—", riskLabel: "MED" });
 
     const tactical = decisionTacticalAdvice({ view, riskMeta });
 
@@ -753,10 +741,7 @@ export function getAdvisorHint({
         ...riskBullets,
         ...sanitizeBullets(extraBurrowWarn),
         `DEFENSIEF: ${labelDecision(bestDef)} (${bestDef.riskLabel ?? "?"})`,
-        styleFocusBullet("DEF"),
         `AANVALLEND: ${labelDecision(bestAgg)} (${bestAgg.riskLabel ?? "?"})`,
-        styleFocusBullet("AGG"),
-        ...(forced ? ["(Advisor: Aggressief advies is bewust gedifferentieerd t.o.v. defensief.)"] : []),
         ...tactical,
       ].filter(Boolean).slice(0, 10),
       alternatives: [
@@ -766,7 +751,6 @@ export function getAdvisorHint({
       debug: {
         phase: view.phase,
         hand: handMeta,
-        forcedDistinct: forced,
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           probNextDanger: riskMeta.probNextDanger,
