@@ -806,6 +806,7 @@ async function initRaidIfNeeded(gameRefParam) {
       updateDoc(pref, {
         joinOrder: index,
         color,
+        den: color, 
         inYard: true,
         dashed: false,
         burrowUsed: false,
