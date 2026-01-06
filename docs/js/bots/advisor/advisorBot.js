@@ -409,8 +409,33 @@ function headerLinesCompact(view, riskMeta) {
 // ------------------------------
 // Extra adviesregels (based on jouw nieuwe regels)
 // ------------------------------
-function buildRiskMeta({ game, me, players, upcomingPeek }) {
-  const myColor = String(me?.color || "").toUpperCase();
+function getPlayersList(view, players) {
+  return (view?.playersPublic || view?.players || players || []).filter(Boolean);
+}
+
+function resolveMyDenColor(view, me, players) {
+  const m = view?.me || me || {};
+
+  // 1) direct op me
+  const direct =
+    m.den ?? m.color ?? m.denColor ?? m.playerColor ?? m.maskColor ?? "";
+
+  let c = String(direct || "").trim();
+
+  // 2) fallback: zoek mezelf in spelerslijst
+  if (!c) {
+    const list = getPlayersList(view, players);
+    const found = list.find((p) => p?.id === m?.id || p?.playerId === m?.id);
+    const alt = found?.den ?? found?.color ?? found?.denColor ?? "";
+    c = String(alt || "").trim();
+  }
+
+  c = c.toUpperCase();
+  if (!["RED", "BLUE", "GREEN", "YELLOW"].includes(c)) return ""; // onbekend
+  return c;
+}
+  function buildRiskMeta({ game, me, players, upcomingPeek }) {
+  const myColor = resolveMyDenColor(view, me, players);
   const roosterSeen = Number(game?.roosterSeen || 0);
 
   const lootCount = getLootCount(me);
@@ -618,6 +643,7 @@ export function getAdvisorHint({
 
   // risk meta
   const riskMeta = buildRiskMeta({
+    view,
     game: view.game || game,
     me: view.me || me,
     players: view.players || players,
