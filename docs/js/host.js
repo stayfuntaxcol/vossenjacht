@@ -1262,15 +1262,6 @@ const BOT_SIMPLE_EFFECTS = new Set([
   "Pack Tinker",
 ]);
 
-function pickBotActionName(hand) {
-  const names = (hand || []).map((c) => c?.name).filter(Boolean);
-  if (!names.length) return null;
-
-  const preferred = names.filter((n) => BOT_SIMPLE_EFFECTS.has(n));
-  if (preferred.length) return preferred[Math.floor(Math.random() * preferred.length)];
-  return names[Math.floor(Math.random() * names.length)];
-}
-
 function lootPoints(p) {
   const loot = Array.isArray(p?.loot) ? p.loot : [];
   return loot.reduce((sum, c) => sum + (Number(c?.v) || 0), 0);
