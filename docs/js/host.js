@@ -1385,7 +1385,9 @@ async function botDoOpsTurn(botId) {
 }
 
 // ===============================
-// BOT DECISION - FINE TINE DASH PROB
+// BOT DECISION (aangepast)
+// - Den Signal safety (kleur immune) => forceer LURK
+// - Dash-kans groeit per ronde/loot/rooster met guards
 // ===============================
 async function botDoDecision(botId) {
   const pRef = doc(db, "games", gameId, "players", botId);
@@ -1410,6 +1412,33 @@ async function botDoDecision(botId) {
     const roosterSeen = Number(g.roosterSeen || 0);
 
     const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+
+    // ✅ Den Signal override:
+    // Als jouw kleur deze ronde immune is, dan MOET je LURK kiezen
+    // (veilig voor DOG_CHARGE / SECOND_CHARGE / jouw DEN_* event)
+    const myColor = String(p.color || "").toUpperCase(); // "RED"|"BLUE"|...
+    const denImmune = g.flagsRound?.denImmune || {};
+
+    const hasDenSignalSafety =
+      !!myColor &&
+      (denImmune[myColor] === true ||
+        denImmune[myColor.toLowerCase()] === true);
+
+    if (hasDenSignalSafety) {
+      const kind = "LURK";
+
+      tx.update(pRef, { decision: kind });
+
+      logPayload = {
+        round: roundNum,
+        phase: "DECISION",
+        playerId: botId,
+        playerName: p.name || "BOT",
+        choice: `DECISION_${kind}`,
+        message: `BOT kiest LURK (Den Signal actief voor ${myColor || "?"})`,
+      };
+      return;
+    }
 
     // --- DASH kans (tuning) ---
     // basis laag, groeit per ronde/loot/rooster, maar met safety guards
@@ -1446,7 +1475,9 @@ async function botDoDecision(botId) {
       playerId: botId,
       playerName: p.name || "BOT",
       choice: `DECISION_${kind}`,
-      message: `BOT kiest ${kind} (dashProb=${dashProb.toFixed(2)} loot=${lootPts} rooster=${roosterSeen})`,
+      message: `BOT kiest ${kind} (dashProb=${dashProb.toFixed(
+        2
+      )} loot=${lootPts} rooster=${roosterSeen})`,
     };
   });
 
