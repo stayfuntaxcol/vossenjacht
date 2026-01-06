@@ -2700,86 +2700,66 @@ initAuth(async () => {
   if (btnLoot) btnLoot.addEventListener("click", openLootModal);
   if (btnLead) btnLead.addEventListener("click", openLeadCommandCenter);
 
-  // HINT (clean: 1 try/catch, geen nested try meer)
-  if (btnHint) {
-    btnHint.addEventListener("click", () => {
-      console.log("[HINT] clicked", {
-        hasGame: !!lastGame,
-        hasMe: !!lastMe,
-        gameId: lastGame?.id,
-        meId: lastMe?.id,
+ // HINT (1 try/catch)
+if (btnHint) {
+  btnHint.addEventListener("click", () => {
+    console.log("[HINT] clicked", {
+      hasGame: !!lastGame,
+      hasMe: !!lastMe,
+      gameId: lastGame?.id,
+      meId: lastMe?.id,
+    });
+
+    if (!lastGame || !lastMe) {
+      alert("Hint: game/player state nog niet geladen.");
+      return;
+    }
+
+    let hint = null;
+
+    try {
+      hint = getAdvisorHint({
+        game: lastGame,
+        me: lastMe,
+        players: lastPlayers || [],
+        actions: lastActions || [],
+        profileKey: "BEGINNER_COACH",
       });
 
-      let hint = null;
+      console.log("[advisor] hint object:", hint);
+      console.log("[advisor] title:", hint?.title);
+      console.log("[advisor] bullets:", hint?.bullets);
+      console.log("[advisor] alternatives:", hint?.alternatives);
+      console.log("[advisor] debug:", hint?.debug);
 
+      // NEW overlay (Lead Fox style) als default
+      if (typeof openAdvisorHintOverlay === "function") {
+        openAdvisorHintOverlay(hint, { game: lastGame, me: lastMe });
+        return;
+      }
+
+      // fallback: oude overlay
+      if (typeof showHint === "function") {
+        showHint(hint);
+        return;
+      }
+
+      console.warn("[HINT] geen overlay-functie gevonden (openAdvisorHintOverlay/showHint).");
+    } catch (err) {
+      console.error("[HINT] crashed:", err);
+
+      // fallback 1: oude overlay
       try {
-        if (!lastGame || !lastMe) {
-          alert("Hint: game/player state nog niet geladen.");
+        if (hint && typeof showHint === "function") {
+          showHint(hint);
           return;
         }
+      } catch (e) {}
 
-        hint = getAdvisorHint({
-          game: lastGame,
-          me: lastMe,
-          players: lastPlayers || [],
-          actions: lastActions || [],
-          profileKey: "BEGINNER_COACH",
-        });
-
-  console.log("[advisor] hint object:", hint);
-  console.log("[advisor] title:", hint?.title);
-  console.log("[advisor] bullets:", hint?.bullets);
-  console.log("[advisor] alternatives:", hint?.alternatives);
-  console.log("[advisor] debug:", hint?.debug);
-
-  // daarna pas renderen
-  showHint(hint);
-
-} catch (e) {
-  console.error("Hint error:", e);
+      // fallback 2: alert
+      alert("Hint crash: " + (err?.message || err));
+    }
+  });
+} else {
+  console.warn("[HINT] btnHint niet gevonden in DOM");
 }
-       
-        // NEW overlay (Lead Fox style)
-        openAdvisorHintOverlay(hint, { game: lastGame, me: lastMe });
-      } catch (err) {
-        console.error("[HINT] crashed:", err);
-
-        // fallback 1: oude overlay
-        try {
-          if (hint && typeof showHint === "function") {
-            showHint(hint);
-            return;
-          }
-        } catch (e) {}
-
-        // fallback 2: alert
-        alert("Hint crash: " + (err?.message || err));
-      }
-    });
-  } else {
-    console.warn("[HINT] btnHint niet gevonden in DOM");
-  }
-
-  // Modals sluiten (HAND/LOOT)
-  if (handModalClose) handModalClose.addEventListener("click", closeHandModal);
-  if (handModalOverlay) {
-    handModalOverlay.addEventListener("click", (e) => {
-      if (e.target === handModalOverlay) closeHandModal();
-    });
-  }
-
-  if (lootModalClose) lootModalClose.addEventListener("click", closeLootModal);
-  if (lootModalOverlay) {
-    lootModalOverlay.addEventListener("click", (e) => {
-      if (e.target === lootModalOverlay) closeLootModal();
-    });
-  }
-
-  // LEAD Command Center modal sluiten
-  if (leadCommandModalClose) leadCommandModalClose.addEventListener("click", closeLeadCommandCenter);
-  if (leadCommandModalOverlay) {
-    leadCommandModalOverlay.addEventListener("click", (e) => {
-      if (e.target === leadCommandModalOverlay) closeLeadCommandCenter();
-    });
-  }
-});
