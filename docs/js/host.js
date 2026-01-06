@@ -1406,13 +1406,13 @@ async function botDoDecision(botId) {
     const loot = Array.isArray(p.loot) ? p.loot : [];
     const lootPts = loot.reduce((sum, c) => sum + (Number(c?.v) || 0), 0);
 
-    const roundNum = Number(g.round || 0);
+    const roundNum = Number(g.round || 1);
     const roosterSeen = Number(g.roosterSeen || 0);
 
     const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
-    let dashProb = 0.05 + roundNum * 0.06 + lootPts * 0.05 + roosterSeen * 0.10;
-    dashProb = clamp(dashProb, 0, 0.85);
+    let dashProb = 0.05 + roundNum * 0.05 + lootPts * 0.05 + roosterSeen * 0.10;
+    dashProb = clamp(dashProb, 0, 0.75);
 
     let kind = "LURK";
 
