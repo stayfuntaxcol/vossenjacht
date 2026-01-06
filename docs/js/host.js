@@ -326,18 +326,27 @@ function buildLootDeck() {
 function renderEventTrack(game) {
   if (!eventTrackDiv) return;
 
-  const track = game.eventTrack || [];
-  const revealed = game.eventRevealed || [];
-  const currentId = game.currentEventId || null;
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const revealedRaw = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
+  const revealed = track.map((_, i) => !!revealedRaw[i]); // altijd zelfde lengte als track
+  const currentId = game?.currentEventId || null;
 
   eventTrackDiv.innerHTML = "";
 
   if (!track.length) {
     const p = document.createElement("p");
-    p.textContent = game.raidStarted ? "Geen Event Track gevonden." : "Nog geen raid gestart.";
+    p.textContent = game?.raidStarted ? "Geen Event Track gevonden." : "Nog geen raid gestart.";
     p.className = "event-track-status";
     eventTrackDiv.appendChild(p);
     return;
+  }
+
+  // ✅ Safe-start regel (UI check): eerste kaart hoort ROOSTER_CROW te zijn
+  if (track[0] !== "ROOSTER_CROW") {
+    const warn = document.createElement("div");
+    warn.className = "event-track-warning";
+    warn.textContent = "⚠️ Track check: kaart 1 hoort ROOSTER_CROW (safe start) te zijn.";
+    eventTrackDiv.appendChild(warn);
   }
 
   const grid = document.createElement("div");
@@ -345,7 +354,7 @@ function renderEventTrack(game) {
 
   track.forEach((eventId, i) => {
     const ev = getEventById(eventId);
-    const isRevealed = !!revealed[i];
+    const isRevealed = revealed[i];
 
     let state = "future";
     if (isRevealed) {
@@ -356,8 +365,19 @@ function renderEventTrack(game) {
     const slot = document.createElement("div");
     slot.classList.add("event-slot", `event-state-${state}`);
 
+    // ✅ Badge voor "safe first"
+    if (i === 0) {
+      slot.classList.add("event-slot-first");
+      if (eventId === "ROOSTER_CROW") slot.classList.add("event-slot-safe-first");
+
+      const badge = document.createElement("div");
+      badge.className = "event-slot-badge";
+      badge.textContent = eventId === "ROOSTER_CROW" ? "SAFE START" : "SAFE? (ROOSTER)";
+      slot.appendChild(badge);
+    }
+
     let imgUrl = CARD_BACK;
-    if (isRevealed && ev && ev.imageFront) imgUrl = ev.imageFront;
+    if (isRevealed && ev?.imageFront) imgUrl = ev.imageFront;
     slot.style.background = `url(${imgUrl}) center / cover no-repeat`;
 
     const idx = document.createElement("div");
@@ -377,8 +397,9 @@ function renderEventTrack(game) {
 }
 
 function renderStatusCards(game) {
+  // Phase
   if (phaseCard) {
-    const phase = game.phase || "–";
+    const phase = game?.phase || "–";
     phaseCard.innerHTML = `
       <div class="card-title">Phase</div>
       <div class="card-value">${phase}</div>
@@ -386,6 +407,7 @@ function renderStatusCards(game) {
     `;
   }
 
+  // Lead Fox
   if (leadFoxCard) {
     const name = currentLeadFoxName || "–";
     leadFoxCard.innerHTML = `
@@ -395,17 +417,24 @@ function renderStatusCards(game) {
     `;
   }
 
+  // Rooster state
   if (roosterCard) {
-    const roosterSeenRaw = game.roosterSeen || 0;
+    const roosterSeenRaw = Number(game?.roosterSeen || 0);
     const stateIndex = Math.max(0, Math.min(roosterSeenRaw, 3));
 
     roosterCard.innerHTML = "";
-    roosterCard.classList.remove("rooster-state-0", "rooster-state-1", "rooster-state-2", "rooster-state-3");
+    roosterCard.classList.remove(
+      "rooster-state-0",
+      "rooster-state-1",
+      "rooster-state-2",
+      "rooster-state-3"
+    );
     roosterCard.classList.add(`rooster-state-${stateIndex}`);
   }
 
-  const flags = game.flagsRound || {};
+  const flags = game?.flagsRound || {};
 
+  // Beacon
   if (beaconCard) {
     const on = !!flags.lockEvents;
     beaconCard.innerHTML = "";
@@ -413,6 +442,7 @@ function renderStatusCards(game) {
     beaconCard.classList.add(on ? "beacon-on" : "beacon-off");
   }
 
+  // Scatter
   if (scatterCard) {
     const on = !!flags.scatter;
     scatterCard.innerHTML = "";
@@ -420,8 +450,9 @@ function renderStatusCards(game) {
     scatterCard.classList.add(on ? "scatter-on" : "scatter-off");
   }
 
+  // Sack
   if (sackCard) {
-    const sack = Array.isArray(game.sack) ? game.sack : [];
+    const sack = Array.isArray(game?.sack) ? game.sack : [];
     const count = sack.length;
 
     sackCard.innerHTML = "";
@@ -435,16 +466,18 @@ function renderStatusCards(game) {
     sackCard.classList.add(stateClass);
   }
 
+  // Loot Deck
   if (lootDeckCard) {
-    const lootDeck = Array.isArray(game.lootDeck) ? game.lootDeck : [];
+    const lootDeck = Array.isArray(game?.lootDeck) ? game.lootDeck : [];
     lootDeckCard.innerHTML = `
       <div class="card-title">Loot Deck</div>
       <div class="card-value">${lootDeck.length}</div>
     `;
   }
 
+  // Action Deck
   if (actionDeckCard) {
-    const actionDeck = Array.isArray(game.actionDeck) ? game.actionDeck : [];
+    const actionDeck = Array.isArray(game?.actionDeck) ? game.actionDeck : [];
     actionDeckCard.innerHTML = `
       <div class="card-title">Action Deck</div>
       <div class="card-value">${actionDeck.length}</div>
@@ -1411,7 +1444,7 @@ async function botDoDecision(botId) {
 
     const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
-    let dashProb = 0.05 + roundNum * 0.06 + lootPts * 0.05 + roosterSeen * 0.10;
+    let dashProb = 0.05 + roundNum * 0.05 + lootPts * 0.05 + roosterSeen * 0.10;
     dashProb = clamp(dashProb, 0, 0.85);
 
     let kind = "LURK";
