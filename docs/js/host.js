@@ -1752,6 +1752,7 @@ async function addBotToCurrentGame() {
       joinedAt: serverTimestamp(),
       joinOrder,
       color,
+      den: color, 
       inYard: true,
       dashed: false,
       burrowUsed: false,
