@@ -2726,6 +2726,19 @@ initAuth(async () => {
           profileKey: "BEGINNER_COACH",
         });
 
+  console.log("[advisor] hint object:", hint);
+  console.log("[advisor] title:", hint?.title);
+  console.log("[advisor] bullets:", hint?.bullets);
+  console.log("[advisor] alternatives:", hint?.alternatives);
+  console.log("[advisor] debug:", hint?.debug);
+
+  // daarna pas renderen
+  showHint(hint);
+
+} catch (e) {
+  console.error("Hint error:", e);
+}
+       
         // NEW overlay (Lead Fox style)
         openAdvisorHintOverlay(hint, { game: lastGame, me: lastMe });
       } catch (err) {
