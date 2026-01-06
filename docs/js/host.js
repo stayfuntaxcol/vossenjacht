@@ -1385,7 +1385,7 @@ async function botDoOpsTurn(botId) {
 }
 
 // ===============================
-// BOT DECISION
+// BOT DECISION - FINE TINE DASH PROB
 // ===============================
 async function botDoDecision(botId) {
   const pRef = doc(db, "games", gameId, "players", botId);
@@ -1406,17 +1406,30 @@ async function botDoDecision(botId) {
     const loot = Array.isArray(p.loot) ? p.loot : [];
     const lootPts = loot.reduce((sum, c) => sum + (Number(c?.v) || 0), 0);
 
-    const roundNum = Number(g.round || 1);
+    const roundNum = Number(g.round || 0);
     const roosterSeen = Number(g.roosterSeen || 0);
 
     const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
-    let dashProb = 0.05 + roundNum * 0.05 + lootPts * 0.05 + roosterSeen * 0.10;
-    dashProb = clamp(dashProb, 0, 0.75);
+    // --- DASH kans (tuning) ---
+    // basis laag, groeit per ronde/loot/rooster, maar met safety guards
+    let dashProb =
+      0.03 +               // basis 3%
+      roundNum * 0.04 +    // +4% per ronde
+      lootPts * 0.04 +     // +4% per lootpunt
+      roosterSeen * 0.08;  // +8% per rooster
+
+    dashProb = clamp(dashProb, 0, 0.70);
+
+    // Guards: niet dashen zonder buit
+    if (lootPts <= 0) dashProb = 0;
+
+    // Guards: ronde 1-2 alleen dashen als je echt wat te verliezen hebt
+    if (roundNum <= 2 && lootPts < 3) dashProb = 0;
 
     let kind = "LURK";
 
-    if (lootPts > 0 && Math.random() < dashProb) {
+    if (Math.random() < dashProb) {
       kind = "DASH";
     } else if (!p.burrowUsed && Math.random() < 0.15) {
       kind = "BURROW";
@@ -1428,7 +1441,7 @@ async function botDoDecision(botId) {
     tx.update(pRef, update);
 
     logPayload = {
-      round: g.round || 0,
+      round: roundNum,
       phase: "DECISION",
       playerId: botId,
       playerName: p.name || "BOT",
