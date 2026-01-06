@@ -320,7 +320,19 @@ function isDangerousEventForMe(eventId, ctx) {
     return !!ctx.isLead;
   }
 
-  // Hidden Nest / Paint bomb: niet “gevaarlijk” (wel strategisch)
+// ------------------------------
+// Event "harmful" evaluation (veilig, maar nadelig voor score/bonus)
+// - Paint Bomb Nest: Sack gaat terug naar Loot Deck → minder eindbonus voor dashers
+// ------------------------------
+function isHarmfulEventForMe(eventId, ctx) {
+  const id = String(eventId || "");
+  if (!id) return false;
+
+  if (id === "PAINT_BOMB_NEST") {
+    // vooral nadelig als er al iets in de Sack zit
+    return (ctx.sackCount ?? 0) > 0;
+  }
+
   return false;
 }
 
@@ -373,7 +385,8 @@ function sanitizeTextNoEventNames(text) {
   s = s.replace(/\bHidden Nest\b/gi, "bonus-event");
   s = s.replace(/\bSheepdog Patrol\b/gi, "patrol-event");
   s = s.replace(/\bSecond Charge\b/gi, "charge-event");
-  s = s.replace(/\bSheepdog Charge\b/gi, "charge-event");
+  s = s.replace(/\bSheepdog Charge\b/gi, "charge-event");  
+  s = s.replace(/\bPaint[- ]?Bomb Nest\b/gi, "sack-reset event");
 
   return s;
 }
@@ -389,7 +402,7 @@ function sanitizeBullets(bullets) {
 function headerLinesCompact(view, riskMeta) {
   return [
     `Ronde: ${view.round ?? 0} • Fase: ${view.phase ?? "?"}`,
-    `Volgende kaart: ${riskMeta.nextLabel} • Kans gevaar (deck): ${pct(riskMeta.probNextDanger)}`,
+    `Volgende kaart: ${riskMeta.nextLabel} • Kans gevaar (deck): ${pct(riskMeta.probNextDanger)} • Kans nadelig (deck): ${pct(riskMeta.probNextHarmful)}`,
   ];
 }
 
@@ -397,25 +410,32 @@ function headerLinesCompact(view, riskMeta) {
 // Extra adviesregels (based on jouw nieuwe regels)
 // ------------------------------
 function buildRiskMeta({ game, me, players, upcomingPeek }) {
-  const myColor = String(me?.color || me?.den || "").toUpperCase();
+  const myColor = String(me?.color || "").toUpperCase();
   const roosterSeen = Number(game?.roosterSeen || 0);
 
   const lootCount = getLootCount(me);
   const lootPts = getLootPoints(me);
 
+  const sackCount = Array.isArray(game?.sack) ? game.sack.length : 0;
+
   const leadFoxId = computeLeadFoxId(game, players);
   const isLead = !!me?.id && leadFoxId === me.id;
 
-  const ctx = { myColor, roosterSeen, lootCount, lootPts, isLead };
+  const ctx = { myColor, roosterSeen, lootCount, lootPts, isLead, sackCount };
 
   const remaining = getRemainingEventIds(game);
 
   // kans zonder spieken
   const probNextDanger = calcDangerProbFromRemaining(remaining, ctx);
 
-  // uitsplitsing (zonder namen): den van jouw kleur, charges, 3e rooster
+  // "harmful" kans zonder spieken (veilig maar nadelig)
   const total = remaining.length || 1;
+  const probNextHarmful =
+    remaining.length
+      ? countRemainingOf(remaining, (id) => isHarmfulEventForMe(id, ctx)) / total
+      : 0;
 
+  // uitsplitsing (zonder namen): den van jouw kleur, charges, 3e rooster
   const myDenId = myColor ? `DEN_${myColor}` : null;
   const pMyDen =
     myDenId ? countRemainingOf(remaining, (id) => String(id) === myDenId) / total : 0;
@@ -423,27 +443,32 @@ function buildRiskMeta({ game, me, players, upcomingPeek }) {
   const pCharges =
     countRemainingOf(remaining, (id) => id === "DOG_CHARGE" || id === "SECOND_CHARGE") / total;
 
-  // kans dat "volgende rooster = 3e" (alleen relevant als roosterSeen>=2)
   const pThirdRooster =
     roosterSeen >= 2
       ? countRemainingOf(remaining, (id) => id === "ROOSTER_CROW") / total
       : 0;
 
   // peek (advisor mag intern weten, maar nooit benoemen)
-  const nextId = upcomingPeek?.[0]?.id || upcomingPeek?.[0] || null;
+  const nextId = upcomingPeek?.[0]?.id || null;
   const nextIsDanger = nextId ? isDangerousEventForMe(nextId, ctx) : false;
-  const nextLabel = nextId ? (nextIsDanger ? "GEVAARLIJK" : "VEILIG") : "—";
+  const nextIsHarmful = nextId ? isHarmfulEventForMe(nextId, ctx) : false;
+
+  const nextLabel = nextId
+    ? (nextIsDanger ? "GEVAARLIJK" : (nextIsHarmful ? "VEILIG maar NADELIG" : "VEILIG"))
+    : "—";
 
   return {
     ctx,
     remaining,
     probNextDanger,
+    probNextHarmful,
     pMyDen,
     pCharges,
     pThirdRooster,
-    nextId,        // intern
-    nextIsDanger,  // intern
-    nextLabel,     // toonbaar
+    nextId,          // intern
+    nextIsDanger,    // intern
+    nextIsHarmful,   // intern
+    nextLabel,       // toonbaar
   };
 }
 
@@ -465,6 +490,17 @@ function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
     if (has("Den Signal") && !denSignalActiveForMe) {
       lines.push("OPS tip: speel **Den Signal** op je eigen Den-kleur om jezelf veilig te zetten tegen charges en jouw Den-event.");
     }
+
+    // Sack-reset (Paint Bomb Nest): veilig maar nadelig → liever naar achteren
+  if (riskMeta.nextId === "PAINT_BOMB_NEST") {
+    if ((riskMeta.ctx.sackCount ?? 0) > 0) {
+      lines.push("Let op: volgende kaart is een **sack-reset event** → huidige Sack verdwijnt terug de Loot Deck in (minder eindbonus voor dashers).");
+      if (has("Pack Tinker")) lines.push("OPS tip: **Pack Tinker** is hier sterk om dit event naar achteren te schuiven.");
+      if (has("Kick Up Dust")) lines.push("OPS tip: **Kick Up Dust** kan toekomstige events herschudden (als de track niet gelocked is).");
+    } else {
+      lines.push("Volgende kaart is een **sack-reset event**, maar de Sack is nu klein → impact is beperkt.");
+    }
+  }
 
     // Als risico vooral “Den van jouw kleur” is → Molting/Mask Swap zijn sterk
     if (riskMeta.pMyDen >= 0.10) {
@@ -617,7 +653,9 @@ export function getAdvisorHint({
     if (riskMeta.nextId === "ROOSTER_CROW") {
       strat.push("Strategie: rooster-events liever later (meer rondes om loot te pakken).");
     }
-
+    if (riskMeta.nextId === "PAINT_BOMB_NEST" && (riskMeta.ctx.sackCount ?? 0) > 0) {
+      strat.push("Strategie: er komt een sack-reset event aan en de Sack is gevuld → overweeg **SHIFT** om dit naar achteren te duwen.");
+    }
     return {
       title: `MOVE advies • Def: ${labelMove(bestDef)} • Agg: ${labelMove(bestAgg)}`,
       confidence: Math.max(bestDef.confidence ?? 0.65, bestAgg.confidence ?? 0.65),
