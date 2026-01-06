@@ -316,9 +316,13 @@ function isDangerousEventForMe(eventId, ctx) {
   }
 
   // Magpie Snitch: gevaarlijk voor Lead Fox als je niet BURROW/DASH (baseline LURK = gevaar)
-  if (id === "MAGPIE_SNITCH") {
+   if (id === "MAGPIE_SNITCH") {
     return !!ctx.isLead;
   }
+
+  // Hidden Nest / Paint bomb: niet “gevaarlijk” (wel strategisch/nadelig)
+  return false;
+}
 
 // ------------------------------
 // Event "harmful" evaluation (veilig, maar nadelig voor score/bonus)
@@ -434,7 +438,7 @@ function resolveMyDenColor(view, me, players) {
   if (!["RED", "BLUE", "GREEN", "YELLOW"].includes(c)) return ""; // onbekend
   return c;
 }
-  function buildRiskMeta({ game, me, players, upcomingPeek }) {
+  function buildRiskMeta({ view, game, me, players, upcomingPeek }) {
   const myColor = resolveMyDenColor(view, me, players);
   const roosterSeen = Number(game?.roosterSeen || 0);
 
