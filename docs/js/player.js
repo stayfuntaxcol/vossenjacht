@@ -1616,21 +1616,18 @@ function closeLootModal() {
 }
 
 // ==========================================
-// Advisor Hint Overlay — LEAD overlay stijl (CLEAN)
+// Advisor Hint Overlay — LEAD overlay stijl (PLAYER COMPACT + WHY THIS FULL)
 // ==========================================
 
 (() => {
-  // voorkom dubbele inject (bij hot reload / meerdere scripts)
-  if (window.__advisorOverlayLoaded) return;
-  window.__advisorOverlayLoaded = true;
+  if (window.__advisorOverlayLoaded_v2) return;
+  window.__advisorOverlayLoaded_v2 = true;
 
   let _advisorOverlay = null;
   let _advisorPanel = null;
   let _wired = false;
 
-  function safeArr(x) {
-    return Array.isArray(x) ? x : [];
-  }
+  function safeArr(x) { return Array.isArray(x) ? x : []; }
 
   function pct01(x) {
     const n = Number(x);
@@ -1638,7 +1635,16 @@ function closeLootModal() {
     return Math.round(Math.max(0, Math.min(1, n)) * 100);
   }
 
-  // ---- NOTE: calcLootStats bestaat bij jou al in player.js
+  function escapeHtml(s) {
+    return String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  // ---- Mini pills bovenaan (kort, mag blijven)
   function buildMiniPills(ctx) {
     const me = ctx?.me || {};
     const pills = [];
@@ -1663,13 +1669,11 @@ function closeLootModal() {
     return pills;
   }
 
-  function pickLineFromBest(best) {
+  // ---- Pick label in kaartkop
+  function pickLine(best) {
     if (!best) return "—";
-
-    // nieuw formaat (advisorBot clean output)
     if (best.pick) return String(best.pick);
 
-    // oud formaat
     if (best.play === "PASS") return "PASS";
     if (best.cardId) return `Speel: ${best.cardId}`;
     if (best.cardName) return `Speel: ${best.cardName}`;
@@ -1680,12 +1684,12 @@ function closeLootModal() {
     return "—";
   }
 
-  function splitBulletsIntoCommonDefAgg(bullets) {
+  // ---- Bullets splitsen (oude format)
+  function splitBullets(bullets) {
     const src = safeArr(bullets).map((x) => String(x || ""));
     const common = [];
     const def = [];
     const agg = [];
-
     let mode = "common";
 
     for (const line of src) {
@@ -1712,18 +1716,138 @@ function closeLootModal() {
     return { common, def, agg };
   }
 
-  function renderAdvisorCard({ label, best, bullets }) {
-    const pick = pickLineFromBest(best);
+  // ---- Filter wat spelers WEL zien (compact)
+  function isPlayerHiddenLine(s) {
+    if (!s) return true;
+    const t = String(s).trim();
+
+    // weg met meta die speler al weet / niet nodig heeft
+    if (/^Ronde:/i.test(t)) return true;
+    if (t.includes("Fase:")) return true;
+    if (/^Hand:/i.test(t)) return true;
+    if (/^Herkenning:/i.test(t)) return true;
+    if (/^Onbekend:/i.test(t)) return true;
+    if (/^Jouw Den-kleur:/i.test(t)) return true;
+    if (/^Kans:\s*Den-event/i.test(t)) return true;
+
+    // herhaalde labels
+    if (/^DEFENSIEF:/i.test(t)) return true;
+    if (/^AANVALLEND:/i.test(t)) return true;
+
+    return false;
+  }
+
+  function pickRiskLine(lines) {
+    const arr = safeArr(lines).map((x) => String(x || ""));
+    return arr.find((x) => String(x).trim().startsWith("Volgende kaart:")) || null;
+  }
+
+  function pickStrategyLine(lines) {
+    const arr = safeArr(lines).map((x) => String(x || "")).filter(Boolean);
+    const want = arr.filter((x) => {
+      const t = x.trim();
+      return (
+        /^Strategie:/i.test(t) ||
+        /^OPS tip:/i.test(t) ||
+        /^Let op:/i.test(t) ||
+        /^Alarm:/i.test(t)
+      );
+    });
+    return want[0] || null;
+  }
+
+  function pickReasonLine(lines) {
+    const arr = safeArr(lines)
+      .map((x) => String(x || "").trim())
+      .filter((x) => x && !isPlayerHiddenLine(x));
+
+    // liever geen “Volgende kaart:” want die komt apart
+    const filtered = arr.filter((x) => !x.startsWith("Volgende kaart:"));
+
+    // pak de eerste inhoudelijke reden
+    return filtered[0] || null;
+  }
+
+  function buildPlayerCardBullets({ common, specific }) {
+    const all = [...safeArr(common), ...safeArr(specific)]
+      .map((x) => String(x || "").trim())
+      .filter(Boolean);
+
+    const risk = pickRiskLine(all);
+    const reason = pickReasonLine(all);
+    const strat = pickStrategyLine(all);
+
+    const out = [];
+    if (risk) out.push(risk);
+    if (reason) out.push(`Waarom dit werkt: ${reason}`);
+    if (strat) out.push(`Speel dit uit: ${strat.replace(/^(Strategie:|OPS tip:|Let op:|Alarm:)\s*/i, "")}`);
+
+    // fallback: als alles weg gefilterd is
+    if (!out.length) out.push("Geen compact advies beschikbaar (check Why this).");
+
+    return out.slice(0, 3);
+  }
+
+  // ---- Why this = alles (incl. hand/den/round etc) + debug
+  function buildWhyThis(hint, ctx, split) {
+    const v = hint?.version ? `Advisor: ${hint.version}` : "";
+    const title = hint?.title ? `Titel: ${hint.title}` : "";
+    const phase = hint?.phase || hint?.debug?.phase || "";
+    const handLine = hint?.debug?.hand?.lineHand || "";
+    const knownLine = hint?.debug?.hand?.lineKnown || "";
+    const unkLine = hint?.debug?.hand?.lineUnknown || "";
+
+    const pills = buildMiniPills(ctx);
+
+    const common = safeArr(split?.common);
+    const def = safeArr(split?.def);
+    const agg = safeArr(split?.agg);
+
+    const dbg = hint?.debug ? JSON.stringify(hint.debug, null, 2) : "";
+
+    return `
+      ${v ? `<div>${escapeHtml(v)}</div>` : ""}
+      ${title ? `<div>${escapeHtml(title)}</div>` : ""}
+      ${phase ? `<div>Fase: ${escapeHtml(phase)}</div>` : ""}
+
+      <div class="advisor-tags" style="margin-top:.4rem;">
+        ${pills.map((p) => `<span class="advisor-tag">${escapeHtml(p.text)}</span>`).join("")}
+      </div>
+
+      ${(handLine || knownLine || unkLine) ? `<div style="margin-top:.6rem; opacity:.9;">
+        ${handLine ? `<div>${escapeHtml(handLine)}</div>` : ""}
+        ${knownLine ? `<div>${escapeHtml(knownLine)}</div>` : ""}
+        ${unkLine ? `<div>${escapeHtml(unkLine)}</div>` : ""}
+      </div>` : ""}
+
+      <div style="margin-top:.75rem;">
+        <div style="font-weight:700; margin-bottom:.25rem;">Alle bullets (raw)</div>
+        ${common.length ? `<div style="margin:.35rem 0;"><strong>Common</strong><ul>${common.map(x=>`<li>${escapeHtml(x)}</li>`).join("")}</ul></div>` : ""}
+        ${def.length ? `<div style="margin:.35rem 0;"><strong>Def</strong><ul>${def.map(x=>`<li>${escapeHtml(x)}</li>`).join("")}</ul></div>` : ""}
+        ${agg.length ? `<div style="margin:.35rem 0;"><strong>Agg</strong><ul>${agg.map(x=>`<li>${escapeHtml(x)}</li>`).join("")}</ul></div>` : ""}
+      </div>
+
+      ${dbg ? `
+        <details style="margin-top:.6rem;">
+          <summary style="cursor:pointer;">Debug (json)</summary>
+          <pre style="white-space:pre-wrap; font-size:.75rem; opacity:.85; margin-top:.45rem;">${escapeHtml(dbg)}</pre>
+        </details>
+      ` : ""}
+    `;
+  }
+
+  function renderCard({ label, best, bullets }) {
+    const pick = pickLine(best);
     const risk = best?.riskLabel || best?.risk || "—";
     const conf = pct01(best?.confidence) ?? pct01(best?.conf);
 
-    const list = safeArr(bullets).filter(Boolean).slice(0, 10);
+    const list = safeArr(bullets).filter(Boolean).slice(0, 4);
 
     return `
       <div class="advisor-card">
-        <div class="k">${label}</div>
-        <div class="pick">${pick}</div>
-        <p class="meta">Risico: <strong>${risk}</strong>${conf !== null ? ` • Zekerheid: <strong>${conf}%</strong>` : ""}</p>
+        <div class="k">${escapeHtml(label)}</div>
+        <div class="pick">${escapeHtml(pick)}</div>
+        <p class="meta">Risico: <strong>${escapeHtml(risk)}</strong>${conf !== null ? ` • Zekerheid: <strong>${conf}%</strong>` : ""}</p>
         <ul>
           ${list.map((b) => `<li>${escapeHtml(b)}</li>`).join("")}
         </ul>
@@ -1731,36 +1855,9 @@ function closeLootModal() {
     `;
   }
 
-  function escapeHtml(s) {
-    return String(s ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
-  }
-
-  function buildWhyThis(hint, ctx) {
-    const version = hint?.version ? `Advisor: ${hint.version}` : "";
-    const phase = hint?.phase || hint?.debug?.phase || "";
-    const handLine = hint?.debug?.hand?.lineHand || "";
-
-    const pills = buildMiniPills(ctx);
-
-    return `
-      ${version ? `<div>${escapeHtml(version)}</div>` : ""}
-      ${phase ? `<div>Fase: ${escapeHtml(phase)}</div>` : ""}
-      ${handLine ? `<div>${escapeHtml(handLine)}</div>` : ""}
-      <div class="advisor-tags" style="margin-top:.4rem;">
-        ${pills.map((p) => `<span class="advisor-tag">${escapeHtml(p.text)}</span>`).join("")}
-      </div>
-    `;
-  }
-
-  function ensureAdvisorHintOverlayDom() {
+  function ensureDom() {
     if (_advisorOverlay && _advisorPanel) return;
 
-    // styles (alleen aanvullingen)
     if (!document.getElementById("advisorHintStyles")) {
       const st = document.createElement("style");
       st.id = "advisorHintStyles";
@@ -1777,7 +1874,7 @@ function closeLootModal() {
         .advisor-card .pick{ font-size:1rem; font-weight:700; margin-bottom:.2rem; }
         .advisor-card .meta{ font-size:.78rem; opacity:.85; margin:0 0 .45rem; }
         .advisor-card ul{ margin:.35rem 0 0; padding-left:1.05rem; }
-        .advisor-card li{ font-size:.8rem; line-height:1.35; opacity:.9; margin:.18rem 0; }
+        .advisor-card li{ font-size:.82rem; line-height:1.35; opacity:.92; margin:.18rem 0; }
         .advisor-mini { display:flex; flex-wrap:wrap; gap:.35rem; margin:.5rem 0 .75rem; }
         .advisor-pill{
           font-size:.75rem; padding:.15rem .5rem; border-radius:999px;
@@ -1827,27 +1924,22 @@ function closeLootModal() {
       const closeBtn = _advisorOverlay.querySelector(".vj-modal-close");
       closeBtn.addEventListener("click", () => closeAdvisorHintOverlay());
 
-      // click outside panel closes
       _advisorOverlay.addEventListener("click", (e) => {
         if (e.target === _advisorOverlay) closeAdvisorHintOverlay();
       });
 
-      // ESC closes
       document.addEventListener("keydown", (e) => {
         if (e.key !== "Escape") return;
-        if (_advisorOverlay && !_advisorOverlay.classList.contains("hidden")) {
-          closeAdvisorHintOverlay();
-        }
+        if (_advisorOverlay && !_advisorOverlay.classList.contains("hidden")) closeAdvisorHintOverlay();
       });
     }
 
-    // global (zodat jouw HINT knop hem kan callen)
     window.openAdvisorHintOverlay = openAdvisorHintOverlay;
     window.closeAdvisorHintOverlay = closeAdvisorHintOverlay;
   }
 
   function openAdvisorHintOverlay(hint, ctx = {}) {
-    ensureAdvisorHintOverlayDom();
+    ensureDom();
 
     const sub = _advisorOverlay.querySelector("#advisorHintSub");
     const mini = _advisorOverlay.querySelector("#advisorHintMini");
@@ -1855,59 +1947,49 @@ function closeLootModal() {
     const why = _advisorOverlay.querySelector("#advisorHintWhy");
 
     const conf = pct01(hint?.confidence);
+    // subtitle: kort + (optioneel) versie voor check
     const v = hint?.version ? ` • ${hint.version}` : "";
-    const t = hint?.title ? ` • ${hint.title}` : "";
-    sub.textContent = `Risico: ${hint?.risk || "—"}${conf !== null ? ` • Zekerheid: ${conf}%` : ""}${v}${t}`;
+    sub.textContent = `Risico: ${hint?.risk || "—"}${conf !== null ? ` • Zekerheid: ${conf}%` : ""}${v}`;
 
     const pills = buildMiniPills(ctx);
     mini.innerHTML = pills.map((p) => `<span class="advisor-pill ${p.cls}">${escapeHtml(p.text)}</span>`).join("");
 
-    // Nieuw formaat?
     const hasNew = hint?.def && hint?.agg;
 
-    let commonBullets = [];
-    let defBullets = [];
-    let aggBullets = [];
+    let split = { common: [], def: [], agg: [] };
+    let bestDef = null;
+    let bestAgg = null;
 
     if (hasNew) {
-      commonBullets = safeArr(hint.commonBullets || []);
-      defBullets = safeArr(hint.def?.bullets || []);
-      aggBullets = safeArr(hint.agg?.bullets || []);
+      split.common = safeArr(hint.commonBullets || []);
+      split.def = safeArr(hint.def?.bullets || []);
+      split.agg = safeArr(hint.agg?.bullets || []);
+      bestDef = hint.def;
+      bestAgg = hint.agg;
     } else {
-      // Oude bullets splitten
-      const split = splitBulletsIntoCommonDefAgg(hint?.bullets);
-      commonBullets = split.common;
-      defBullets = split.def.length ? split.def : safeArr(hint?.bullets);
-      aggBullets = split.agg.length ? split.agg : safeArr(hint?.bullets);
+      split = splitBullets(hint?.bullets);
+      bestDef = hint?.debug?.bestDef || hint || null;
+      bestAgg = hint?.debug?.bestAgg || null;
     }
 
-    const bestDef = hasNew ? hint.def : (hint?.debug?.bestDef || hint || null);
-    const bestAgg = hasNew ? hint.agg : (hint?.debug?.bestAgg || null);
+    const defPlayerBullets = buildPlayerCardBullets({ common: split.common, specific: split.def });
+    const aggPlayerBullets = buildPlayerCardBullets({ common: split.common, specific: split.agg });
 
     grid.innerHTML = `
-      ${renderAdvisorCard({
-        label: "DEFENSIEF",
-        best: bestDef,
-        bullets: [...commonBullets, ...defBullets],
-      })}
-      ${renderAdvisorCard({
-        label: "AANVALLEND",
-        best: bestAgg,
-        bullets: [...commonBullets, ...aggBullets],
-      })}
+      ${renderCard({ label: "DEFENSIEF", best: bestDef, bullets: defPlayerBullets })}
+      ${renderCard({ label: "AANVALLEND", best: bestAgg, bullets: aggPlayerBullets })}
     `;
 
-    why.innerHTML = buildWhyThis(hint, ctx);
+    why.innerHTML = buildWhyThis(hint, ctx, split);
 
     _advisorOverlay.classList.remove("hidden");
   }
 
   function closeAdvisorHintOverlay() {
-    ensureAdvisorHintOverlayDom();
+    ensureDom();
     _advisorOverlay.classList.add("hidden");
   }
 
-  // expose (als iemand dit script laadt vóór de hint-knop wiring)
   window.openAdvisorHintOverlay = openAdvisorHintOverlay;
   window.closeAdvisorHintOverlay = closeAdvisorHintOverlay;
 })();
