@@ -1806,6 +1806,88 @@ function buildWhyThis(hint, ctx) {
   `;
 }
 
+function splitBulletsIntoCommonDefAgg(bullets) {
+  const src = safeArr(bullets).map((x) => String(x || ""));
+  const common = [];
+  const def = [];
+  const agg = [];
+
+  let mode = "common";
+
+  for (const line of src) {
+    const s = line.trim();
+
+    // markers (jij gebruikt dit formaat al in bullets)
+    if (/^DEFENSIEF:/i.test(s)) {
+      mode = "def";
+      const cleaned = s.replace(/^DEFENSIEF:\s*/i, "").trim();
+      if (cleaned) def.push(cleaned);
+      continue;
+    }
+    if (/^AANVALLEND:/i.test(s)) {
+      mode = "agg";
+      const cleaned = s.replace(/^AANVALLEND:\s*/i, "").trim();
+      if (cleaned) agg.push(cleaned);
+      continue;
+    }
+
+    if (mode === "def") def.push(s);
+    else if (mode === "agg") agg.push(s);
+    else common.push(s);
+  }
+
+  return { common, def, agg };
+}
+
+function pickLineFromBest(best) {
+  if (!best) return "—";
+  if (best.pick) return String(best.pick);
+
+  if (best.play === "PASS") return "PASS";
+  if (best.cardId) return `Speel: ${best.cardId}`;
+  if (best.cardName) return `Speel: ${best.cardName}`;
+  if (best.move) return String(best.move);
+  if (best.decision) return String(best.decision);
+
+  return best.play || "—";
+}
+
+function renderAdvisorCard({ label, best, bullets }) {
+  const pick = pickLineFromBest(best);
+  const risk = best?.riskLabel || best?.risk || "—";
+  const conf = pct01(best?.confidence) ?? pct01(best?.conf) ?? null;
+
+  const list = safeArr(bullets).filter(Boolean).slice(0, 8);
+
+  return `
+    <div class="advisor-card">
+      <div class="k">${label}</div>
+      <div class="pick">${pick}</div>
+      <p class="meta">Risico: <strong>${risk}</strong>${conf !== null ? ` • Zekerheid: <strong>${conf}%</strong>` : ""}</p>
+      <ul>
+        ${list.map((b) => `<li>${b}</li>`).join("")}
+      </ul>
+    </div>
+  `;
+}
+
+function buildWhyThis(hint, ctx) {
+  // toon liever iets wat altijd bestaat
+  const v = hint?.version ? `Advisor: ${hint.version}` : "";
+  const phase = hint?.phase || hint?.debug?.phase || "";
+  const handLine = hint?.debug?.hand?.lineHand || "";
+
+  const pills = buildMiniPills(ctx);
+  return `
+    ${v ? `<div>${v}</div>` : ""}
+    ${phase ? `<div>Fase: ${phase}</div>` : ""}
+    ${handLine ? `<div>${handLine}</div>` : ""}
+    <div class="advisor-tags" style="margin-top:.4rem;">
+      ${pills.map((p) => `<span class="advisor-tag">${p.text}</span>`).join("")}
+    </div>
+  `;
+}
+
 function openAdvisorHintOverlay(hint, ctx = {}) {
   ensureAdvisorHintOverlayDom();
 
@@ -1814,136 +1896,53 @@ function openAdvisorHintOverlay(hint, ctx = {}) {
   const grid = _advisorOverlay.querySelector("#advisorHintGrid");
   const why = _advisorOverlay.querySelector("#advisorHintWhy");
 
+  // Subtitle: laat title + versie zien, dan weet je zeker of je nieuwe code draait
   const conf = pct01(hint?.confidence);
-  sub.textContent = `Risico: ${hint?.risk || "—"}${conf !== null ? ` • Zekerheid: ${conf}%` : ""}`;
+  const v = hint?.version ? ` • ${hint.version}` : "";
+  const t = hint?.title ? ` • ${hint.title}` : "";
+  sub.textContent = `Risico: ${hint?.risk || "—"}${conf !== null ? ` • Zekerheid: ${conf}%` : ""}${v}${t}`;
 
   const pills = buildMiniPills(ctx);
   mini.innerHTML = pills.map((p) => `<span class="advisor-pill ${p.cls}">${p.text}</span>`).join("");
 
-  // Altijd 2 kaarten tonen:
-  // - als advisorBot DEF/AGG geeft via debug: gebruik dat
-  // - anders: linkerkant = hint, rechterkant = 1e alternatief (of placeholder)
-  const bestDef = hint?.debug?.bestDef || hint || null;
-  const bestAgg =
-    hint?.debug?.bestAgg ||
-    (safeArr(hint?.alternatives)[0]
-      ? { ...safeArr(hint.alternatives)[0], confidence: hint.confidence, riskLabel: hint.risk }
-      : null);
+  // 1) Nieuw formaat: hint.def / hint.agg
+  const hasNew = hint?.def && hint?.agg;
+
+  let commonBullets = [];
+  let defBullets = [];
+  let aggBullets = [];
+
+  if (hasNew) {
+    commonBullets = safeArr(hint.commonBullets || hint.common?.bullets || []);
+    defBullets = safeArr(hint.def?.bullets || []);
+    aggBullets = safeArr(hint.agg?.bullets || []);
+  } else {
+    // 2) Oude formaat: split op markers in hint.bullets
+    const split = splitBulletsIntoCommonDefAgg(hint?.bullets);
+    commonBullets = split.common;
+    defBullets = split.def.length ? split.def : safeArr(hint?.bullets);
+    aggBullets = split.agg.length ? split.agg : safeArr(hint?.bullets);
+  }
+
+  const bestDef = hasNew ? hint.def : (hint?.debug?.bestDef || hint || null);
+  const bestAgg = hasNew ? hint.agg : (hint?.debug?.bestAgg || null);
 
   grid.innerHTML = `
     ${renderAdvisorCard({
       label: "DEFENSIEF",
       best: bestDef,
-      bullets: bestDef?.bullets || hint?.bullets || [],
+      bullets: [...commonBullets, ...defBullets],
     })}
     ${renderAdvisorCard({
       label: "AANVALLEND",
       best: bestAgg,
-      bullets: bestAgg?.bullets || hint?.bullets || ["(Geen Agg variant beschikbaar)"],
+      bullets: [...commonBullets, ...aggBullets],
     })}
   `;
 
   why.innerHTML = buildWhyThis(hint, ctx);
 
   _advisorOverlay.classList.remove("hidden");
-}
-
-function closeAdvisorHintOverlay() {
-  ensureAdvisorHintOverlayDom();
-  _advisorOverlay.classList.add("hidden");
-}
-
-// ===== LOGGING HELPER (single source: /log) =====
-
-function _kindFromPhase(phase) {
-  if (phase === "MOVE") return "MOVE";
-  if (phase === "ACTIONS") return "ACTION_CARD";
-  if (phase === "DECISION") return "DECISION";
-  if (phase === "REVEAL") return "EVENT";
-  return "SYSTEM";
-}
-
-function _cardIdFromChoice(phase, choice) {
-  if (phase !== "ACTIONS") return null;
-  if (!choice) return null;
-  const s = String(choice);
-  if (!s.startsWith("ACTION_")) return null;
-  const name = s.slice("ACTION_".length);
-  return name && name !== "PASS" ? name : null;
-}
-
-async function logMoveAction(game, player, choice, phase = "MOVE", extra = null) {
-  const round = game?.round || 0;
-  const playerName = player?.name || "";
-
-  const choiceDisplay = formatChoiceForDisplay(phase, choice);
-  const kind = _kindFromPhase(phase);
-  const cardId = _cardIdFromChoice(phase, choice);
-
-  const entry = {
-    round,
-    phase,
-    kind,
-    playerId,
-    playerName,
-    choice,
-    choiceDisplay,
-    createdAtMs: Date.now(), // handig voor stabiele sortering/UI
-    message: `${playerName || "Speler"} – ${choiceDisplay}`,
-  };
-
-  if (cardId) entry.cardId = cardId;
-  if (extra) entry.details = extra;
-
-  await addLog(gameId, entry);
-}
-
-function computeNextOpsIndex(game) {
-  const order = game.opsTurnOrder || [];
-  if (!order.length) return 0;
-  const idx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
-  return (idx + 1) % order.length;
-}
-
-function formatChoiceForDisplay(phase, rawChoice) {
-  if (!rawChoice) return "–";
-  const choice = String(rawChoice);
-
-  if (phase === "DECISION" && choice.startsWith("DECISION_")) {
-    const kind = choice.slice("DECISION_".length);
-    if (kind === "LURK") return "LURK – in de Yard blijven";
-    if (kind === "BURROW") return "BURROW – schuilen / verstoppen";
-    if (kind === "DASH") return "DASH – met buit vluchten";
-    return kind;
-  }
-
-  if (phase === "MOVE" && choice.startsWith("MOVE_")) {
-    if (choice.includes("SNATCH")) return "SNATCH – 1 buitkaart uit de stapel";
-    if (choice.includes("FORAGE")) {
-      const m = choice.match(/FORAGE_(\d+)/);
-      const n = m ? m[1] : "?";
-      return `FORAGE – ${n} Action Card(s) getrokken`;
-    }
-    if (choice.includes("SCOUT_")) {
-      const m = choice.match(/SCOUT_(\d+)/);
-      const pos = m ? m[1] : "?";
-      return `SCOUT – Event op positie ${pos} bekeken`;
-    }
-    if (choice.includes("SHIFT_")) {
-      const m = choice.match(/SHIFT_(.+)/);
-      const detail = m ? m[1] : "?";
-      return `SHIFT – events gewisseld (${detail})`;
-    }
-    return choice.slice("MOVE_".length);
-  }
-
-  if (phase === "ACTIONS" && choice.startsWith("ACTION_")) {
-    const name = choice.slice("ACTION_".length);
-    if (name === "PASS") return "PASS – geen kaart gespeeld";
-    return `${name} – Action Card`;
-  }
-
-  return choice;
 }
 
 // ===== MOVE-ACTIES (single definitions + payload naar /log) =====
