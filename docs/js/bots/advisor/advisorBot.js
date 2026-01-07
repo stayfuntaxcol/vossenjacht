@@ -4,6 +4,7 @@
 // - Neemt roundState + flags uit logs mee (Den Signal / Scatter / No-Go Zone / Hold Still / Follow Tail / Burrow Beacon)
 // - Voorkomt “Defensief vs Aanvallend is hetzelfde” via lichte style tie-break
 // - Leakt geen event IDs/titels naar UI (sanitizers)
+// - NEW output shape: { version, phase, commonBullets, def, agg, ... } voor de nieuwe overlay
 
 import { ADVISOR_PROFILES } from "../core/botConfig.js";
 import { buildPlayerView } from "../core/stateView.js";
@@ -12,6 +13,8 @@ import { scoreMoveMoves, scoreOpsPlays, scoreDecisions } from "../core/scoring.j
 
 // Action defs + info (1 bron: cards.js)
 import { getActionDefByName, getActionInfoByName } from "../../cards.js";
+
+const VERSION = "ADVISOR_V2026-01-07_3";
 
 // ------------------------------
 // Phase normalisatie
@@ -90,16 +93,13 @@ function adaptAdvisorView(rawView, fallback = {}) {
 // Hand -> action names
 // ------------------------------
 function normalizeActionName(x) {
-  const name =
-    typeof x === "string" ? x : x?.name || x?.id || x?.cardId || "";
+  const name = typeof x === "string" ? x : x?.name || x?.id || x?.cardId || "";
   return String(name).trim();
 }
-
 function getHandActionNames(me) {
   const hand = Array.isArray(me?.hand) ? me.hand : [];
   return hand.map(normalizeActionName).filter(Boolean);
 }
-
 function getKnownHandActions(me) {
   const names = getHandActionNames(me);
   return names.map((n) => ({
@@ -108,7 +108,6 @@ function getKnownHandActions(me) {
     info: getActionInfoByName(n),
   }));
 }
-
 function summarizeHandRecognition(me) {
   const names = getHandActionNames(me);
   const known = getKnownHandActions(me)
@@ -139,9 +138,9 @@ function deriveProfile(baseProfile, style) {
       ...p,
       weights: {
         ...w,
-        loot: (w.loot ?? 1.0) * 0.90,
+        loot: (w.loot ?? 1.0) * 0.9,
         risk: (w.risk ?? 1.0) * 1.25,
-        conserve: (w.conserve ?? 0.0) * 1.20,
+        conserve: (w.conserve ?? 0.0) * 1.2,
         conserveOps: (w.conserveOps ?? 0.0) + 0.15,
       },
     };
@@ -154,8 +153,8 @@ function deriveProfile(baseProfile, style) {
         ...w,
         loot: (w.loot ?? 1.0) * 1.25,
         risk: (w.risk ?? 1.0) * 0.85,
-        conserve: (w.conserve ?? 0.0) * 0.80,
-        conserveOps: (w.conserveOps ?? 0.0) - 0.10,
+        conserve: (w.conserve ?? 0.0) * 0.8,
+        conserveOps: (w.conserveOps ?? 0.0) - 0.1,
       },
     };
   }
@@ -209,7 +208,6 @@ function getRemainingEventIds(game) {
   const idx = typeof game?.eventIndex === "number" ? game.eventIndex : 0;
   return track.slice(Math.max(0, idx)).filter(Boolean);
 }
-
 function extractDenColorFromEventId(eventId) {
   if (!eventId) return null;
   if (!String(eventId).startsWith("DEN_")) return null;
@@ -231,14 +229,17 @@ function getLootCount(p) {
 // ------------------------------
 // /log adapter (accept /log or legacy /actions)
 // ------------------------------
-function normalizeLogRow(d) {
-  const x = d || {};
-  const round = Number.isFinite(Number(x.round)) ? Number(x.round) : 0;
+function normalizeLogRow(raw) {
+  const x =
+    raw && typeof raw?.data === "function" ? raw.data() : (raw || {});
 
+  const round = Number.isFinite(Number(x.round)) ? Number(x.round) : 0;
   const phaseNorm = normalizePhase(x.phase);
   const playerId = x.playerId || x.actorId || null;
 
-  const choice = typeof x.choice === "string" ? x.choice : (x.choice == null ? "" : String(x.choice));
+  const choice =
+    typeof x.choice === "string" ? x.choice : (x.choice == null ? "" : String(x.choice));
+
   const payload = x.payload && typeof x.payload === "object" ? x.payload : null;
 
   const createdAt = x.createdAt || null;
@@ -255,6 +256,25 @@ function normalizeLogRow(d) {
     createdAt,
     clientAt,
   };
+}
+
+function parseActionNameFromChoice(choice, payload) {
+  const c = String(choice || "").trim();
+
+  // Jouw standaard: ACTION_<name>
+  if (c.startsWith("ACTION_")) return c.slice("ACTION_".length).trim();
+
+  // alternatieven die vaak voorkomen
+  if (c.startsWith("PLAY_")) return c.slice("PLAY_".length).trim();
+
+  const m = c.match(/^(ACTION|PLAY)\s*[:_-]\s*(.+)$/i);
+  if (m && m[2]) return String(m[2]).trim();
+
+  // payload fallback
+  const p = payload?.cardName || payload?.cardId || payload?.name;
+  if (p) return String(p).trim();
+
+  return null;
 }
 
 // ------------------------------
@@ -284,41 +304,48 @@ function buildRoundStateFromLog(logs, round) {
 
     if (d.phase === "MOVE") {
       state.choices.move[d.playerId] = { choice: d.choice, payload: d.payload || null };
-    } else if (d.phase === "OPS") {
+      continue;
+    }
+
+    if (d.phase === "OPS") {
       state.choices.ops[d.playerId] = { choice: d.choice, payload: d.payload || null };
 
-      // flags afleiden uit ACTION_* keuzes
-      if (String(d.choice).startsWith("ACTION_")) {
-        const name = String(d.choice).slice("ACTION_".length);
+      const actionName = parseActionNameFromChoice(d.choice, d.payload);
+      if (!actionName) continue;
 
-        if (name === "Scatter!") state.flags.scatter = true;
-        if (name === "Burrow Beacon") state.flags.lockEvents = true;
+      // flags afleiden uit actie-naam
+      if (actionName === "Scatter!") state.flags.scatter = true;
+      if (actionName === "Burrow Beacon") state.flags.lockEvents = true;
 
-        if (name === "Den Signal") {
-          const c = String(d.payload?.color || "").trim().toUpperCase();
-          if (c) state.flags.denImmune[c] = true;
-        }
-
-        if (name === "No-Go Zone") {
-          const pos = Number(d.payload?.pos);
-          if (Number.isFinite(pos)) state.flags.noPeek.push(pos);
-        }
-
-        if (name === "Hold Still") {
-          const tid = d.payload?.targetId;
-          if (tid) state.flags.holdStill[tid] = true;
-        }
-
-        if (name === "Follow the Tail") {
-          const tid = d.payload?.targetId;
-          if (tid) state.flags.followTail[d.playerId] = tid;
-        }
+      if (actionName === "Den Signal") {
+        const c = String(d.payload?.color || d.payload?.denColor || "").trim().toUpperCase();
+        if (c) state.flags.denImmune[c] = true;
       }
-    } else if (d.phase === "DECISION") {
+
+      if (actionName === "No-Go Zone") {
+        const pos = Number(d.payload?.pos ?? d.payload?.position);
+        if (Number.isFinite(pos)) state.flags.noPeek.push(pos);
+      }
+
+      if (actionName === "Hold Still") {
+        const tid = d.payload?.targetId || d.payload?.targetPlayerId;
+        if (tid) state.flags.holdStill[tid] = true;
+      }
+
+      if (actionName === "Follow the Tail") {
+        const tid = d.payload?.targetId || d.payload?.targetPlayerId;
+        if (tid) state.flags.followTail[d.playerId] = tid;
+      }
+
+      continue;
+    }
+
+    if (d.phase === "DECISION") {
       state.choices.decision[d.playerId] = { choice: d.choice, payload: d.payload || null };
       if (d.choice === "DECISION_LURK") state.decisionCounts.LURK++;
       if (d.choice === "DECISION_BURROW") state.decisionCounts.BURROW++;
       if (d.choice === "DECISION_DASH") state.decisionCounts.DASH++;
+      continue;
     }
   }
 
@@ -359,7 +386,6 @@ function normalizeColorKey(c) {
   if (!c) return "";
   return String(c).trim().toUpperCase();
 }
-
 function isDenImmuneForColor(flagsRound, color) {
   const key = normalizeColorKey(color);
   const map = flagsRound?.denImmune || {};
@@ -375,14 +401,10 @@ function isDangerousEventForMe(eventId, ctx) {
   if (!id) return false;
 
   // 3e rooster is gevaarlijk
-  if (id === "ROOSTER_CROW") {
-    return (ctx.roosterSeen ?? 0) >= 2;
-  }
+  if (id === "ROOSTER_CROW") return (ctx.roosterSeen ?? 0) >= 2;
 
-  // Charges: gevaarlijk tenzij Den Signal actief voor jouw kleur
-  if (id === "DOG_CHARGE" || id === "SECOND_CHARGE") {
-    return !ctx.denSignalActive;
-  }
+  // Charges: gevaarlijk tenzij Den Signal actief
+  if (id === "DOG_CHARGE" || id === "SECOND_CHARGE") return !ctx.denSignalActive;
 
   // Den event: gevaarlijk als jouw kleur, tenzij Den Signal actief
   if (id.startsWith("DEN_")) {
@@ -392,13 +414,13 @@ function isDangerousEventForMe(eventId, ctx) {
     return !ctx.denSignalActive;
   }
 
-  // Sheepdog Patrol: alleen gevaarlijk als je DASH (baseline LURK = veilig)
+  // Sheepdog Patrol: baseline LURK = veilig
   if (id === "SHEEPDOG_PATROL") return false;
 
   // Gate Toll: als je geen loot hebt, word je gepakt (als je niet DASHt)
   if (id === "GATE_TOLL") return (ctx.lootCount ?? 0) <= 0;
 
-  // Magpie Snitch: gevaarlijk voor Lead Fox als je niet BURROW/DASH (baseline LURK = gevaar)
+  // Magpie Snitch: gevaarlijk voor Lead Fox (baseline LURK = gevaar)
   if (id === "MAGPIE_SNITCH") return !!ctx.isLead;
 
   return false;
@@ -409,9 +431,7 @@ function isHarmfulEventForMe(eventId, ctx) {
   const id = String(eventId || "");
   if (!id) return false;
 
-  if (id === "PAINT_BOMB_NEST") {
-    return (ctx.sackCount ?? 0) > 0;
-  }
+  if (id === "PAINT_BOMB_NEST") return (ctx.sackCount ?? 0) > 0;
 
   return false;
 }
@@ -421,9 +441,7 @@ function calcDangerProbFromRemaining(remainingIds, ctx) {
   if (!ids.length) return 0;
 
   let danger = 0;
-  for (const id of ids) {
-    if (isDangerousEventForMe(id, ctx)) danger++;
-  }
+  for (const id of ids) if (isDangerousEventForMe(id, ctx)) danger++;
   return danger / ids.length;
 }
 
@@ -498,7 +516,6 @@ function headerLinesCompact(view, riskMeta) {
 function getPlayersList(view, players) {
   return (view?.playersPublic || view?.players || players || []).filter(Boolean);
 }
-
 function resolveMyDenColor(view, me, players) {
   const m = view?.me || me || {};
   const direct = m.den ?? m.color ?? m.denColor ?? m.playerColor ?? m.maskColor ?? "";
@@ -541,11 +558,8 @@ function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags }
 
   const total = remaining.length || 1;
   const probNextHarmful =
-    remaining.length
-      ? countRemainingOf(remaining, (id) => isHarmfulEventForMe(id, ctx)) / total
-      : 0;
+    remaining.length ? countRemainingOf(remaining, (id) => isHarmfulEventForMe(id, ctx)) / total : 0;
 
-  // uitsplitsing (zonder namen): den van jouw kleur, charges, 3e rooster
   const myDenId = myColor ? `DEN_${myColor}` : null;
   const pMyDen = myDenId ? countRemainingOf(remaining, (id) => String(id) === myDenId) / total : 0;
 
@@ -555,7 +569,7 @@ function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags }
   const pThirdRooster =
     roosterSeen >= 2 ? countRemainingOf(remaining, (id) => id === "ROOSTER_CROW") / total : 0;
 
-  // peek (advisor mag intern weten, maar nooit benoemen)
+  // peek (intern)
   const nextId = upcomingPeek?.[0]?.id || null;
   const nextIsDanger = nextId ? isDangerousEventForMe(nextId, ctx) : false;
   const nextIsHarmful = nextId ? isHarmfulEventForMe(nextId, ctx) : false;
@@ -572,10 +586,12 @@ function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags }
     pMyDen,
     pCharges,
     pThirdRooster,
-    nextId,          // intern
-    nextIsDanger,    // intern
-    nextIsHarmful,   // intern
-    nextLabel,       // toonbaar
+    // intern (niet tonen)
+    nextId,
+    nextIsDanger,
+    nextIsHarmful,
+    // toonbaar
+    nextLabel,
   };
 }
 
@@ -588,13 +604,8 @@ function postRankByStyle(ranked, style) {
 
   const bump = (x, delta) => ({ ...x, score: (Number(x.score) || 0) + delta });
 
-  // MOVE opties (strings)
   const moveName = (x) => String(x?.move || "").toUpperCase();
-
-  // OPS (play)
-  const playName = (x) => String(x?.play || x?.cardId || x?.cardName || "").toUpperCase();
-
-  // DECISION
+  const playName = (x) => String(x?.play || x?.cardId || x?.cardName || x?.name || "").toUpperCase();
   const decName = (x) => String(x?.decision || "").toUpperCase();
 
   if (style === "DEFENSIVE") {
@@ -608,7 +619,7 @@ function postRankByStyle(ranked, style) {
         if (m.includes("SHIFT")) delta += 0.18;
         if (m.includes("SCOUT")) delta += 0.06;
 
-        if (m.includes("SNATCH")) delta -= 0.05; // iets minder greedy
+        if (m.includes("SNATCH")) delta -= 0.05;
         if (m.includes("FORAGE")) delta -= 0.04;
 
         if (d === "BURROW") delta += 0.08;
@@ -634,10 +645,10 @@ function postRankByStyle(ranked, style) {
         if (m.includes("SNATCH")) delta += 0.12;
         if (m.includes("FORAGE")) delta += 0.08;
 
-        if (m.includes("SHIFT")) delta -= 0.03; // minder “veilig zetten”
+        if (m.includes("SHIFT")) delta -= 0.03;
         if (m.includes("SCOUT")) delta -= 0.02;
 
-        if (d === "DASH") delta += 0.10;
+        if (d === "DASH") delta += 0.1;
         if (d === "LURK") delta -= 0.02;
 
         if (p.includes("PACK TINKER")) delta += 0.06;
@@ -662,13 +673,12 @@ function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
   const flags = view?.game?.flagsRound || view?.flags || {};
   const denSignalActiveForMe = myColor ? isDenImmuneForColor(flags, myColor) : false;
 
-  // Volgende kaart gevaarlijk → eerst veiligstellen
   if (riskMeta.nextIsDanger) {
     if (has("Den Signal") && !denSignalActiveForMe) {
       lines.push("OPS tip: speel **Den Signal** op je eigen Den-kleur om jezelf veilig te zetten tegen charges en jouw Den-event.");
     }
 
-    if (riskMeta.pMyDen >= 0.10) {
+    if (riskMeta.pMyDen >= 0.1) {
       if (has("Molting Mask")) lines.push("OPS tip: bij Den-gevaar is **Molting Mask** heel sterk (willekeurige nieuwe Den-kleur).");
       if (has("Mask Swap")) lines.push("OPS tip: **Mask Swap** is een alternatief als er andere actieve spelers in de Yard zijn.");
     }
@@ -677,7 +687,6 @@ function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
     if (has("Kick Up Dust")) lines.push("OPS tip: **Kick Up Dust** kan toekomstige events herschudden (als de track niet gelocked is).");
   }
 
-  // Sack-reset event (intern)
   if (riskMeta.nextId === "PAINT_BOMB_NEST") {
     if ((riskMeta.ctx.sackCount ?? 0) > 0) {
       lines.push("Let op: volgende kaart is een **sack-reset event** → huidige Sack verdwijnt terug de Loot Deck in (minder eindbonus voor dashers).");
@@ -688,13 +697,11 @@ function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
     }
   }
 
-  // Bonus-event voor DASH (intern)
   if (riskMeta.nextId === "HIDDEN_NEST") {
     lines.push("Let op: volgende kaart is een **DASH-bonus event**. Bonus werkt alleen als 1–3 spelers DASH kiezen (3/2/1 loot).");
     lines.push("Strategie: vaak beter om dit bonus-event later te zetten (Pack Tinker / SHIFT), zodat je niet direct uit de Yard vertrekt.");
   }
 
-  // Rooster (intern)
   if (riskMeta.nextId === "ROOSTER_CROW") {
     if ((view?.game?.roosterSeen || 0) >= 2) {
       lines.push("Alarm: een **3e rooster-event** is gevaarlijk (raid eindigt). Probeer dit naar achteren te schuiven (Pack Tinker / SHIFT).");
@@ -717,18 +724,15 @@ function decisionTacticalAdvice({ view, riskMeta }) {
 
   const denSignalActiveForMe = myColor ? isDenImmuneForColor(flags, myColor) : false;
 
-  // Hold Still op mij? (DASH wordt toch LURK in engine)
   const holdStill = flags?.holdStill || {};
   if (view?.me?.id && holdStill[view.me.id]) {
     lines.push("Let op: **Hold Still** is op jou gespeeld → DASH werkt niet (je blijft LURK).");
   }
 
-  // Jouw regel: Den Signal actief → kies LURK
   if (denSignalActiveForMe) {
     lines.push("Den Signal actief voor jouw kleur → **kies LURK** (dus niet BURROW/DASH).");
   }
 
-  // Hidden Nest: advies afhankelijk van hoeveel dashers er al zijn
   if (riskMeta.nextId === "HIDDEN_NEST") {
     const dashSoFar = view?.roundState?.decisionCounts?.DASH ?? 0;
 
@@ -743,12 +747,51 @@ function decisionTacticalAdvice({ view, riskMeta }) {
     lines.push("Strategie: meestal is het beter om dit bonus-event later te zetten (Pack Tinker / SHIFT), zodat je niet te vroeg uit de Yard vertrekt.");
   }
 
-  // 3e rooster waarschuwing
   if (riskMeta.nextId === "ROOSTER_CROW" && (g.roosterSeen || 0) >= 2) {
     lines.push("3e rooster-event is gevaarlijk (raid eindigt). Defensief: voorkom paniek-dash; liever de track fixen (Pack Tinker / SHIFT).");
   }
 
   return lines.map(sanitizeTextNoEventNames);
+}
+
+// ------------------------------
+// Helper: build new overlay-friendly output
+// ------------------------------
+function buildOverlayHint({ phase, title, risk, confidence, commonBullets, defObj, aggObj, alternatives, debug }) {
+  return {
+    version: VERSION,
+    phase,
+    title,
+    risk,
+    confidence,
+
+    // nieuwe overlay velden
+    commonBullets: sanitizeBullets(commonBullets || []),
+    def: {
+      pick: defObj.pick,
+      confidence: defObj.confidence,
+      riskLabel: defObj.riskLabel,
+      bullets: sanitizeBullets(defObj.bullets || []),
+    },
+    agg: {
+      pick: aggObj.pick,
+      confidence: aggObj.confidence,
+      riskLabel: aggObj.riskLabel,
+      bullets: sanitizeBullets(aggObj.bullets || []),
+    },
+
+    // legacy compat (oude UI kan dit nog gebruiken)
+    bullets: sanitizeBullets([
+      ...(commonBullets || []),
+      `DEFENSIEF: ${defObj.pick} (${defObj.riskLabel ?? "?"})`,
+      ...(defObj.bullets || []),
+      `AANVALLEND: ${aggObj.pick} (${aggObj.riskLabel ?? "?"})`,
+      ...(aggObj.bullets || []),
+    ]).filter(Boolean).slice(0, 14),
+
+    alternatives: Array.isArray(alternatives) ? alternatives : [],
+    debug: debug || {},
+  };
 }
 
 // ------------------------------
@@ -758,7 +801,7 @@ export function getAdvisorHint({
   game,
   me,
   players,
-  actions = [],        // <-- geef hier /log docs door (of legacy /actions; werkt ook)
+  actions = [], // <-- geef hier /log docs door (of legacy /actions; werkt ook)
   profileKey = "BEGINNER_COACH",
 }) {
   const baseProfile = ADVISOR_PROFILES[profileKey] || ADVISOR_PROFILES.BEGINNER_COACH;
@@ -769,24 +812,24 @@ export function getAdvisorHint({
   // Normaliseer actions/logs naar log-rows
   const logs = Array.isArray(actions) ? actions.map(normalizeLogRow) : [];
 
-  // 1) raw view uit jouw builder (mag actions krijgen; we maken het tolerant)
+  // 1) raw view (tolerant)
   const rawView = buildPlayerView({ game, me, players, actions: logs });
 
   // 2) adapter
   const view = adaptAdvisorView(rawView, { game, me, players });
   const phase = normalizePhase(view.phase || view.game?.phase);
 
-  // Build roundState uit logs
+  // RoundState uit logs
   const round = Number(view.round ?? view.game?.round ?? 0) || 0;
   const roundState = buildRoundStateFromLog(logs, round);
   view.roundState = roundState;
 
-  // effective flags: game.flagsRound + log-derived flags
+  // effective flags
   const effectiveFlags = mergeEffectiveFlags(view.game?.flagsRound || {}, roundState.flags || {});
   view.game.flagsRound = effectiveFlags;
   view.flags = effectiveFlags;
 
-  // advisor mag intern “peek” (2 upcoming), maar we tonen nooit IDs/titels
+  // upcoming peek (intern)
   const upcomingPeek = getUpcomingEvents(view, 2) || [];
 
   // hand normaliseren
@@ -811,7 +854,8 @@ export function getAdvisorHint({
   const riskBullets = [
     `Jouw Den-kleur: ${riskMeta.ctx.myColor || "—"}`,
     `Kans: Den-event van jouw kleur: ${pct(riskMeta.pMyDen)} • Charges: ${pct(riskMeta.pCharges)} • 3e rooster: ${pct(riskMeta.pThirdRooster)}`,
-  ];
+    riskMeta.ctx.denSignalActive ? "Den Signal actief: je bent veilig tegen charges + jouw Den-event." : null,
+  ].filter(Boolean);
 
   // =======================
   // MOVE
@@ -826,41 +870,42 @@ export function getAdvisorHint({
     const bestDef = safeBest(rankedDef, { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" });
     const bestAgg = safeBest(rankedAgg, { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" });
 
-    const defBullets = sanitizeBullets(bestDef.bullets || []);
-    const aggBullets = sanitizeBullets(bestAgg.bullets || []);
-
     const strat = [];
-    if (riskMeta.probNextDanger >= 0.35) {
-      strat.push("Strategie: kans op gevaar is vrij hoog → overweeg **SHIFT** (MOVE) om gevaar naar achter te duwen.");
-    }
-    if (riskMeta.nextId === "HIDDEN_NEST") {
-      strat.push("Strategie: er komt een DASH-bonus event aan → vaak slim om die later te zetten (SHIFT / Pack Tinker), zodat je niet te vroeg vertrekt.");
-    }
-    if (riskMeta.nextId === "ROOSTER_CROW") {
-      strat.push("Strategie: rooster-events liever later (meer rondes om loot te pakken).");
-    }
-    if (riskMeta.nextId === "PAINT_BOMB_NEST" && (riskMeta.ctx.sackCount ?? 0) > 0) {
-      strat.push("Strategie: er komt een sack-reset event aan en de Sack is gevuld → overweeg **SHIFT** om dit naar achteren te duwen.");
-    }
+    if (riskMeta.probNextDanger >= 0.35) strat.push("Strategie: kans op gevaar is vrij hoog → overweeg **SHIFT** (MOVE) om gevaar naar achter te duwen.");
+    if (riskMeta.nextId === "HIDDEN_NEST") strat.push("Strategie: er komt een DASH-bonus event aan → vaak slim om die later te zetten (SHIFT / Pack Tinker).");
+    if (riskMeta.nextId === "ROOSTER_CROW") strat.push("Strategie: rooster-events liever later (meer rondes om loot te pakken).");
+    if (riskMeta.nextId === "PAINT_BOMB_NEST" && (riskMeta.ctx.sackCount ?? 0) > 0) strat.push("Strategie: er komt een sack-reset event aan en de Sack is gevuld → overweeg **SHIFT**.");
 
-    return {
+    const commonBullets = [
+      ...headerLinesCompact(view, riskMeta),
+      ...riskBullets,
+      ...sanitizeBullets(strat),
+    ].filter(Boolean);
+
+    return buildOverlayHint({
+      phase,
       title: `MOVE advies • Def: ${labelMove(bestDef)} • Agg: ${labelMove(bestAgg)}`,
-      confidence: Math.max(bestDef.confidence ?? 0.65, bestAgg.confidence ?? 0.65),
       risk: riskMeta.nextIsDanger ? "HIGH" : "MIX",
-      bullets: [
-        ...headerLinesCompact(view, riskMeta),
-        ...riskBullets,
-        `DEFENSIEF: ${labelMove(bestDef)} (${bestDef.riskLabel ?? "?"})`,
-        ...defBullets,
-        `AANVALLEND: ${labelMove(bestAgg)} (${bestAgg.riskLabel ?? "?"})`,
-        ...aggBullets,
-        ...sanitizeBullets(strat),
-      ].filter(Boolean).slice(0, 10),
+      confidence: Math.max(bestDef.confidence ?? 0.65, bestAgg.confidence ?? 0.65),
+      commonBullets,
+      defObj: {
+        pick: labelMove(bestDef),
+        confidence: bestDef.confidence,
+        riskLabel: bestDef.riskLabel ?? "—",
+        bullets: bestDef.bullets || [],
+      },
+      aggObj: {
+        pick: labelMove(bestAgg),
+        confidence: bestAgg.confidence,
+        riskLabel: bestAgg.riskLabel ?? "—",
+        bullets: bestAgg.bullets || [],
+      },
       alternatives: [
-        { mode: "DEF alt", pick: rankedDef[1]?.move },
-        { mode: "AGG alt", pick: rankedAgg[1]?.move },
+        { mode: "DEF alt", pick: rankedDef[1]?.move || null },
+        { mode: "AGG alt", pick: rankedAgg[1]?.move || null },
       ].filter((x) => x.pick),
       debug: {
+        version: VERSION,
         phase: view.phase,
         hand: handMeta,
         roundState: {
@@ -870,13 +915,14 @@ export function getAdvisorHint({
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           probNextDanger: riskMeta.probNextDanger,
+          probNextHarmful: riskMeta.probNextHarmful,
           pMyDen: riskMeta.pMyDen,
           pCharges: riskMeta.pCharges,
           pThirdRooster: riskMeta.pThirdRooster,
           denSignalActive: !!riskMeta.ctx.denSignalActive,
         },
       },
-    };
+    });
   }
 
   // =======================
@@ -895,61 +941,62 @@ export function getAdvisorHint({
     const labelDef = labelPlay(bestDef);
     const labelAgg = labelPlay(bestAgg);
 
-    const tactical = pickOpsTacticalAdvice({
-      view,
-      handNames: handMeta.names,
-      riskMeta,
-    });
+    const tactical = pickOpsTacticalAdvice({ view, handNames: handMeta.names, riskMeta });
 
-    return {
+    const commonBullets = [
+      ...headerLinesCompact(view, riskMeta),
+      ...riskBullets,
+      handMeta.lineHand,
+      handMeta.lineKnown,
+      ...(handMeta.lineUnknown ? [handMeta.lineUnknown] : []),
+      ...tactical,
+    ].filter(Boolean);
+
+    return buildOverlayHint({
+      phase,
       title: `OPS advies • Def: ${labelDef} • Agg: ${labelAgg}`,
-      confidence: Math.max(bestDef.confidence ?? 0.65, bestAgg.confidence ?? 0.65),
       risk: riskMeta.nextIsDanger ? "HIGH" : "MIX",
-      bullets: [
-        ...headerLinesCompact(view, riskMeta),
-        ...riskBullets,
-        handMeta.lineHand,
-        handMeta.lineKnown,
-        ...(handMeta.lineUnknown ? [handMeta.lineUnknown] : []),
-
-        `DEFENSIEF: ${labelDef} (${bestDef.riskLabel ?? "?"})`,
-        ...sanitizeBullets(bestDef.bullets || []),
-
-        `AANVALLEND: ${labelAgg} (${bestAgg.riskLabel ?? "?"})`,
-        ...sanitizeBullets(bestAgg.bullets || []),
-
-        ...tactical,
-      ].filter(Boolean).slice(0, 10),
+      confidence: Math.max(bestDef.confidence ?? 0.65, bestAgg.confidence ?? 0.65),
+      commonBullets,
+      defObj: {
+        pick: labelDef,
+        confidence: bestDef.confidence,
+        riskLabel: bestDef.riskLabel ?? "—",
+        bullets: bestDef.bullets || [],
+      },
+      aggObj: {
+        pick: labelAgg,
+        confidence: bestAgg.confidence,
+        riskLabel: bestAgg.riskLabel ?? "—",
+        bullets: bestAgg.bullets || [],
+      },
       alternatives: [
         {
           mode: "DEF alt",
           pick: defRanked[1]
-            ? (defRanked[1].play === "PASS" ? "PASS" : (defRanked[1].cardId || defRanked[1].cardName))
+            ? (defRanked[1].play === "PASS" ? "PASS" : (defRanked[1].cardId || defRanked[1].cardName || defRanked[1].name))
             : null,
         },
         {
           mode: "AGG alt",
           pick: aggRanked[1]
-            ? (aggRanked[1].play === "PASS" ? "PASS" : (aggRanked[1].cardId || aggRanked[1].cardName))
+            ? (aggRanked[1].play === "PASS" ? "PASS" : (aggRanked[1].cardId || aggRanked[1].cardName || aggRanked[1].name))
             : null,
         },
       ].filter((x) => x.pick),
       debug: {
+        version: VERSION,
         phase: view.phase,
         hand: handMeta,
-        roundState: {
-          flags: view.roundState?.flags || null,
-        },
+        roundState: { flags: view.roundState?.flags || null },
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           probNextDanger: riskMeta.probNextDanger,
-          pMyDen: riskMeta.pMyDen,
-          pCharges: riskMeta.pCharges,
-          pThirdRooster: riskMeta.pThirdRooster,
+          probNextHarmful: riskMeta.probNextHarmful,
           denSignalActive: !!riskMeta.ctx.denSignalActive,
         },
       },
-    };
+    });
   }
 
   // =======================
@@ -962,8 +1009,8 @@ export function getAdvisorHint({
     const rankedDef = postRankByStyle(rankedDef0, "DEFENSIVE");
     const rankedAgg = postRankByStyle(rankedAgg0, "AGGRESSIVE");
 
-    const bestDef = safeBest(rankedDef, { decision: "—", riskLabel: "MED" });
-    const bestAgg = safeBest(rankedAgg, { decision: "—", riskLabel: "MED" });
+    const bestDef = safeBest(rankedDef, { decision: "—", riskLabel: "MED", confidence: 0.65, bullets: [] });
+    const bestAgg = safeBest(rankedAgg, { decision: "—", riskLabel: "MED", confidence: 0.65, bullets: [] });
 
     const tactical = decisionTacticalAdvice({ view, riskMeta });
 
@@ -972,23 +1019,37 @@ export function getAdvisorHint({
         ? ["Let op: BURROW is schaars (1x per Raid). Alleen doen als het echt nodig is."]
         : [];
 
-    return {
+    const commonBullets = [
+      ...headerLinesCompact(view, riskMeta),
+      ...riskBullets,
+      ...extraBurrowWarn,
+      ...tactical,
+    ].filter(Boolean);
+
+    return buildOverlayHint({
+      phase,
       title: `Decision advies • Def: ${labelDecision(bestDef)} • Agg: ${labelDecision(bestAgg)}`,
-      confidence: 0.7,
       risk: riskMeta.nextIsDanger ? "HIGH" : "MIX",
-      bullets: [
-        ...headerLinesCompact(view, riskMeta),
-        ...riskBullets,
-        ...sanitizeBullets(extraBurrowWarn),
-        `DEFENSIEF: ${labelDecision(bestDef)} (${bestDef.riskLabel ?? "?"})`,
-        `AANVALLEND: ${labelDecision(bestAgg)} (${bestAgg.riskLabel ?? "?"})`,
-        ...tactical,
-      ].filter(Boolean).slice(0, 10),
+      confidence: Math.max(bestDef.confidence ?? 0.7, bestAgg.confidence ?? 0.7),
+      commonBullets,
+      defObj: {
+        pick: labelDecision(bestDef),
+        confidence: bestDef.confidence,
+        riskLabel: bestDef.riskLabel ?? "—",
+        bullets: bestDef.bullets || [],
+      },
+      aggObj: {
+        pick: labelDecision(bestAgg),
+        confidence: bestAgg.confidence,
+        riskLabel: bestAgg.riskLabel ?? "—",
+        bullets: bestAgg.bullets || [],
+      },
       alternatives: [
-        { mode: "DEF alt", pick: rankedDef[1]?.decision },
-        { mode: "AGG alt", pick: rankedAgg[1]?.decision },
+        { mode: "DEF alt", pick: rankedDef[1]?.decision || null },
+        { mode: "AGG alt", pick: rankedAgg[1]?.decision || null },
       ].filter((x) => x.pick),
       debug: {
+        version: VERSION,
         phase: view.phase,
         hand: handMeta,
         roundState: {
@@ -998,26 +1059,29 @@ export function getAdvisorHint({
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           probNextDanger: riskMeta.probNextDanger,
-          pMyDen: riskMeta.pMyDen,
-          pCharges: riskMeta.pCharges,
-          pThirdRooster: riskMeta.pThirdRooster,
+          probNextHarmful: riskMeta.probNextHarmful,
           denSignalActive: !!riskMeta.ctx.denSignalActive,
         },
       },
-    };
+    });
   }
 
   // fallback
-  return {
+  const commonBullets = [
+    `Ronde: ${view.round ?? 0} • Fase: ${view.phase ?? "?"}`,
+    handMeta.lineHand,
+    "Geen fase herkend.",
+  ].filter(Boolean);
+
+  return buildOverlayHint({
+    phase: phase || "UNKNOWN",
     title: "Hint",
-    confidence: 0.6,
     risk: "MED",
-    bullets: [
-      `Ronde: ${view.round ?? 0} • Fase: ${view.phase ?? "?"}`,
-      handMeta.lineHand,
-      "Geen fase herkend.",
-    ].filter(Boolean).slice(0, 6),
+    confidence: 0.6,
+    commonBullets,
+    defObj: { pick: "—", confidence: 0.6, riskLabel: "—", bullets: [] },
+    aggObj: { pick: "—", confidence: 0.6, riskLabel: "—", bullets: [] },
     alternatives: [],
-    debug: { phase: view.phase, hand: handMeta, roundState: view.roundState || null },
-  };
+    debug: { version: VERSION, phase: view.phase, hand: handMeta, roundState: view.roundState || null },
+  });
 }
