@@ -29,6 +29,7 @@ import {
   getDocs,
   setDoc,
   query,
+  where,
   orderBy,
   limit,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
