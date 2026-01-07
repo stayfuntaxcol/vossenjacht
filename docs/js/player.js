@@ -46,12 +46,36 @@ let lastMe = null;
 let lastPlayers = [];
 let lastActions = [];
 
-// ===== ACTIONS LISTENER (NA db + gameId) =====
+// ===== LOG LISTENER (NA db + gameId) =====
+// Single source of truth: games/{gameId}/log
+// lastActions wordt gevuld met logregels uit phase "ACTIONS" (kind "CHOICE")
+
 if (gameId) {
-  const actionsRef = collection(db, "games", gameId, "actions");
-  const actionsQ = query(actionsRef, orderBy("createdAt", "desc"), limit(250));
-  onSnapshot(actionsQ, (qs) => {
-    lastActions = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+  // i.p.v. /actions -> /log
+  const logRef = collection(db, "games", gameId, "log");
+
+  // laatste 250 logregels (nieuwste eerst)
+  const logQ = query(logRef, orderBy("createdAt", "desc"), limit(250));
+
+  onSnapshot(logQ, (qs) => {
+    const rows = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    // bewaar alles (handig voor advisor), en maak "lastActions" = alleen actions-fase keuzes
+    // (je advisor krijgt dan nog steeds acties-context, maar uit /log)
+    lastActions = rows
+      .filter((e) => (e.phase || "") === "ACTIONS" && (e.kind || "") === "CHOICE")
+      .map((e) => ({
+        id: e.id,
+        createdAt: e.createdAt,
+        round: e.round,
+        phase: e.phase,
+        kind: e.kind,
+        playerId: e.playerId,
+        playerName: e.playerName,
+        choice: e.choice,     // bv "ACTION_Den Signal" / "ACTION_PASS"
+        payload: e.payload || null,
+        message: e.message || "",
+      }));
   });
 
   // BONUS: hou spelerscache ook live voor advisor (lastPlayers)
@@ -60,7 +84,7 @@ if (gameId) {
     lastPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
   });
 } else {
-  console.warn("[ACTIONS] gameId ontbreekt in URL (?game=...)");
+  console.warn("[LOG] gameId ontbreekt in URL (?game=...)");
 }
 
 // ===== DOM ELEMENTS – nieuwe player.html =====
@@ -1627,39 +1651,47 @@ function closeAdvisorHintOverlay() {
   _advisorOverlay.classList.add("hidden");
 }
 
-// ===== LOGGING HELPER (SINGLE SOURCE OF TRUTH: /log) =====
-// - Geen /actions collection meer
-// - Log bevat: choice + payload (gestructureerd) + message (kort)
-// - Host/Board kan choice netjes formatteren; message blijft fallback
+// ===== LOGGING HELPER (single source: /log) =====
 
-function buildLogMessage(player, phase, choice, payload) {
-  const who = player?.name || "Speler";
-  const nice = formatChoiceForDisplay(phase, choice, payload);
-  return `${who} • ${nice}`;
+function _kindFromPhase(phase) {
+  if (phase === "MOVE") return "MOVE";
+  if (phase === "ACTIONS") return "ACTION_CARD";
+  if (phase === "DECISION") return "DECISION";
+  if (phase === "REVEAL") return "EVENT";
+  return "SYSTEM";
 }
 
-/**
- * Schrijf 1 logregel naar games/{gameId}/log.
- *
- * @param game    game snapshot data
- * @param player  player snapshot data
- * @param choice  string, bv "MOVE_SNATCH_FROM_DECK", "ACTION_Den Signal", "DECISION_LURK"
- * @param phase   "MOVE" | "ACTIONS" | "DECISION" | "REVEAL" | ...
- * @param payload object met extra details (klein houden)
- */
-async function logMoveAction(game, player, choice, phase = "MOVE", payload = null) {
+function _cardIdFromChoice(phase, choice) {
+  if (phase !== "ACTIONS") return null;
+  if (!choice) return null;
+  const s = String(choice);
+  if (!s.startsWith("ACTION_")) return null;
+  const name = s.slice("ACTION_".length);
+  return name && name !== "PASS" ? name : null;
+}
+
+async function logMoveAction(game, player, choice, phase = "MOVE", extra = null) {
+  const round = game?.round || 0;
+  const playerName = player?.name || "";
+
+  const choiceDisplay = formatChoiceForDisplay(phase, choice);
+  const kind = _kindFromPhase(phase);
+  const cardId = _cardIdFromChoice(phase, choice);
+
   const entry = {
-    round: game?.round || 0,
+    round,
     phase,
-    kind: "CHOICE",           // nieuw: beter dan "ACTION" voor alles
+    kind,
     playerId,
-    playerName: player?.name || "",
-    choice: String(choice || ""),
-    // createdAt wordt in addLog() gezet via serverTimestamp()
-    message: buildLogMessage(player, phase, choice, payload),
+    playerName,
+    choice,
+    choiceDisplay,
+    createdAtMs: Date.now(), // handig voor stabiele sortering/UI
+    message: `${playerName || "Speler"} – ${choiceDisplay}`,
   };
 
-  if (payload) entry.payload = payload;
+  if (cardId) entry.cardId = cardId;
+  if (extra) entry.details = extra;
 
   await addLog(gameId, entry);
 }
@@ -1671,58 +1703,257 @@ function computeNextOpsIndex(game) {
   return (idx + 1) % order.length;
 }
 
-// ===== HUMAN READABLE CHOICE (voor Host/Lead/Log weergave) =====
-// payload wordt gebruikt voor details zoals pos, color, swaps, etc.
-function formatChoiceForDisplay(phase, rawChoice, payload = null) {
+function formatChoiceForDisplay(phase, rawChoice) {
   if (!rawChoice) return "–";
   const choice = String(rawChoice);
-  const p = payload || {};
 
-  // DECISION
   if (phase === "DECISION" && choice.startsWith("DECISION_")) {
     const kind = choice.slice("DECISION_".length);
-    if (kind === "LURK") return "DECISION: LURK (blijven)";
-    if (kind === "BURROW") return "DECISION: BURROW (schuilen)";
-    if (kind === "DASH") return "DECISION: DASH (vluchten)";
-    return `DECISION: ${kind}`;
+    if (kind === "LURK") return "LURK – in de Yard blijven";
+    if (kind === "BURROW") return "BURROW – schuilen / verstoppen";
+    if (kind === "DASH") return "DASH – met buit vluchten";
+    return kind;
   }
 
-  // MOVE
   if (phase === "MOVE" && choice.startsWith("MOVE_")) {
-    if (choice.includes("SNATCH")) return "MOVE: SNATCH (loot pakken)";
+    if (choice.includes("SNATCH")) return "SNATCH – 1 buitkaart uit de stapel";
     if (choice.includes("FORAGE")) {
-      // accepteer beide vormen: MOVE_FORAGE_2cards en payload.drawn
       const m = choice.match(/FORAGE_(\d+)/);
-      const n = Number.isFinite(p.drawn) ? p.drawn : (m ? Number(m[1]) : null);
-      return n !== null ? `MOVE: FORAGE (${n} action card(s))` : "MOVE: FORAGE";
+      const n = m ? m[1] : "?";
+      return `FORAGE – ${n} Action Card(s) getrokken`;
     }
     if (choice.includes("SCOUT_")) {
       const m = choice.match(/SCOUT_(\d+)/);
-      const pos = Number.isFinite(p.pos) ? p.pos : (m ? Number(m[1]) : null);
-      return pos !== null ? `MOVE: SCOUT (pos ${pos})` : "MOVE: SCOUT";
+      const pos = m ? m[1] : "?";
+      return `SCOUT – Event op positie ${pos} bekeken`;
     }
     if (choice.includes("SHIFT_")) {
-      // accepteer string of payload
-      if (Number.isFinite(p.pos1) && Number.isFinite(p.pos2)) return `MOVE: SHIFT (${p.pos1}↔${p.pos2})`;
       const m = choice.match(/SHIFT_(.+)/);
-      const detail = m ? m[1] : "";
-      return detail ? `MOVE: SHIFT (${detail})` : "MOVE: SHIFT";
+      const detail = m ? m[1] : "?";
+      return `SHIFT – events gewisseld (${detail})`;
     }
-    return `MOVE: ${choice.slice("MOVE_".length)}`;
+    return choice.slice("MOVE_".length);
   }
 
-  // ACTIONS
   if (phase === "ACTIONS" && choice.startsWith("ACTION_")) {
     const name = choice.slice("ACTION_".length);
-    if (name === "PASS") return "ACTIONS: PASS";
-    // extra detail via payload (optioneel)
-    if (p.color) return `ACTIONS: ${name} (Den ${String(p.color).toUpperCase()})`;
-    if (Number.isFinite(p.pos)) return `ACTIONS: ${name} (pos ${p.pos})`;
-    if (Number.isFinite(p.pos1) && Number.isFinite(p.pos2)) return `ACTIONS: ${name} (${p.pos1}↔${p.pos2})`;
-    return `ACTIONS: ${name}`;
+    if (name === "PASS") return "PASS – geen kaart gespeeld";
+    return `${name} – Action Card`;
   }
 
   return choice;
+}
+
+// ===== MOVE-ACTIES =====
+
+async function performSnatch() {
+  if (!gameRef || !playerRef) return;
+
+  const gameSnap = await getDoc(gameRef);
+  const playerSnap = await getDoc(playerRef);
+  if (!gameSnap.exists() || !playerSnap.exists()) return;
+
+  const game = gameSnap.data();
+  const player = playerSnap.data();
+
+  if (!canMoveNow(game, player)) {
+    alert("Je kunt nu geen MOVE doen.");
+    return;
+  }
+
+  const lootDeck = Array.isArray(game.lootDeck) ? [...game.lootDeck] : [];
+  if (!lootDeck.length) {
+    alert("De buitstapel is leeg. Je kunt nu geen SNATCH doen.");
+    return;
+  }
+
+  const card = lootDeck.pop();
+  const loot = Array.isArray(player.loot) ? [...player.loot] : [];
+  loot.push(card);
+
+  await updateDoc(playerRef, { loot });
+  await updateDoc(gameRef, { lootDeck, movedPlayerIds: arrayUnion(playerId) });
+
+  await logMoveAction(game, player, "MOVE_SNATCH", "MOVE", {
+    lootCard: { t: card?.t, v: card?.v }, // klein houden
+  });
+
+  const label = card.t || "Loot";
+  const val = card.v ?? "?";
+  setActionFeedback(`SNATCH: je hebt een ${label} (waarde ${val}) uit de buitstapel getrokken.`);
+}
+
+async function performForage() {
+  if (!gameRef || !playerRef) return;
+
+  const gameSnap = await getDoc(gameRef);
+  const playerSnap = await getDoc(playerRef);
+  if (!gameSnap.exists() || !playerSnap.exists()) return;
+
+  const game = gameSnap.data();
+  const player = playerSnap.data();
+
+  if (!canMoveNow(game, player)) {
+    alert("Je kunt nu geen MOVE doen.");
+    return;
+  }
+
+  const actionDeck = Array.isArray(game.actionDeck) ? [...game.actionDeck] : [];
+  const hand = Array.isArray(player.hand) ? [...player.hand] : [];
+
+  if (!actionDeck.length) {
+    alert("De Action-deck is leeg. Er zijn geen extra kaarten meer.");
+    return;
+  }
+
+  let drawn = 0;
+  for (let i = 0; i < 2; i++) {
+    if (!actionDeck.length) break;
+    hand.push(actionDeck.pop());
+    drawn++;
+  }
+
+  await updateDoc(playerRef, { hand });
+  await updateDoc(gameRef, { actionDeck, movedPlayerIds: arrayUnion(playerId) });
+
+  await logMoveAction(game, player, `MOVE_FORAGE_${drawn}`, "MOVE");
+}
+
+async function performScout() {
+  if (!gameRef || !playerRef) return;
+
+  const gameSnap = await getDoc(gameRef);
+  const playerSnap = await getDoc(playerRef);
+  if (!gameSnap.exists() || !playerSnap.exists()) return;
+
+  const game = gameSnap.data();
+  const player = playerSnap.data();
+
+  if (!canMoveNow(game, player)) {
+    alert("Je kunt nu geen MOVE doen.");
+    return;
+  }
+
+  const flags = mergeRoundFlags(game);
+  if (flags.scatter) {
+    alert("Scatter! is gespeeld: niemand mag Scouten deze ronde.");
+    return;
+  }
+
+  const track = game.eventTrack || [];
+  if (!track.length) {
+    alert("Geen Event Track beschikbaar.");
+    return;
+  }
+
+  const posStr = prompt(`Welke event-positie wil je scouten? (1-${track.length})`);
+  if (!posStr) return;
+  const pos = parseInt(posStr, 10);
+  if (Number.isNaN(pos) || pos < 1 || pos > track.length) {
+    alert("Ongeldige positie.");
+    return;
+  }
+
+  const noPeek = flags.noPeek || [];
+  if (noPeek.includes(pos)) {
+    alert("Deze positie is geblokkeerd door een No-Go Zone.");
+    return;
+  }
+
+  const idx = pos - 1;
+  const eventId = track[idx];
+  const ev = getEventById(eventId);
+
+  alert(`Je scout Event #${pos}: ` + (ev ? ev.title : eventId || "Onbekend event"));
+
+  await updateDoc(playerRef, {
+    scoutPeek: { round: game.round || 0, index: idx, eventId },
+  });
+  await updateDoc(gameRef, { movedPlayerIds: arrayUnion(playerId) });
+
+  await logMoveAction(game, player, `MOVE_SCOUT_${pos}`, "MOVE", {
+    eventId,
+    pos,
+  });
+
+  setActionFeedback(`SCOUT: je hebt event #${pos} bekeken. Deze ronde zie je deze kaart als persoonlijke preview.`);
+}
+
+async function performShift() {
+  if (!gameRef || !playerRef) return;
+
+  const gameSnap = await getDoc(gameRef);
+  const playerSnap = await getDoc(playerRef);
+  if (!gameSnap.exists() || !playerSnap.exists()) return;
+
+  const game = gameSnap.data();
+  const player = playerSnap.data();
+
+  if (!canMoveNow(game, player)) {
+    alert("Je kunt nu geen MOVE doen.");
+    return;
+  }
+
+  const flags = mergeRoundFlags(game);
+  if (flags.lockEvents) {
+    alert("Events zijn gelocked (Burrow Beacon). Je kunt niet meer shiften.");
+    return;
+  }
+
+  const { track, eventIndex } = splitEventTrackByStatus(game);
+  if (!track.length) {
+    alert("Geen Event Track beschikbaar.");
+    return;
+  }
+
+  const futureCount = track.length - eventIndex;
+  if (futureCount <= 1) {
+    alert("SHIFT heeft geen effect – er zijn te weinig toekomstige Events om te verschuiven.");
+    return;
+  }
+
+  const maxPos = track.length;
+
+  const pos1Str = prompt(`SHIFT – eerste positie (alleen toekomstige events: ${eventIndex + 1}-${maxPos})`);
+  if (!pos1Str) return;
+
+  const pos2Str = prompt(`SHIFT – tweede positie (alleen toekomstige events: ${eventIndex + 1}-${maxPos})`);
+  if (!pos2Str) return;
+
+  const pos1 = parseInt(pos1Str, 10);
+  const pos2 = parseInt(pos2Str, 10);
+
+  if (
+    Number.isNaN(pos1) ||
+    Number.isNaN(pos2) ||
+    pos1 < 1 ||
+    pos1 > maxPos ||
+    pos2 < 1 ||
+    pos2 > maxPos ||
+    pos1 === pos2
+  ) {
+    alert("Ongeldige posities voor SHIFT.");
+    return;
+  }
+
+  const i1 = pos1 - 1;
+  const i2 = pos2 - 1;
+
+  if (i1 < eventIndex || i2 < eventIndex) {
+    alert(`Je kunt geen Events verschuiven die al onthuld zijn. Kies alleen posities vanaf ${eventIndex + 1}.`);
+    return;
+  }
+
+  [track[i1], track[i2]] = [track[i2], track[i1]];
+
+  await updateDoc(gameRef, {
+    eventTrack: track,
+    movedPlayerIds: arrayUnion(playerId),
+  });
+
+  await logMoveAction(game, player, `MOVE_SHIFT_${pos1}<->${pos2}`, "MOVE", { pos1, pos2 });
+
+  setActionFeedback(`SHIFT: je hebt toekomstige Events op posities ${pos1} en ${pos2} gewisseld.`);
 }
 
 // ===== MOVE-ACTIES (zelfde gedrag, maar betere payload logging) =====
@@ -2514,8 +2745,7 @@ async function playMaskSwap(game, player) {
   setActionFeedback("Mask Swap: Den-kleuren van alle vossen in de Yard zijn gehusseld.");
   return true;
 }
-
-// ===== LEAD FOX COMMAND CENTER =====
+// ===== LEAD FOX COMMAND CENTER (SINGLE SOURCE: /log) =====
 
 async function renderLeadCommandCenter() {
   if (!leadCommandContent || !currentGame) return;
@@ -2523,17 +2753,22 @@ async function renderLeadCommandCenter() {
   leadCommandContent.innerHTML = "";
 
   const round = currentGame.round || 0;
-
   const players = await fetchPlayersForGame();
 
-  const actionsCol = collection(db, "games", gameId, "actions");
-  const snap = await getDocs(actionsCol);
+  // i.p.v. /actions -> /log (pak recentste N regels, filter op ronde)
+  const logCol = collection(db, "games", gameId, "log");
+  const logQ = query(logCol, orderBy("createdAt", "desc"), limit(600));
+  const snap = await getDocs(logQ);
 
   const perPlayer = new Map();
 
   snap.forEach((docSnap) => {
     const d = docSnap.data() || {};
     if ((d.round || 0) !== round) return;
+
+    // Alleen de “keuze”-regels (jouw nieuwe standaard)
+    // (als je nog oude logs hebt, kun je dit versoepelen)
+    if ((d.kind || "") !== "CHOICE") return;
 
     const pid = d.playerId || "unknown";
     const phase = d.phase || "";
@@ -2548,6 +2783,23 @@ async function renderLeadCommandCenter() {
     else if (phase === "ACTIONS") bucket.actions.push(d);
     else if (phase === "DECISION") bucket.decisions.push(d);
   });
+
+  // (optioneel) oudste->nieuwste binnen elke bucket (createdAt kan Timestamp zijn)
+  const tsToMs = (t) => {
+    try {
+      if (!t) return 0;
+      if (typeof t.toMillis === "function") return t.toMillis();
+      if (typeof t.seconds === "number") return t.seconds * 1000;
+      return 0;
+    } catch {
+      return 0;
+    }
+  };
+  for (const bucket of perPlayer.values()) {
+    bucket.moves.sort((a, b) => tsToMs(a.createdAt) - tsToMs(b.createdAt));
+    bucket.actions.sort((a, b) => tsToMs(a.createdAt) - tsToMs(b.createdAt));
+    bucket.decisions.sort((a, b) => tsToMs(a.createdAt) - tsToMs(b.createdAt));
+  }
 
   const header = document.createElement("p");
   header.className = "lead-command-subtitle";
@@ -2614,7 +2866,8 @@ async function renderLeadCommandCenter() {
         items.forEach((a) => {
           const line = document.createElement("div");
           line.className = "lead-phase-line";
-          line.textContent = formatChoiceForDisplay(phaseKey, a.choice);
+          // let op: jouw nieuwe formatter pakt ook payload mee
+          line.textContent = formatChoiceForDisplay(phaseKey, a.choice, a.payload || null);
           col.appendChild(line);
         });
       }
@@ -2628,7 +2881,6 @@ async function renderLeadCommandCenter() {
 
     block.appendChild(headerRow);
     block.appendChild(phaseGrid);
-
     leadCommandContent.appendChild(block);
   });
 }
