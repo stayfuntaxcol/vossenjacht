@@ -1744,17 +1744,22 @@ function formatChoiceForDisplay(phase, rawChoice) {
   return choice;
 }
 
-// ===== MOVE-ACTIES =====
+// ===== MOVE-ACTIES (single definitions + payload naar /log) =====
+
+async function loadGameAndPlayer() {
+  if (!gameRef || !playerRef) return null;
+
+  const [gameSnap, playerSnap] = await Promise.all([getDoc(gameRef), getDoc(playerRef)]);
+  if (!gameSnap.exists() || !playerSnap.exists()) return null;
+
+  return { game: gameSnap.data(), player: playerSnap.data() };
+}
 
 async function performSnatch() {
-  if (!gameRef || !playerRef) return;
+  const loaded = await loadGameAndPlayer();
+  if (!loaded) return;
 
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
+  const { game, player } = loaded;
 
   if (!canMoveNow(game, player)) {
     alert("Je kunt nu geen MOVE doen.");
@@ -1771,27 +1776,26 @@ async function performSnatch() {
   const loot = Array.isArray(player.loot) ? [...player.loot] : [];
   loot.push(card);
 
-  await updateDoc(playerRef, { loot });
-  await updateDoc(gameRef, { lootDeck, movedPlayerIds: arrayUnion(playerId) });
+  await Promise.all([
+    updateDoc(playerRef, { loot }),
+    updateDoc(gameRef, { lootDeck, movedPlayerIds: arrayUnion(playerId) }),
+  ]);
 
-  await logMoveAction(game, player, "MOVE_SNATCH", "MOVE", {
-    lootCard: { t: card?.t, v: card?.v }, // klein houden
+  await logMoveAction(game, player, "MOVE_SNATCH_FROM_DECK", "MOVE", {
+    lootType: card?.t || null,
+    lootValue: Number.isFinite(card?.v) ? card.v : null,
   });
 
-  const label = card.t || "Loot";
-  const val = card.v ?? "?";
+  const label = card?.t || "Loot";
+  const val = card?.v ?? "?";
   setActionFeedback(`SNATCH: je hebt een ${label} (waarde ${val}) uit de buitstapel getrokken.`);
 }
 
 async function performForage() {
-  if (!gameRef || !playerRef) return;
+  const loaded = await loadGameAndPlayer();
+  if (!loaded) return;
 
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
+  const { game, player } = loaded;
 
   if (!canMoveNow(game, player)) {
     alert("Je kunt nu geen MOVE doen.");
@@ -1813,21 +1817,19 @@ async function performForage() {
     drawn++;
   }
 
-  await updateDoc(playerRef, { hand });
-  await updateDoc(gameRef, { actionDeck, movedPlayerIds: arrayUnion(playerId) });
+  await Promise.all([
+    updateDoc(playerRef, { hand }),
+    updateDoc(gameRef, { actionDeck, movedPlayerIds: arrayUnion(playerId) }),
+  ]);
 
-  await logMoveAction(game, player, `MOVE_FORAGE_${drawn}`, "MOVE");
+  await logMoveAction(game, player, `MOVE_FORAGE_${drawn}cards`, "MOVE", { drawn });
 }
 
 async function performScout() {
-  if (!gameRef || !playerRef) return;
+  const loaded = await loadGameAndPlayer();
+  if (!loaded) return;
 
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
+  const { game, player } = loaded;
 
   if (!canMoveNow(game, player)) {
     alert("Je kunt nu geen MOVE doen.");
@@ -1840,7 +1842,7 @@ async function performScout() {
     return;
   }
 
-  const track = game.eventTrack || [];
+  const track = Array.isArray(game.eventTrack) ? game.eventTrack : [];
   if (!track.length) {
     alert("Geen Event Track beschikbaar.");
     return;
@@ -1848,13 +1850,14 @@ async function performScout() {
 
   const posStr = prompt(`Welke event-positie wil je scouten? (1-${track.length})`);
   if (!posStr) return;
+
   const pos = parseInt(posStr, 10);
   if (Number.isNaN(pos) || pos < 1 || pos > track.length) {
     alert("Ongeldige positie.");
     return;
   }
 
-  const noPeek = flags.noPeek || [];
+  const noPeek = Array.isArray(flags.noPeek) ? flags.noPeek : [];
   if (noPeek.includes(pos)) {
     alert("Deze positie is geblokkeerd door een No-Go Zone.");
     return;
@@ -1866,28 +1869,21 @@ async function performScout() {
 
   alert(`Je scout Event #${pos}: ` + (ev ? ev.title : eventId || "Onbekend event"));
 
-  await updateDoc(playerRef, {
-    scoutPeek: { round: game.round || 0, index: idx, eventId },
-  });
-  await updateDoc(gameRef, { movedPlayerIds: arrayUnion(playerId) });
+  await Promise.all([
+    updateDoc(playerRef, { scoutPeek: { round: game.round || 0, index: idx, eventId } }),
+    updateDoc(gameRef, { movedPlayerIds: arrayUnion(playerId) }),
+  ]);
 
-  await logMoveAction(game, player, `MOVE_SCOUT_${pos}`, "MOVE", {
-    eventId,
-    pos,
-  });
+  await logMoveAction(game, player, `MOVE_SCOUT_${pos}`, "MOVE", { pos, eventId });
 
   setActionFeedback(`SCOUT: je hebt event #${pos} bekeken. Deze ronde zie je deze kaart als persoonlijke preview.`);
 }
 
 async function performShift() {
-  if (!gameRef || !playerRef) return;
+  const loaded = await loadGameAndPlayer();
+  if (!loaded) return;
 
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
+  const { game, player } = loaded;
 
   if (!canMoveNow(game, player)) {
     alert("Je kunt nu geen MOVE doen.");
@@ -1926,10 +1922,8 @@ async function performShift() {
   if (
     Number.isNaN(pos1) ||
     Number.isNaN(pos2) ||
-    pos1 < 1 ||
-    pos1 > maxPos ||
-    pos2 < 1 ||
-    pos2 > maxPos ||
+    pos1 < 1 || pos1 > maxPos ||
+    pos2 < 1 || pos2 > maxPos ||
     pos1 === pos2
   ) {
     alert("Ongeldige posities voor SHIFT.");
@@ -1952,241 +1946,6 @@ async function performShift() {
   });
 
   await logMoveAction(game, player, `MOVE_SHIFT_${pos1}<->${pos2}`, "MOVE", { pos1, pos2 });
-
-  setActionFeedback(`SHIFT: je hebt toekomstige Events op posities ${pos1} en ${pos2} gewisseld.`);
-}
-
-// ===== MOVE-ACTIES (zelfde gedrag, maar betere payload logging) =====
-
-async function performSnatch() {
-  if (!gameRef || !playerRef) return;
-
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
-
-  if (!canMoveNow(game, player)) {
-    alert("Je kunt nu geen MOVE doen.");
-    return;
-  }
-
-  const lootDeck = Array.isArray(game.lootDeck) ? [...game.lootDeck] : [];
-  if (!lootDeck.length) {
-    alert("De buitstapel is leeg. Je kunt nu geen SNATCH doen.");
-    return;
-  }
-
-  const card = lootDeck.pop();
-  const loot = Array.isArray(player.loot) ? [...player.loot] : [];
-  loot.push(card);
-
-  await updateDoc(playerRef, { loot });
-  await updateDoc(gameRef, { lootDeck, movedPlayerIds: arrayUnion(playerId) });
-
-  await logMoveAction(
-    game,
-    player,
-    "MOVE_SNATCH_FROM_DECK",
-    "MOVE",
-    {
-      lootType: card?.t || null,
-      lootValue: Number.isFinite(card?.v) ? card.v : null,
-      // liever geen volledige kaart loggen (scheelt bytes/ruis)
-    }
-  );
-
-  const label = card.t || "Loot";
-  const val = card.v ?? "?";
-  setActionFeedback(`SNATCH: je hebt een ${label} (waarde ${val}) uit de buitstapel getrokken.`);
-}
-
-async function performForage() {
-  if (!gameRef || !playerRef) return;
-
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
-
-  if (!canMoveNow(game, player)) {
-    alert("Je kunt nu geen MOVE doen.");
-    return;
-  }
-
-  const actionDeck = Array.isArray(game.actionDeck) ? [...game.actionDeck] : [];
-  const hand = Array.isArray(player.hand) ? [...player.hand] : [];
-
-  if (!actionDeck.length) {
-    alert("De Action-deck is leeg. Er zijn geen extra kaarten meer.");
-    return;
-  }
-
-  let drawn = 0;
-  for (let i = 0; i < 2; i++) {
-    if (!actionDeck.length) break;
-    hand.push(actionDeck.pop());
-    drawn++;
-  }
-
-  await updateDoc(playerRef, { hand });
-  await updateDoc(gameRef, { actionDeck, movedPlayerIds: arrayUnion(playerId) });
-
-  await logMoveAction(
-    game,
-    player,
-    `MOVE_FORAGE_${drawn}cards`,
-    "MOVE",
-    { drawn }
-  );
-}
-
-async function performScout() {
-  if (!gameRef || !playerRef) return;
-
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
-
-  if (!canMoveNow(game, player)) {
-    alert("Je kunt nu geen MOVE doen.");
-    return;
-  }
-
-  const flags = mergeRoundFlags(game);
-  if (flags.scatter) {
-    alert("Scatter! is gespeeld: niemand mag Scouten deze ronde.");
-    return;
-  }
-
-  const track = game.eventTrack || [];
-  if (!track.length) {
-    alert("Geen Event Track beschikbaar.");
-    return;
-  }
-
-  const posStr = prompt(`Welke event-positie wil je scouten? (1-${track.length})`);
-  if (!posStr) return;
-  const pos = parseInt(posStr, 10);
-  if (Number.isNaN(pos) || pos < 1 || pos > track.length) {
-    alert("Ongeldige positie.");
-    return;
-  }
-
-  const noPeek = flags.noPeek || [];
-  if (noPeek.includes(pos)) {
-    alert("Deze positie is geblokkeerd door een No-Go Zone.");
-    return;
-  }
-
-  const idx = pos - 1;
-  const eventId = track[idx];
-  const ev = getEventById(eventId);
-
-  alert(`Je scout Event #${pos}: ` + (ev ? ev.title : eventId || "Onbekend event"));
-
-  await updateDoc(playerRef, {
-    scoutPeek: { round: game.round || 0, index: idx, eventId },
-  });
-  await updateDoc(gameRef, { movedPlayerIds: arrayUnion(playerId) });
-
-  await logMoveAction(
-    game,
-    player,
-    `MOVE_SCOUT_${pos}`,
-    "MOVE",
-    { pos }
-  );
-
-  setActionFeedback(`SCOUT: je hebt event #${pos} bekeken. Deze ronde zie je deze kaart als persoonlijke preview.`);
-}
-
-async function performShift() {
-  if (!gameRef || !playerRef) return;
-
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
-
-  if (!canMoveNow(game, player)) {
-    alert("Je kunt nu geen MOVE doen.");
-    return;
-  }
-
-  const flags = mergeRoundFlags(game);
-  if (flags.lockEvents) {
-    alert("Events zijn gelocked (Burrow Beacon). Je kunt niet meer shiften.");
-    return;
-  }
-
-  const { track, eventIndex } = splitEventTrackByStatus(game);
-  if (!track.length) {
-    alert("Geen Event Track beschikbaar.");
-    return;
-  }
-
-  const futureCount = track.length - eventIndex;
-  if (futureCount <= 1) {
-    alert("SHIFT heeft geen effect – er zijn te weinig toekomstige Events om te verschuiven.");
-    return;
-  }
-
-  const maxPos = track.length;
-
-  const pos1Str = prompt(`SHIFT – eerste positie (alleen toekomstige events: ${eventIndex + 1}-${maxPos})`);
-  if (!pos1Str) return;
-
-  const pos2Str = prompt(`SHIFT – tweede positie (alleen toekomstige events: ${eventIndex + 1}-${maxPos})`);
-  if (!pos2Str) return;
-
-  const pos1 = parseInt(pos1Str, 10);
-  const pos2 = parseInt(pos2Str, 10);
-
-  if (
-    Number.isNaN(pos1) ||
-    Number.isNaN(pos2) ||
-    pos1 < 1 ||
-    pos1 > maxPos ||
-    pos2 < 1 ||
-    pos2 > maxPos ||
-    pos1 === pos2
-  ) {
-    alert("Ongeldige posities voor SHIFT.");
-    return;
-  }
-
-  const i1 = pos1 - 1;
-  const i2 = pos2 - 1;
-
-  if (i1 < eventIndex || i2 < eventIndex) {
-    alert(`Je kunt geen Events verschuiven die al onthuld zijn. Kies alleen posities vanaf ${eventIndex + 1}.`);
-    return;
-  }
-
-  [track[i1], track[i2]] = [track[i2], track[i1]];
-
-  await updateDoc(gameRef, {
-    eventTrack: track,
-    movedPlayerIds: arrayUnion(playerId),
-  });
-
-  await logMoveAction(
-    game,
-    player,
-    `MOVE_SHIFT_${pos1}<->${pos2}`,
-    "MOVE",
-    { pos1, pos2 }
-  );
 
   setActionFeedback(`SHIFT: je hebt toekomstige Events op posities ${pos1} en ${pos2} gewisseld.`);
 }
