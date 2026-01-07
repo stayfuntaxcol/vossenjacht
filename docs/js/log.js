@@ -65,7 +65,8 @@ export async function addLog(gameId, entry = {}) {
     // nieuw (machine-friendly)
     type: e.type ?? null,
     actorId,
-
+    choice: e.choice ?? null,
+    
     // legacy / UI friendly
     playerId: e.playerId ?? null,
     playerName: e.playerName ?? null,
