@@ -2631,28 +2631,38 @@ async function playMaskSwap(game, player) {
 }
 // ===== LEAD FOX COMMAND CENTER (SINGLE SOURCE: /log) =====
 
-async function renderLeadCommandCenter() {
-  if (!leadCommandContent || !currentGame) return;
+let leadCCUnsub = null;
+
+function stopLeadCommandCenterLive() {
+  if (typeof leadCCUnsub === "function") {
+    leadCCUnsub();
+    leadCCUnsub = null;
+  }
+}
+
+function tsToMs(t) {
+  try {
+    if (!t) return 0;
+    if (typeof t.toMillis === "function") return t.toMillis();
+    if (typeof t.seconds === "number") return t.seconds * 1000;
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+function renderLeadCommandCenterUI(round, players, logs) {
+  if (!leadCommandContent) return;
 
   leadCommandContent.innerHTML = "";
 
-  const round = currentGame.round || 0;
-  const players = await fetchPlayersForGame();
-
-  // i.p.v. /actions -> /log (pak recentste N regels, filter op ronde)
-  const logCol = collection(db, "games", gameId, "log");
-  const logQ = query(logCol, orderBy("createdAt", "desc"), limit(600));
-  const snap = await getDocs(logQ);
-
   const perPlayer = new Map();
 
-  snap.forEach((docSnap) => {
-    const d = docSnap.data() || {};
-    if ((d.round || 0) !== round) return;
+  for (const d of logs) {
+    if ((d.round || 0) !== round) continue;
 
-    // Alleen de “keuze”-regels (jouw nieuwe standaard)
-    // (als je nog oude logs hebt, kun je dit versoepelen)
-    if ((d.kind || "") !== "CHOICE") return;
+    // Alleen “keuze” regels. (Als je nog mix van oud/nieuw hebt: maak dit soepeler)
+    if ((d.kind || "") !== "CHOICE") continue;
 
     const pid = d.playerId || "unknown";
     const phase = d.phase || "";
@@ -2666,19 +2676,9 @@ async function renderLeadCommandCenter() {
     if (phase === "MOVE") bucket.moves.push(d);
     else if (phase === "ACTIONS") bucket.actions.push(d);
     else if (phase === "DECISION") bucket.decisions.push(d);
-  });
+  }
 
-  // (optioneel) oudste->nieuwste binnen elke bucket (createdAt kan Timestamp zijn)
-  const tsToMs = (t) => {
-    try {
-      if (!t) return 0;
-      if (typeof t.toMillis === "function") return t.toMillis();
-      if (typeof t.seconds === "number") return t.seconds * 1000;
-      return 0;
-    } catch {
-      return 0;
-    }
-  };
+  // sort binnen buckets (oud->nieuw)
   for (const bucket of perPlayer.values()) {
     bucket.moves.sort((a, b) => tsToMs(a.createdAt) - tsToMs(b.createdAt));
     bucket.actions.sort((a, b) => tsToMs(a.createdAt) - tsToMs(b.createdAt));
@@ -2690,7 +2690,7 @@ async function renderLeadCommandCenter() {
   header.textContent = `Ronde ${round} – overzicht van alle keuzes per speler.`;
   leadCommandContent.appendChild(header);
 
-  const orderedPlayers = sortPlayersByJoinOrder(players);
+  const orderedPlayers = sortPlayersByJoinOrder(players || []);
 
   if (!orderedPlayers.length) {
     const msg = document.createElement("p");
@@ -2750,7 +2750,6 @@ async function renderLeadCommandCenter() {
         items.forEach((a) => {
           const line = document.createElement("div");
           line.className = "lead-phase-line";
-          // let op: jouw nieuwe formatter pakt ook payload mee
           line.textContent = formatChoiceForDisplay(phaseKey, a.choice, a.payload || null);
           col.appendChild(line);
         });
@@ -2792,10 +2791,29 @@ async function openLeadCommandCenter() {
   }
 
   leadCommandModalOverlay.classList.remove("hidden");
-  await renderLeadCommandCenter();
+
+  const round = currentGame.round || 0;
+  const players = await fetchPlayersForGame(); // snapshot (goed genoeg)
+
+  // Live log stream voor deze ronde
+  stopLeadCommandCenterLive();
+
+  const logCol = collection(db, "games", gameId, "log");
+  const logQ = query(
+    logCol,
+    where("round", "==", round),
+    orderBy("createdAt", "asc"),
+    limit(600)
+  );
+
+  leadCCUnsub = onSnapshot(logQ, (qs) => {
+    const logs = qs.docs.map((d) => d.data());
+    renderLeadCommandCenterUI(round, players, logs);
+  });
 }
 
 function closeLeadCommandCenter() {
+  stopLeadCommandCenterLive();
   if (!leadCommandModalOverlay) return;
   leadCommandModalOverlay.classList.add("hidden");
 }
