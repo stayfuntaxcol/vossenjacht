@@ -94,10 +94,135 @@ const gameStatusDiv = document.getElementById("gameStatus");
 const hostStatusLine = document.getElementById("hostStatusLine");
 const hostFeedbackLine = document.getElementById("hostFeedbackLine");
 
-// Lead Fox Command Center
-const leadCommandModalOverlay = document.getElementById("leadCommandModalOverlay");
-const leadCommandModalClose = document.getElementById("leadCommandModalClose");
-const leadCommandContent = document.getElementById("leadCommandContent");
+// ===== LEAD FOX COMMAND CENTER (reads from /log) =====
+
+async function renderLeadCommandCenter() {
+  if (!leadCommandContent || !currentGame) return;
+
+  leadCommandContent.innerHTML = "";
+  const round = currentGame.round || 0;
+
+  const players = await fetchPlayersForGame();
+
+  // ✅ i.p.v. /actions → /log
+  const logCol = collection(db, "games", gameId, "log");
+  const logQ = query(logCol, orderBy("clientAt", "desc"), limit(800));
+  const snap = await getDocs(logQ);
+
+  const perPlayer = new Map();
+
+  snap.forEach((docSnap) => {
+    const d = docSnap.data() || {};
+    if ((d.round || 0) !== round) return;
+
+    // Alleen “keuzes” meenemen (jouw logMoveAction zet choice)
+    if (!d.playerId || !d.phase || !d.choice) return;
+
+    const pid = d.playerId;
+    const phase = d.phase;
+
+    let bucket = perPlayer.get(pid);
+    if (!bucket) {
+      bucket = { moves: [], actions: [], decisions: [] };
+      perPlayer.set(pid, bucket);
+    }
+
+    const row = {
+      choice: d.choice,
+      payload: d.payload || null,
+      createdAt: d.createdAt || null,
+      clientAt: d.clientAt || 0,
+    };
+
+    if (phase === "MOVE") bucket.moves.push(row);
+    else if (phase === "ACTIONS") bucket.actions.push(row);
+    else if (phase === "DECISION") bucket.decisions.push(row);
+  });
+
+  const header = document.createElement("p");
+  header.className = "lead-command-subtitle";
+  header.textContent = `Ronde ${round} – overzicht van alle keuzes per speler.`;
+  leadCommandContent.appendChild(header);
+
+  const orderedPlayers = sortPlayersByJoinOrder(players);
+
+  if (!orderedPlayers.length) {
+    const msg = document.createElement("p");
+    msg.textContent = "Er zijn nog geen spelers gevonden.";
+    msg.style.fontSize = "0.9rem";
+    msg.style.opacity = "0.8";
+    leadCommandContent.appendChild(msg);
+    return;
+  }
+
+  orderedPlayers.forEach((p) => {
+    const group = perPlayer.get(p.id) || { moves: [], actions: [], decisions: [] };
+
+    const block = document.createElement("div");
+    block.className = "lead-player-block";
+
+    const color = (p.color || p.denColor || p.den || "").toUpperCase();
+    if (color === "RED") block.classList.add("den-red");
+    else if (color === "BLUE") block.classList.add("den-blue");
+    else if (color === "GREEN") block.classList.add("den-green");
+    else if (color === "YELLOW") block.classList.add("den-yellow");
+
+    if (currentPlayer && p.id === currentPlayer.id) block.classList.add("is-self-lead");
+
+    const headerRow = document.createElement("div");
+    headerRow.className = "lead-player-header";
+
+    const nameEl = document.createElement("div");
+    nameEl.className = "lead-player-name";
+    nameEl.textContent = p.name || "Vos";
+
+    const denEl = document.createElement("div");
+    denEl.className = "lead-player-denpill";
+    denEl.textContent = color ? `Den ${color}` : "Den onbekend";
+
+    headerRow.appendChild(nameEl);
+    headerRow.appendChild(denEl);
+
+    const phaseGrid = document.createElement("div");
+    phaseGrid.className = "lead-phase-grid";
+
+    function buildPhaseCol(title, phaseKey, items) {
+      const col = document.createElement("div");
+      col.className = "lead-phase-col";
+
+      const tEl = document.createElement("div");
+      tEl.className = "lead-phase-title";
+      tEl.textContent = title;
+      col.appendChild(tEl);
+
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "lead-phase-line lead-phase-empty";
+        empty.textContent = "Nog geen keuze.";
+        col.appendChild(empty);
+      } else {
+        // oud → nieuw: payload meegeven
+        items.forEach((a) => {
+          const line = document.createElement("div");
+          line.className = "lead-phase-line";
+          line.textContent = formatChoiceForDisplay(phaseKey, a.choice, a.payload);
+          col.appendChild(line);
+        });
+      }
+
+      return col;
+    }
+
+    phaseGrid.appendChild(buildPhaseCol("MOVE", "MOVE", group.moves));
+    phaseGrid.appendChild(buildPhaseCol("ACTIONS", "ACTIONS", group.actions));
+    phaseGrid.appendChild(buildPhaseCol("DECISION", "DECISION", group.decisions));
+
+    block.appendChild(headerRow);
+    block.appendChild(phaseGrid);
+
+    leadCommandContent.appendChild(block);
+  });
+}
 
 // Koppeling van Action Card naam -> asset-bestand in /assets
 const ACTION_CARD_IMAGES = {
