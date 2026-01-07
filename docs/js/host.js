@@ -1853,7 +1853,7 @@ initAuth(async (authUser) => {
     const event =
       game.currentEventId && game.phase === "REVEAL" ? getEventById(game.currentEventId) : null;
 
-    const actionsCol = collection(db, "games", gameId, "actions");
+    const logCol = collection(db, "games", gameId, "log");
     const actionsQuery = query(actionsCol, where("round", "==", currentRoundForActions));
 
     if (unsubActions) unsubActions();
