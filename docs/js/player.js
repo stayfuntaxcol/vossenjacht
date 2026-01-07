@@ -2383,7 +2383,7 @@ async function playActionCard(index) {
   setHost("success", `Kaart gespeeld: ${cardName}`);
   hostSay("action_success");
 
-  const nextIndex = computeNextOpsIndex(game);
+  const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
   await updateDoc(gameRef, {
     opsTurnIndex: nextIndex,
     opsConsecutivePasses: 0,
@@ -2411,7 +2411,7 @@ async function passAction() {
     return;
   }
 
-  const nextIndex = computeNextOpsIndex(game);
+  const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
   const newPasses = (game.opsConsecutivePasses || 0) + 1;
 
   await updateDoc(gameRef, {
