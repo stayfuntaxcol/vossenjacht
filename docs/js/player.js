@@ -2732,51 +2732,71 @@ async function ensurePlayerDoc() {
   await setDoc(playerRef, seed, { merge: true });
 }
 
-// ===== MODAL CLOSE WIRING (plak onderaan player.js) =====
-function bindModalClose(overlayEl, closeBtnEl, closeFn) {
-  if (closeBtnEl) {
-    closeBtnEl.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      closeFn();
-    });
+// ===== MODAL CLOSE WIRING (SAFE: no redeclare) =====
+(() => {
+  // voorkom dubbel binden als dit blok per ongeluk 2x in player.js staat
+  if (globalThis.__VJ_MODAL_CLOSE_WIRING__) return;
+  globalThis.__VJ_MODAL_CLOSE_WIRING__ = true;
+
+  function bindModalClose(overlayEl, closeBtnEl, closeFn) {
+    if (closeBtnEl) {
+      closeBtnEl.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        closeFn();
+      });
+    }
+
+    // klik op backdrop sluit ook
+    if (overlayEl) {
+      overlayEl.addEventListener("click", (e) => {
+        if (e.target === overlayEl) closeFn();
+      });
+    }
   }
 
-  // Klik op de donkere achtergrond sluit ook
-  if (overlayEl) {
-    overlayEl.addEventListener("click", (e) => {
-      if (e.target === overlayEl) closeFn();
-    });
-  }
-}
+  // --- Lead Fox Command Center (IDs uit HTML) ---
+  const leadOverlay = document.getElementById("leadCommandModalOverlay");
+  const leadCloseBtn = document.getElementById("leadCommandModalClose");
 
-// Lead Fox Command Center
-bindModalClose(leadCommandModalOverlay, leadCommandModalClose, closeLeadCommandCenter);
+  const closeLead = () => {
+    try {
+      // als jouw functie bestaat, gebruik die
+      if (typeof closeLeadCommandCenter === "function") {
+        closeLeadCommandCenter();
+        return;
+      }
+    } catch {}
+    // fallback: gewoon verbergen
+    if (leadOverlay) leadOverlay.classList.add("hidden");
+  };
 
-// Action Cards Hand modal (jouw ids uit de HTML)
-const handModalOverlay = document.getElementById("handModalOverlay");
-const handModalClose   = document.getElementById("handModalClose");
+  bindModalClose(leadOverlay, leadCloseBtn, closeLead);
 
-function closeHandModal() {
-  if (!handModalOverlay) return;
-  handModalOverlay.classList.add("hidden");
-}
+  // --- Action Cards Hand modal (IDs uit HTML) ---
+  const handOverlay = document.getElementById("handModalOverlay");
+  const handCloseBtn = document.getElementById("handModalClose");
 
-bindModalClose(handModalOverlay, handModalClose, closeHandModal);
+  const closeHand = () => {
+    // als je elders al closeHandModal() hebt, mag die blijven bestaan,
+    // maar we hebben hem niet nodig
+    if (handOverlay) handOverlay.classList.add("hidden");
+  };
 
-// ESC sluit alles
-document.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape") return;
+  bindModalClose(handOverlay, handCloseBtn, closeHand);
 
-  // sluit lead CC
-  if (leadCommandModalOverlay && !leadCommandModalOverlay.classList.contains("hidden")) {
-    closeLeadCommandCenter();
-  }
-  // sluit action hand
-  if (handModalOverlay && !handModalOverlay.classList.contains("hidden")) {
-    closeHandModal();
-  }
-});
+  // --- ESC sluit overlays ---
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "Escape") return;
+
+      if (leadOverlay && !leadOverlay.classList.contains("hidden")) closeLead();
+      if (handOverlay && !handOverlay.classList.contains("hidden")) closeHand();
+    },
+    { passive: true }
+  );
+})();
 
 // ====== AUTH START ======
 initAuth(async () => {
