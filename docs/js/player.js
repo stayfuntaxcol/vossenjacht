@@ -2254,6 +2254,36 @@ async function selectDecision(kind) {
 
 // ===== ACTION CARDS / OPS =====
 
+  // ===== OPS TURN HELPER (needed by playActionCard/passAction) =====
+// Safe: geen "Identifier already declared" als je dit per ongeluk 2x plakt.
+window.computeNextOpsIndex = window.computeNextOpsIndex || function (game, players) {
+  const list = Array.isArray(players) ? players.slice() : [];
+
+  // Zelfde joinOrder logica als jij overal gebruikt
+  const ordered = (typeof sortPlayersByJoinOrder === "function")
+    ? sortPlayersByJoinOrder(list)
+    : list.sort((a, b) => {
+        const ao = Number.isFinite(a?.joinOrder) ? a.joinOrder : 999999;
+        const bo = Number.isFinite(b?.joinOrder) ? b.joinOrder : 999999;
+        return ao - bo;
+      });
+
+  // Alleen spelers die nog meedoen in de Yard
+  const active = ordered.filter((p) => p && p.inYard !== false && !p.dashed);
+
+  const n = active.length;
+  if (!n) return 0;
+
+  const curRaw =
+    game?.opsTurnIndex ??
+    game?.opsIndex ??
+    game?.actionsIndex ??
+    0;
+
+  const cur = Number.isFinite(Number(curRaw)) ? Number(curRaw) : 0;
+  return (cur + 1) % n;
+};
+
 async function playActionCard(index) {
   if (!gameRef || !playerRef) return;
 
