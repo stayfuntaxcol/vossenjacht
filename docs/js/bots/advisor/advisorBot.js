@@ -1,13 +1,14 @@
 // /bots/advisor/advisorBot.js
+// Log-first Advisor (single source of truth: /log)
+// - Werkt ook met legacy /actions docs (zelfde shape: round/phase/playerId/choice)
+// - Neemt roundState + flags uit logs mee (Den Signal / Scatter / No-Go Zone / Hold Still / Follow Tail / Burrow Beacon)
+// - Voorkomt “Defensief vs Aanvallend is hetzelfde” via lichte style tie-break
+// - Leakt geen event IDs/titels naar UI (sanitizers)
 
 import { ADVISOR_PROFILES } from "../core/botConfig.js";
 import { buildPlayerView } from "../core/stateView.js";
 import { getUpcomingEvents } from "../core/eventIntel.js";
-import {
-  scoreMoveMoves,
-  scoreOpsPlays,
-  scoreDecisions,
-} from "../core/scoring.js";
+import { scoreMoveMoves, scoreOpsPlays, scoreDecisions } from "../core/scoring.js";
 
 // Action defs + info (1 bron: cards.js)
 import { getActionDefByName, getActionInfoByName } from "../../cards.js";
@@ -46,8 +47,7 @@ function adaptAdvisorView(rawView, fallback = {}) {
     : [];
 
   // eventCursor is jouw pointer; advisor helpers gebruiken game.eventIndex
-  const eventIndexRaw =
-    r.eventCursor ?? r.eventIndex ?? fbGame.eventIndex ?? 0;
+  const eventIndexRaw = r.eventCursor ?? r.eventIndex ?? fbGame.eventIndex ?? 0;
   const eventIndex = Number.isFinite(Number(eventIndexRaw)) ? Number(eventIndexRaw) : 0;
 
   const flagsRound = r.flags ?? fbGame.flagsRound ?? {};
@@ -59,7 +59,6 @@ function adaptAdvisorView(rawView, fallback = {}) {
     ? r.players
     : fbPlayers;
 
-  // bouw een "game" object met de keys die advisor code verwacht
   const game = {
     ...fbGame,
     phase,
@@ -68,13 +67,11 @@ function adaptAdvisorView(rawView, fallback = {}) {
     eventIndex,
     flagsRound,
 
-    // laat deze door als ze bestaan (handig voor kansen)
     roosterSeen: r.roosterSeen ?? fbGame.roosterSeen ?? 0,
     leadIndex: r.leadIndex ?? fbGame.leadIndex ?? 0,
     eventRevealed: r.eventRevealed ?? fbGame.eventRevealed ?? null,
   };
 
-  // return: behoud raw keys + voeg aliases toe
   return {
     ...r,
     game,
@@ -90,12 +87,11 @@ function adaptAdvisorView(rawView, fallback = {}) {
 }
 
 // ------------------------------
-// Hand -> action names (strings of objects)
+// Hand -> action names
 // ------------------------------
 function normalizeActionName(x) {
   const name =
-    typeof x === "string" ? x :
-    (x?.name || x?.id || x?.cardId || "");
+    typeof x === "string" ? x : x?.name || x?.id || x?.cardId || "";
   return String(name).trim();
 }
 
@@ -176,34 +172,16 @@ function labelPlay(x) {
   if (x.play === "PASS") return "PASS";
   return `Speel: ${x.cardId || x.cardName || x.name || "?"}`;
 }
-
 function labelMove(x) {
   return x?.move || "—";
 }
-
 function labelDecision(x) {
   return x?.decision || "—";
 }
 
 // ------------------------------
-// Game helpers: lead fox & revealed dens
+// Lead fox helper
 // ------------------------------
-const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
-const KNOWN_EVENT_IDS = [
-  "DOG_CHARGE",
-  "SECOND_CHARGE",
-  "SHEEPDOG_PATROL",
-  "HIDDEN_NEST",
-  "GATE_TOLL",
-  "MAGPIE_SNITCH",
-  "PAINT_BOMB_NEST",
-  "ROOSTER_CROW",
-  "DEN_RED",
-  "DEN_BLUE",
-  "DEN_GREEN",
-  "DEN_YELLOW",
-];
-
 function computeLeadFoxId(game, players) {
   const list = Array.isArray(players) ? [...players] : [];
   const ordered = list.sort((a, b) => {
@@ -223,24 +201,9 @@ function computeLeadFoxId(game, players) {
   return lf?.id || null;
 }
 
-function getRevealedEventIds(game) {
-  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
-  const revealed = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
-  const idx = typeof game?.eventIndex === "number" ? game.eventIndex : 0;
-
-  // voorkeur: eventIndex (alles < idx is gespeeld)
-  if (idx > 0 && idx <= track.length) {
-    return track.slice(0, idx).filter(Boolean);
-  }
-
-  // fallback: eventRevealed flags
-  const out = [];
-  for (let i = 0; i < track.length; i++) {
-    if (revealed[i]) out.push(track[i]);
-  }
-  return out.filter(Boolean);
-}
-
+// ------------------------------
+// Event track helpers
+// ------------------------------
 function getRemainingEventIds(game) {
   const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
   const idx = typeof game?.eventIndex === "number" ? game.eventIndex : 0;
@@ -250,17 +213,7 @@ function getRemainingEventIds(game) {
 function extractDenColorFromEventId(eventId) {
   if (!eventId) return null;
   if (!String(eventId).startsWith("DEN_")) return null;
-  return String(eventId).substring(4).toUpperCase(); // RED/BLUE/GREEN/YELLOW
-}
-
-function getSeenDenColors(game) {
-  const seen = new Set();
-  const revealedIds = getRevealedEventIds(game);
-  for (const id of revealedIds) {
-    const c = extractDenColorFromEventId(id);
-    if (c) seen.add(c);
-  }
-  return seen;
+  return String(eventId).substring(4).toUpperCase();
 }
 
 // ------------------------------
@@ -276,13 +229,146 @@ function getLootCount(p) {
 }
 
 // ------------------------------
-// Event danger evaluation (voor "LURK" baseline)
-// - Sheepdog Patrol: veilig als je LURK (gevaarlijk als je DASH)
-// - Gate Toll: gevaarlijk als je 0 loot en je niet DASHt
-// - Magpie Snitch: gevaarlijk als je Lead Fox en je niet BURROW/DASH
-// - Den events: gevaarlijk als het jouw kleur is (tenzij je jezelf beschermt)
-// - DOG/SECOND charge: gevaarlijk voor iedereen (LURK), tenzij je jezelf beschermt
-// - Rooster Crow: alleen gevaarlijk als het de 3e is (roosterSeen==2 en er komt nog een ROOSTER)
+// /log adapter (accept /log or legacy /actions)
+// ------------------------------
+function normalizeLogRow(d) {
+  const x = d || {};
+  const round = Number.isFinite(Number(x.round)) ? Number(x.round) : 0;
+
+  const phaseNorm = normalizePhase(x.phase);
+  const playerId = x.playerId || x.actorId || null;
+
+  const choice = typeof x.choice === "string" ? x.choice : (x.choice == null ? "" : String(x.choice));
+  const payload = x.payload && typeof x.payload === "object" ? x.payload : null;
+
+  const createdAt = x.createdAt || null;
+  const clientAt = Number.isFinite(Number(x.clientAt)) ? Number(x.clientAt) : 0;
+
+  return {
+    round,
+    phase: phaseNorm,
+    kind: x.kind || null,
+    type: x.type || null,
+    playerId,
+    choice,
+    payload,
+    createdAt,
+    clientAt,
+  };
+}
+
+// ------------------------------
+// RoundState uit /log (keuzes + flags + tellingen)
+// ------------------------------
+function buildRoundStateFromLog(logs, round) {
+  const state = {
+    round,
+    choices: { move: {}, ops: {}, decision: {} },
+    decisionCounts: { LURK: 0, BURROW: 0, DASH: 0 },
+    flags: {
+      scatter: false,
+      lockEvents: false,
+      denImmune: {},     // {RED:true}
+      noPeek: [],        // [pos]
+      holdStill: {},     // {playerId:true}
+      followTail: {},    // {followerId: targetId}
+    },
+  };
+
+  const arr = Array.isArray(logs) ? logs : [];
+  for (const raw of arr) {
+    const d = normalizeLogRow(raw);
+    if ((d.round || 0) !== round) continue;
+    if (!d.playerId || !d.phase) continue;
+    if (!d.choice) continue;
+
+    if (d.phase === "MOVE") {
+      state.choices.move[d.playerId] = { choice: d.choice, payload: d.payload || null };
+    } else if (d.phase === "OPS") {
+      state.choices.ops[d.playerId] = { choice: d.choice, payload: d.payload || null };
+
+      // flags afleiden uit ACTION_* keuzes
+      if (String(d.choice).startsWith("ACTION_")) {
+        const name = String(d.choice).slice("ACTION_".length);
+
+        if (name === "Scatter!") state.flags.scatter = true;
+        if (name === "Burrow Beacon") state.flags.lockEvents = true;
+
+        if (name === "Den Signal") {
+          const c = String(d.payload?.color || "").trim().toUpperCase();
+          if (c) state.flags.denImmune[c] = true;
+        }
+
+        if (name === "No-Go Zone") {
+          const pos = Number(d.payload?.pos);
+          if (Number.isFinite(pos)) state.flags.noPeek.push(pos);
+        }
+
+        if (name === "Hold Still") {
+          const tid = d.payload?.targetId;
+          if (tid) state.flags.holdStill[tid] = true;
+        }
+
+        if (name === "Follow the Tail") {
+          const tid = d.payload?.targetId;
+          if (tid) state.flags.followTail[d.playerId] = tid;
+        }
+      }
+    } else if (d.phase === "DECISION") {
+      state.choices.decision[d.playerId] = { choice: d.choice, payload: d.payload || null };
+      if (d.choice === "DECISION_LURK") state.decisionCounts.LURK++;
+      if (d.choice === "DECISION_BURROW") state.decisionCounts.BURROW++;
+      if (d.choice === "DECISION_DASH") state.decisionCounts.DASH++;
+    }
+  }
+
+  // dedupe noPeek
+  state.flags.noPeek = [...new Set(state.flags.noPeek.filter((n) => Number.isFinite(Number(n))))];
+
+  return state;
+}
+
+// ------------------------------
+// Merge flags: game.flagsRound + log-derived flags
+// ------------------------------
+function mergeEffectiveFlags(gameFlags, logFlags) {
+  const g = gameFlags || {};
+  const l = logFlags || {};
+
+  const denImmune = {
+    ...(g.denImmune || {}),
+    ...(l.denImmune || {}),
+  };
+
+  const noPeek = [...new Set([...(g.noPeek || []), ...(l.noPeek || [])])];
+
+  return {
+    ...g,
+    ...l,
+    denImmune,
+    noPeek,
+    followTail: { ...(g.followTail || {}), ...(l.followTail || {}) },
+    holdStill: { ...(g.holdStill || {}), ...(l.holdStill || {}) },
+  };
+}
+
+// ------------------------------
+// Kans / risico helpers
+// ------------------------------
+function normalizeColorKey(c) {
+  if (!c) return "";
+  return String(c).trim().toUpperCase();
+}
+
+function isDenImmuneForColor(flagsRound, color) {
+  const key = normalizeColorKey(color);
+  const map = flagsRound?.denImmune || {};
+  return !!(map[key] || map[key.toLowerCase()]);
+}
+
+// ------------------------------
+// Event danger evaluation (LURK baseline)
+// Houdt rekening met Den Signal (immune) via ctx.denSignalActive
 // ------------------------------
 function isDangerousEventForMe(eventId, ctx) {
   const id = String(eventId || "");
@@ -293,56 +379,43 @@ function isDangerousEventForMe(eventId, ctx) {
     return (ctx.roosterSeen ?? 0) >= 2;
   }
 
-  // charges zijn gevaarlijk voor iedereen als je LURK
+  // Charges: gevaarlijk tenzij Den Signal actief voor jouw kleur
   if (id === "DOG_CHARGE" || id === "SECOND_CHARGE") {
-    return true;
+    return !ctx.denSignalActive;
   }
 
-  // Den event: alleen jouw kleur gevaarlijk
+  // Den event: gevaarlijk als jouw kleur, tenzij Den Signal actief
   if (id.startsWith("DEN_")) {
     const c = extractDenColorFromEventId(id);
     if (!c) return false;
-    return c === ctx.myColor;
+    if (c !== ctx.myColor) return false;
+    return !ctx.denSignalActive;
   }
 
-  // Sheepdog Patrol: alleen gevaarlijk als je DASH (dus baseline LURK = veilig)
-  if (id === "SHEEPDOG_PATROL") {
-    return false;
-  }
+  // Sheepdog Patrol: alleen gevaarlijk als je DASH (baseline LURK = veilig)
+  if (id === "SHEEPDOG_PATROL") return false;
 
   // Gate Toll: als je geen loot hebt, word je gepakt (als je niet DASHt)
-  if (id === "GATE_TOLL") {
-    return (ctx.lootCount ?? 0) <= 0;
-  }
+  if (id === "GATE_TOLL") return (ctx.lootCount ?? 0) <= 0;
 
   // Magpie Snitch: gevaarlijk voor Lead Fox als je niet BURROW/DASH (baseline LURK = gevaar)
-   if (id === "MAGPIE_SNITCH") {
-    return !!ctx.isLead;
-  }
+  if (id === "MAGPIE_SNITCH") return !!ctx.isLead;
 
-  // Hidden Nest / Paint bomb: niet “gevaarlijk” (wel strategisch/nadelig)
   return false;
 }
 
-// ------------------------------
-// Event "harmful" evaluation (veilig, maar nadelig voor score/bonus)
-// - Paint Bomb Nest: Sack gaat terug naar Loot Deck → minder eindbonus voor dashers
-// ------------------------------
+// "harmful" evaluation (veilig, maar nadelig)
 function isHarmfulEventForMe(eventId, ctx) {
   const id = String(eventId || "");
   if (!id) return false;
 
   if (id === "PAINT_BOMB_NEST") {
-    // vooral nadelig als er al iets in de Sack zit
     return (ctx.sackCount ?? 0) > 0;
   }
 
   return false;
 }
 
-// ------------------------------
-// Kansberekening (zonder spieken): "als het volgende event willekeurig uit resterend deck komt"
-// ------------------------------
 function calcDangerProbFromRemaining(remainingIds, ctx) {
   const ids = Array.isArray(remainingIds) ? remainingIds.filter(Boolean) : [];
   if (!ids.length) return 0;
@@ -364,7 +437,6 @@ function countRemainingOf(remainingIds, predicate) {
 function clamp01(x) {
   return Math.max(0, Math.min(1, Number(x) || 0));
 }
-
 function pct(x) {
   return `${Math.round(clamp01(x) * 100)}%`;
 }
@@ -372,36 +444,46 @@ function pct(x) {
 // ------------------------------
 // Bullet sanitizing: geen Event IDs/titels lekken
 // ------------------------------
+const KNOWN_EVENT_IDS = [
+  "DOG_CHARGE",
+  "SECOND_CHARGE",
+  "SHEEPDOG_PATROL",
+  "HIDDEN_NEST",
+  "GATE_TOLL",
+  "MAGPIE_SNITCH",
+  "PAINT_BOMB_NEST",
+  "ROOSTER_CROW",
+  "DEN_RED",
+  "DEN_BLUE",
+  "DEN_GREEN",
+  "DEN_YELLOW",
+];
+
 function sanitizeTextNoEventNames(text) {
   let s = String(text || "");
 
-  // vervang bekende event IDs met neutrale termen
   for (const id of KNOWN_EVENT_IDS) {
     const re = new RegExp(`\\b${id}\\b`, "g");
     s = s.replace(re, "opkomend event");
   }
-
-  // vervang DEN_{kleur} varianten generiek
   s = s.replace(/\bDEN_(RED|BLUE|GREEN|YELLOW)\b/g, "Den-event");
 
-  // vervang veelvoorkomende titels (als scoring die ooit gebruikt)
   s = s.replace(/\bRooster Crow\b/gi, "rooster-event");
   s = s.replace(/\bHidden Nest\b/gi, "bonus-event");
   s = s.replace(/\bSheepdog Patrol\b/gi, "patrol-event");
   s = s.replace(/\bSecond Charge\b/gi, "charge-event");
-  s = s.replace(/\bSheepdog Charge\b/gi, "charge-event");  
+  s = s.replace(/\bSheepdog Charge\b/gi, "charge-event");
   s = s.replace(/\bPaint[- ]?Bomb Nest\b/gi, "sack-reset event");
 
   return s;
 }
-
 function sanitizeBullets(bullets) {
   const arr = Array.isArray(bullets) ? bullets : [];
   return arr.map(sanitizeTextNoEventNames);
 }
 
 // ------------------------------
-// Headerregels (zonder “opkomend: IDs”)
+// Headerregels
 // ------------------------------
 function headerLinesCompact(view, riskMeta) {
   return [
@@ -411,7 +493,7 @@ function headerLinesCompact(view, riskMeta) {
 }
 
 // ------------------------------
-// Extra adviesregels (based on jouw nieuwe regels)
+// Spelerslijst helpers
 // ------------------------------
 function getPlayersList(view, players) {
   return (view?.playersPublic || view?.players || players || []).filter(Boolean);
@@ -419,14 +501,9 @@ function getPlayersList(view, players) {
 
 function resolveMyDenColor(view, me, players) {
   const m = view?.me || me || {};
-
-  // 1) direct op me
-  const direct =
-    m.den ?? m.color ?? m.denColor ?? m.playerColor ?? m.maskColor ?? "";
-
+  const direct = m.den ?? m.color ?? m.denColor ?? m.playerColor ?? m.maskColor ?? "";
   let c = String(direct || "").trim();
 
-  // 2) fallback: zoek mezelf in spelerslijst
   if (!c) {
     const list = getPlayersList(view, players);
     const found = list.find((p) => p?.id === m?.id || p?.playerId === m?.id);
@@ -435,10 +512,14 @@ function resolveMyDenColor(view, me, players) {
   }
 
   c = c.toUpperCase();
-  if (!["RED", "BLUE", "GREEN", "YELLOW"].includes(c)) return ""; // onbekend
+  if (!["RED", "BLUE", "GREEN", "YELLOW"].includes(c)) return "";
   return c;
 }
-  function buildRiskMeta({ view, game, me, players, upcomingPeek }) {
+
+// ------------------------------
+// Risk meta (met effective flags)
+// ------------------------------
+function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags }) {
   const myColor = resolveMyDenColor(view, me, players);
   const roosterSeen = Number(game?.roosterSeen || 0);
 
@@ -450,14 +531,14 @@ function resolveMyDenColor(view, me, players) {
   const leadFoxId = computeLeadFoxId(game, players);
   const isLead = !!me?.id && leadFoxId === me.id;
 
-  const ctx = { myColor, roosterSeen, lootCount, lootPts, isLead, sackCount };
+  const denSignalActive = myColor ? isDenImmuneForColor(effectiveFlags, myColor) : false;
+
+  const ctx = { myColor, roosterSeen, lootCount, lootPts, isLead, sackCount, denSignalActive };
 
   const remaining = getRemainingEventIds(game);
 
-  // kans zonder spieken
   const probNextDanger = calcDangerProbFromRemaining(remaining, ctx);
 
-  // "harmful" kans zonder spieken (veilig maar nadelig)
   const total = remaining.length || 1;
   const probNextHarmful =
     remaining.length
@@ -466,16 +547,13 @@ function resolveMyDenColor(view, me, players) {
 
   // uitsplitsing (zonder namen): den van jouw kleur, charges, 3e rooster
   const myDenId = myColor ? `DEN_${myColor}` : null;
-  const pMyDen =
-    myDenId ? countRemainingOf(remaining, (id) => String(id) === myDenId) / total : 0;
+  const pMyDen = myDenId ? countRemainingOf(remaining, (id) => String(id) === myDenId) / total : 0;
 
   const pCharges =
     countRemainingOf(remaining, (id) => id === "DOG_CHARGE" || id === "SECOND_CHARGE") / total;
 
   const pThirdRooster =
-    roosterSeen >= 2
-      ? countRemainingOf(remaining, (id) => id === "ROOSTER_CROW") / total
-      : 0;
+    roosterSeen >= 2 ? countRemainingOf(remaining, (id) => id === "ROOSTER_CROW") / total : 0;
 
   // peek (advisor mag intern weten, maar nooit benoemen)
   const nextId = upcomingPeek?.[0]?.id || null;
@@ -502,7 +580,79 @@ function resolveMyDenColor(view, me, players) {
 }
 
 // ------------------------------
-// OPS: tactische override aanbeveling (zonder event namen te lekken)
+// Style tie-break (maakt Def/Agg vaker verschillend)
+// ------------------------------
+function postRankByStyle(ranked, style) {
+  const arr = Array.isArray(ranked) ? ranked.slice() : [];
+  if (!arr.length) return arr;
+
+  const bump = (x, delta) => ({ ...x, score: (Number(x.score) || 0) + delta });
+
+  // MOVE opties (strings)
+  const moveName = (x) => String(x?.move || "").toUpperCase();
+
+  // OPS (play)
+  const playName = (x) => String(x?.play || x?.cardId || x?.cardName || "").toUpperCase();
+
+  // DECISION
+  const decName = (x) => String(x?.decision || "").toUpperCase();
+
+  if (style === "DEFENSIVE") {
+    return arr
+      .map((x) => {
+        const m = moveName(x);
+        const d = decName(x);
+        const p = playName(x);
+        let delta = 0;
+
+        if (m.includes("SHIFT")) delta += 0.18;
+        if (m.includes("SCOUT")) delta += 0.06;
+
+        if (m.includes("SNATCH")) delta -= 0.05; // iets minder greedy
+        if (m.includes("FORAGE")) delta -= 0.04;
+
+        if (d === "BURROW") delta += 0.08;
+        if (d === "LURK") delta += 0.05;
+        if (d === "DASH") delta -= 0.06;
+
+        if (p.includes("DEN SIGNAL")) delta += 0.08;
+        if (p.includes("BURROW BEACON")) delta += 0.05;
+
+        return bump(x, delta);
+      })
+      .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
+  }
+
+  if (style === "AGGRESSIVE") {
+    return arr
+      .map((x) => {
+        const m = moveName(x);
+        const d = decName(x);
+        const p = playName(x);
+        let delta = 0;
+
+        if (m.includes("SNATCH")) delta += 0.12;
+        if (m.includes("FORAGE")) delta += 0.08;
+
+        if (m.includes("SHIFT")) delta -= 0.03; // minder “veilig zetten”
+        if (m.includes("SCOUT")) delta -= 0.02;
+
+        if (d === "DASH") delta += 0.10;
+        if (d === "LURK") delta -= 0.02;
+
+        if (p.includes("PACK TINKER")) delta += 0.06;
+        if (p.includes("KICK UP DUST")) delta += 0.04;
+
+        return bump(x, delta);
+      })
+      .sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
+  }
+
+  return arr;
+}
+
+// ------------------------------
+// OPS: tactische override (met effective flags)
 // ------------------------------
 function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
   const lines = [];
@@ -510,17 +660,24 @@ function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
 
   const myColor = riskMeta.ctx.myColor || "?";
   const flags = view?.game?.flagsRound || view?.flags || {};
-  const denImmune = flags?.denImmune || {};
-  const denSignalActiveForMe = !!denImmune[myColor] || !!denImmune[String(myColor).toLowerCase()];
+  const denSignalActiveForMe = myColor ? isDenImmuneForColor(flags, myColor) : false;
 
-  // Als de volgende kaart gevaarlijk is: liefst eerst “veiligstellen”
+  // Volgende kaart gevaarlijk → eerst veiligstellen
   if (riskMeta.nextIsDanger) {
-    // Charges / Den van jouw kleur → Den Signal is top
     if (has("Den Signal") && !denSignalActiveForMe) {
       lines.push("OPS tip: speel **Den Signal** op je eigen Den-kleur om jezelf veilig te zetten tegen charges en jouw Den-event.");
     }
 
-    // Sack-reset (Paint Bomb Nest): veilig maar nadelig → liever naar achteren
+    if (riskMeta.pMyDen >= 0.10) {
+      if (has("Molting Mask")) lines.push("OPS tip: bij Den-gevaar is **Molting Mask** heel sterk (willekeurige nieuwe Den-kleur).");
+      if (has("Mask Swap")) lines.push("OPS tip: **Mask Swap** is een alternatief als er andere actieve spelers in de Yard zijn.");
+    }
+
+    if (has("Pack Tinker")) lines.push("OPS tip: overweeg **Pack Tinker** om gevaar verder naar achter te schuiven.");
+    if (has("Kick Up Dust")) lines.push("OPS tip: **Kick Up Dust** kan toekomstige events herschudden (als de track niet gelocked is).");
+  }
+
+  // Sack-reset event (intern)
   if (riskMeta.nextId === "PAINT_BOMB_NEST") {
     if ((riskMeta.ctx.sackCount ?? 0) > 0) {
       lines.push("Let op: volgende kaart is een **sack-reset event** → huidige Sack verdwijnt terug de Loot Deck in (minder eindbonus voor dashers).");
@@ -531,32 +688,13 @@ function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
     }
   }
 
-    // Als risico vooral “Den van jouw kleur” is → Molting/Mask Swap zijn sterk
-    if (riskMeta.pMyDen >= 0.10) {
-      if (has("Molting Mask")) {
-        lines.push("OPS tip: bij Den-gevaar is **Molting Mask** heel sterk (willekeurige nieuwe Den-kleur).");
-      }
-      if (has("Mask Swap")) {
-        lines.push("OPS tip: **Mask Swap** is een alternatief als er andere actieve spelers in de Yard zijn.");
-      }
-    }
-
-    // Hoge algemene dreiging → probeer track te “repareren”
-    if (has("Pack Tinker")) {
-      lines.push("OPS tip: overweeg **Pack Tinker** om gevaar verder naar achter te schuiven.");
-    }
-    if (has("Kick Up Dust")) {
-      lines.push("OPS tip: **Kick Up Dust** kan toekomstige events herschudden (als Burrow Beacon niet lockt).");
-    }
-  }
-
-  // Speciaal: “bonus-event voor DASH” (Hidden Nest) – niet benoemen, wel uitleg
+  // Bonus-event voor DASH (intern)
   if (riskMeta.nextId === "HIDDEN_NEST") {
     lines.push("Let op: volgende kaart is een **DASH-bonus event**. Bonus werkt alleen als 1–3 spelers DASH kiezen (3/2/1 loot).");
     lines.push("Strategie: vaak beter om dit bonus-event later te zetten (Pack Tinker / SHIFT), zodat je niet direct uit de Yard vertrekt.");
   }
 
-  // Speciaal: Rooster-event
+  // Rooster (intern)
   if (riskMeta.nextId === "ROOSTER_CROW") {
     if ((view?.game?.roosterSeen || 0) >= 2) {
       lines.push("Alarm: een **3e rooster-event** is gevaarlijk (raid eindigt). Probeer dit naar achteren te schuiven (Pack Tinker / SHIFT).");
@@ -569,33 +707,39 @@ function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
 }
 
 // ------------------------------
-// DECISION: tactische guidance (Den Signal rule + Hidden Nest dash boost)
+// DECISION: tactische guidance (Den Signal + Hold Still + Hidden Nest)
 // ------------------------------
 function decisionTacticalAdvice({ view, riskMeta }) {
   const lines = [];
   const g = view?.game || {};
   const myColor = riskMeta.ctx.myColor || "";
-
   const flags = g.flagsRound || view?.flags || {};
-  const denImmune = flags.denImmune || {};
-  const denSignalActiveForMe = !!denImmune[myColor] || !!denImmune[String(myColor).toLowerCase()];
 
-  // JOUW regel:
-  // Den Signal (eigen kleur gekozen) => veilig tegen charges + jouw Den-event => in DECISION: LURK (niet BURROW/DASH)
-  if (denSignalActiveForMe) {
-    lines.push(`Den Signal actief voor jouw kleur → **kies LURK** (dus niet BURROW/DASH).`);
+  const denSignalActiveForMe = myColor ? isDenImmuneForColor(flags, myColor) : false;
+
+  // Hold Still op mij? (DASH wordt toch LURK in engine)
+  const holdStill = flags?.holdStill || {};
+  if (view?.me?.id && holdStill[view.me.id]) {
+    lines.push("Let op: **Hold Still** is op jou gespeeld → DASH werkt niet (je blijft LURK).");
   }
 
-  // Bonus-event voor DASH (Hidden Nest) => hoog DASH advies (aggressief), maar met nuance
+  // Jouw regel: Den Signal actief → kies LURK
+  if (denSignalActiveForMe) {
+    lines.push("Den Signal actief voor jouw kleur → **kies LURK** (dus niet BURROW/DASH).");
+  }
+
+  // Hidden Nest: advies afhankelijk van hoeveel dashers er al zijn
   if (riskMeta.nextId === "HIDDEN_NEST") {
-    const all = Array.isArray(view?.players) ? view.players : (Array.isArray(view?.playersPublic) ? view.playersPublic : []);
-    const active = all.filter((p) => p?.inYard !== false && !p?.dashed);
-    const activeCount = active.length;
+    const dashSoFar = view?.roundState?.decisionCounts?.DASH ?? 0;
 
     lines.push("Aggressief: **DASH** kan hier extra loot opleveren (alleen als 1–3 spelers DASH kiezen: 3/2/1).");
-    if (activeCount > 3) {
-      lines.push("Waarschuwing: met 4+ spelers tegelijk DASH is er **geen** bonus.");
+
+    if (dashSoFar >= 3) {
+      lines.push("Waarschuwing: er zijn al veel DASH-keuzes → bonus wordt snel 0.");
+    } else {
+      lines.push("Check: als jij DASH kiest, probeer te mikken op totaal 1–3 dashers voor maximale bonus.");
     }
+
     lines.push("Strategie: meestal is het beter om dit bonus-event later te zetten (Pack Tinker / SHIFT), zodat je niet te vroeg uit de Yard vertrekt.");
   }
 
@@ -614,30 +758,39 @@ export function getAdvisorHint({
   game,
   me,
   players,
-  actions = [],
+  actions = [],        // <-- geef hier /log docs door (of legacy /actions; werkt ook)
   profileKey = "BEGINNER_COACH",
 }) {
-  const baseProfile =
-    ADVISOR_PROFILES[profileKey] || ADVISOR_PROFILES.BEGINNER_COACH;
+  const baseProfile = ADVISOR_PROFILES[profileKey] || ADVISOR_PROFILES.BEGINNER_COACH;
 
   const profileDef = deriveProfile(baseProfile, "DEFENSIVE");
   const profileAgg = deriveProfile(baseProfile, "AGGRESSIVE");
 
-  // 1) raw view uit jouw builder
-  const rawView = buildPlayerView({ game, me, players, actions });
+  // Normaliseer actions/logs naar log-rows
+  const logs = Array.isArray(actions) ? actions.map(normalizeLogRow) : [];
 
-  // 2) adapter: maakt view.game/view.players etc consistent
+  // 1) raw view uit jouw builder (mag actions krijgen; we maken het tolerant)
+  const rawView = buildPlayerView({ game, me, players, actions: logs });
+
+  // 2) adapter
   const view = adaptAdvisorView(rawView, { game, me, players });
-
   const phase = normalizePhase(view.phase || view.game?.phase);
+
+  // Build roundState uit logs
+  const round = Number(view.round ?? view.game?.round ?? 0) || 0;
+  const roundState = buildRoundStateFromLog(logs, round);
+  view.roundState = roundState;
+
+  // effective flags: game.flagsRound + log-derived flags
+  const effectiveFlags = mergeEffectiveFlags(view.game?.flagsRound || {}, roundState.flags || {});
+  view.game.flagsRound = effectiveFlags;
+  view.flags = effectiveFlags;
 
   // advisor mag intern “peek” (2 upcoming), maar we tonen nooit IDs/titels
   const upcomingPeek = getUpcomingEvents(view, 2) || [];
 
-  // hand normaliseren voor scoring + debug
+  // hand normaliseren
   const handMeta = summarizeHandRecognition(view.me || me || {});
-
-  // scoring-safe hand: array van objects {id,name}
   if (view?.me) {
     view.me.handNames = handMeta.names;
     view.me.handKnown = handMeta.known;
@@ -652,6 +805,7 @@ export function getAdvisorHint({
     me: view.me || me,
     players: view.players || players,
     upcomingPeek,
+    effectiveFlags,
   });
 
   const riskBullets = [
@@ -663,8 +817,11 @@ export function getAdvisorHint({
   // MOVE
   // =======================
   if (phase === "MOVE") {
-    const rankedDef = scoreMoveMoves({ view, upcoming: upcomingPeek, profile: profileDef }) || [];
-    const rankedAgg = scoreMoveMoves({ view, upcoming: upcomingPeek, profile: profileAgg }) || [];
+    const rankedDef0 = scoreMoveMoves({ view, upcoming: upcomingPeek, profile: profileDef }) || [];
+    const rankedAgg0 = scoreMoveMoves({ view, upcoming: upcomingPeek, profile: profileAgg }) || [];
+
+    const rankedDef = postRankByStyle(rankedDef0, "DEFENSIVE");
+    const rankedAgg = postRankByStyle(rankedAgg0, "AGGRESSIVE");
 
     const bestDef = safeBest(rankedDef, { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" });
     const bestAgg = safeBest(rankedAgg, { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" });
@@ -672,7 +829,6 @@ export function getAdvisorHint({
     const defBullets = sanitizeBullets(bestDef.bullets || []);
     const aggBullets = sanitizeBullets(bestAgg.bullets || []);
 
-    // extra strategy hints (zonder event namen)
     const strat = [];
     if (riskMeta.probNextDanger >= 0.35) {
       strat.push("Strategie: kans op gevaar is vrij hoog → overweeg **SHIFT** (MOVE) om gevaar naar achter te duwen.");
@@ -686,6 +842,7 @@ export function getAdvisorHint({
     if (riskMeta.nextId === "PAINT_BOMB_NEST" && (riskMeta.ctx.sackCount ?? 0) > 0) {
       strat.push("Strategie: er komt een sack-reset event aan en de Sack is gevuld → overweeg **SHIFT** om dit naar achteren te duwen.");
     }
+
     return {
       title: `MOVE advies • Def: ${labelMove(bestDef)} • Agg: ${labelMove(bestAgg)}`,
       confidence: Math.max(bestDef.confidence ?? 0.65, bestAgg.confidence ?? 0.65),
@@ -706,12 +863,17 @@ export function getAdvisorHint({
       debug: {
         phase: view.phase,
         hand: handMeta,
+        roundState: {
+          decisionCounts: view.roundState?.decisionCounts || null,
+          flags: view.roundState?.flags || null,
+        },
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           probNextDanger: riskMeta.probNextDanger,
           pMyDen: riskMeta.pMyDen,
           pCharges: riskMeta.pCharges,
           pThirdRooster: riskMeta.pThirdRooster,
+          denSignalActive: !!riskMeta.ctx.denSignalActive,
         },
       },
     };
@@ -721,8 +883,11 @@ export function getAdvisorHint({
   // OPS
   // =======================
   if (phase === "OPS") {
-    const defRanked = scoreOpsPlays({ view, upcoming: upcomingPeek, profile: profileDef, style: "DEFENSIVE" }) || [];
-    const aggRanked = scoreOpsPlays({ view, upcoming: upcomingPeek, profile: profileAgg, style: "AGGRESSIVE" }) || [];
+    const def0 = scoreOpsPlays({ view, upcoming: upcomingPeek, profile: profileDef, style: "DEFENSIVE" }) || [];
+    const agg0 = scoreOpsPlays({ view, upcoming: upcomingPeek, profile: profileAgg, style: "AGGRESSIVE" }) || [];
+
+    const defRanked = postRankByStyle(def0, "DEFENSIVE");
+    const aggRanked = postRankByStyle(agg0, "AGGRESSIVE");
 
     const bestDef = safeBest(defRanked, { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" });
     const bestAgg = safeBest(aggRanked, { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" });
@@ -772,12 +937,16 @@ export function getAdvisorHint({
       debug: {
         phase: view.phase,
         hand: handMeta,
+        roundState: {
+          flags: view.roundState?.flags || null,
+        },
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           probNextDanger: riskMeta.probNextDanger,
           pMyDen: riskMeta.pMyDen,
           pCharges: riskMeta.pCharges,
           pThirdRooster: riskMeta.pThirdRooster,
+          denSignalActive: !!riskMeta.ctx.denSignalActive,
         },
       },
     };
@@ -787,8 +956,11 @@ export function getAdvisorHint({
   // DECISION
   // =======================
   if (phase === "DECISION") {
-    const rankedDef = scoreDecisions({ view, upcoming: upcomingPeek, profile: profileDef }) || [];
-    const rankedAgg = scoreDecisions({ view, upcoming: upcomingPeek, profile: profileAgg }) || [];
+    const rankedDef0 = scoreDecisions({ view, upcoming: upcomingPeek, profile: profileDef }) || [];
+    const rankedAgg0 = scoreDecisions({ view, upcoming: upcomingPeek, profile: profileAgg }) || [];
+
+    const rankedDef = postRankByStyle(rankedDef0, "DEFENSIVE");
+    const rankedAgg = postRankByStyle(rankedAgg0, "AGGRESSIVE");
 
     const bestDef = safeBest(rankedDef, { decision: "—", riskLabel: "MED" });
     const bestAgg = safeBest(rankedAgg, { decision: "—", riskLabel: "MED" });
@@ -819,12 +991,17 @@ export function getAdvisorHint({
       debug: {
         phase: view.phase,
         hand: handMeta,
+        roundState: {
+          decisionCounts: view.roundState?.decisionCounts || null,
+          flags: view.roundState?.flags || null,
+        },
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           probNextDanger: riskMeta.probNextDanger,
           pMyDen: riskMeta.pMyDen,
           pCharges: riskMeta.pCharges,
           pThirdRooster: riskMeta.pThirdRooster,
+          denSignalActive: !!riskMeta.ctx.denSignalActive,
         },
       },
     };
@@ -841,6 +1018,6 @@ export function getAdvisorHint({
       "Geen fase herkend.",
     ].filter(Boolean).slice(0, 6),
     alternatives: [],
-    debug: { phase: view.phase, hand: handMeta },
+    debug: { phase: view.phase, hand: handMeta, roundState: view.roundState || null },
   };
 }
