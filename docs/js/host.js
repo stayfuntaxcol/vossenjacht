@@ -1907,6 +1907,51 @@ initAuth(async (authUser) => {
     const logCol = collection(db, "games", gameId, "log");
     const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
 
+    function formatChoiceForDisplay(phase, rawChoice, payload) {
+  const choice = String(rawChoice || "");
+  const p = payload || {};
+
+  if (phase === "DECISION" && choice.startsWith("DECISION_")) {
+    const k = choice.slice("DECISION_".length);
+    if (k === "LURK") return "DECISION: LURK";
+    if (k === "BURROW") return "DECISION: BURROW";
+    if (k === "DASH") return "DECISION: DASH";
+    return `DECISION: ${k}`;
+  }
+
+  if (phase === "MOVE" && choice.startsWith("MOVE_")) {
+    if (choice.includes("SNATCH")) return "MOVE: SNATCH";
+    if (choice.includes("FORAGE")) return "MOVE: FORAGE";
+    if (choice.includes("SCOUT_")) return `MOVE: SCOUT (pos ${choice.split("_").pop()})`;
+    if (choice.includes("SHIFT_")) return `MOVE: SHIFT (${choice.split("SHIFT_")[1]})`;
+    return `MOVE: ${choice.slice("MOVE_".length)}`;
+  }
+
+  if (phase === "ACTIONS" && choice.startsWith("ACTION_")) {
+    const name = choice.slice("ACTION_".length);
+    if (name === "PASS") return "ACTIONS: PASS";
+    let extra = "";
+    if (p.color) extra = ` (Den ${p.color})`;
+    if (Number.isFinite(p.pos)) extra = ` (pos ${p.pos})`;
+    if (Number.isFinite(p.pos1) && Number.isFinite(p.pos2)) extra = ` (${p.pos1}↔${p.pos2})`;
+    return `ACTIONS: ${name}${extra}`;
+  }
+
+  return choice || "—";
+}
+
+function formatLogLine(e) {
+  const round = e.round ?? "?";
+  const phase = e.phase ?? "?";
+  const who = e.playerName || e.actorName || "SYSTEEM";
+
+  if (e.choice) {
+    const nice = formatChoiceForDisplay(phase, e.choice, e.payload);
+    return `[R${round} – ${phase}] ${who} • ${nice}`;
+  }
+  return `[R${round} – ${phase} – ${e.kind ?? "?"}] ${e.message ?? ""}`;
+}
+    
     onSnapshot(logQuery, (snap) => {
       const entries = [];
       snap.forEach((docSnap) => entries.push(docSnap.data()));
@@ -1920,7 +1965,7 @@ initAuth(async (authUser) => {
       entries.forEach((e) => {
         const div = document.createElement("div");
         div.className = "log-line";
-        div.textContent = `[R${e.round ?? "?"} – ${e.phase ?? "?"} – ${e.kind ?? "?"}] ${e.message ?? ""}`;
+        div.textContent = formatLogLine(e);
         inner.appendChild(div);
       });
       logPanel.appendChild(inner);
