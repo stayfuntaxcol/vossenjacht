@@ -1627,29 +1627,41 @@ function closeAdvisorHintOverlay() {
   _advisorOverlay.classList.add("hidden");
 }
 
-// ===== LOGGING HELPER =====
+// ===== LOGGING HELPER (SINGLE SOURCE OF TRUTH: /log) =====
+// - Geen /actions collection meer
+// - Log bevat: choice + payload (gestructureerd) + message (kort)
+// - Host/Board kan choice netjes formatteren; message blijft fallback
 
-async function logMoveAction(game, player, choice, phase = "MOVE", extra = null) {
-  const actionsCol = collection(db, "games", gameId, "actions");
-  const payload = {
-    round: game.round || 0,
+function buildLogMessage(player, phase, choice, payload) {
+  const who = player?.name || "Speler";
+  const nice = formatChoiceForDisplay(phase, choice, payload);
+  return `${who} • ${nice}`;
+}
+
+/**
+ * Schrijf 1 logregel naar games/{gameId}/log.
+ *
+ * @param game    game snapshot data
+ * @param player  player snapshot data
+ * @param choice  string, bv "MOVE_SNATCH_FROM_DECK", "ACTION_Den Signal", "DECISION_LURK"
+ * @param phase   "MOVE" | "ACTIONS" | "DECISION" | "REVEAL" | ...
+ * @param payload object met extra details (klein houden)
+ */
+async function logMoveAction(game, player, choice, phase = "MOVE", payload = null) {
+  const entry = {
+    round: game?.round || 0,
     phase,
+    kind: "CHOICE",           // nieuw: beter dan "ACTION" voor alles
     playerId,
-    playerName: player.name || "",
-    choice,
-    createdAt: serverTimestamp(),
+    playerName: player?.name || "",
+    choice: String(choice || ""),
+    // createdAt wordt in addLog() gezet via serverTimestamp()
+    message: buildLogMessage(player, phase, choice, payload),
   };
-  if (extra) payload.extra = extra;
 
-  await addDoc(actionsCol, payload);
+  if (payload) entry.payload = payload;
 
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase,
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"}: ${choice}`,
-  });
+  await addLog(gameId, entry);
 }
 
 function computeNextOpsIndex(game) {
@@ -1659,48 +1671,61 @@ function computeNextOpsIndex(game) {
   return (idx + 1) % order.length;
 }
 
-function formatChoiceForDisplay(phase, rawChoice) {
+// ===== HUMAN READABLE CHOICE (voor Host/Lead/Log weergave) =====
+// payload wordt gebruikt voor details zoals pos, color, swaps, etc.
+function formatChoiceForDisplay(phase, rawChoice, payload = null) {
   if (!rawChoice) return "–";
   const choice = String(rawChoice);
+  const p = payload || {};
 
+  // DECISION
   if (phase === "DECISION" && choice.startsWith("DECISION_")) {
     const kind = choice.slice("DECISION_".length);
-    if (kind === "LURK") return "LURK – in de Yard blijven";
-    if (kind === "BURROW") return "BURROW – schuilen / verstoppen";
-    if (kind === "DASH") return "DASH – met buit vluchten";
-    return kind;
+    if (kind === "LURK") return "DECISION: LURK (blijven)";
+    if (kind === "BURROW") return "DECISION: BURROW (schuilen)";
+    if (kind === "DASH") return "DECISION: DASH (vluchten)";
+    return `DECISION: ${kind}`;
   }
 
+  // MOVE
   if (phase === "MOVE" && choice.startsWith("MOVE_")) {
-    if (choice.includes("SNATCH")) return "SNATCH – 1 buitkaart uit de stapel";
+    if (choice.includes("SNATCH")) return "MOVE: SNATCH (loot pakken)";
     if (choice.includes("FORAGE")) {
+      // accepteer beide vormen: MOVE_FORAGE_2cards en payload.drawn
       const m = choice.match(/FORAGE_(\d+)/);
-      const n = m ? m[1] : "?";
-      return `FORAGE – ${n} Action Card(s) getrokken`;
+      const n = Number.isFinite(p.drawn) ? p.drawn : (m ? Number(m[1]) : null);
+      return n !== null ? `MOVE: FORAGE (${n} action card(s))` : "MOVE: FORAGE";
     }
     if (choice.includes("SCOUT_")) {
       const m = choice.match(/SCOUT_(\d+)/);
-      const pos = m ? m[1] : "?";
-      return `SCOUT – Event op positie ${pos} bekeken`;
+      const pos = Number.isFinite(p.pos) ? p.pos : (m ? Number(m[1]) : null);
+      return pos !== null ? `MOVE: SCOUT (pos ${pos})` : "MOVE: SCOUT";
     }
     if (choice.includes("SHIFT_")) {
+      // accepteer string of payload
+      if (Number.isFinite(p.pos1) && Number.isFinite(p.pos2)) return `MOVE: SHIFT (${p.pos1}↔${p.pos2})`;
       const m = choice.match(/SHIFT_(.+)/);
-      const detail = m ? m[1] : "?";
-      return `SHIFT – events gewisseld (${detail})`;
+      const detail = m ? m[1] : "";
+      return detail ? `MOVE: SHIFT (${detail})` : "MOVE: SHIFT";
     }
-    return choice.slice("MOVE_".length);
+    return `MOVE: ${choice.slice("MOVE_".length)}`;
   }
 
+  // ACTIONS
   if (phase === "ACTIONS" && choice.startsWith("ACTION_")) {
     const name = choice.slice("ACTION_".length);
-    if (name === "PASS") return "PASS – geen kaart gespeeld";
-    return `${name} – Action Card`;
+    if (name === "PASS") return "ACTIONS: PASS";
+    // extra detail via payload (optioneel)
+    if (p.color) return `ACTIONS: ${name} (Den ${String(p.color).toUpperCase()})`;
+    if (Number.isFinite(p.pos)) return `ACTIONS: ${name} (pos ${p.pos})`;
+    if (Number.isFinite(p.pos1) && Number.isFinite(p.pos2)) return `ACTIONS: ${name} (${p.pos1}↔${p.pos2})`;
+    return `ACTIONS: ${name}`;
   }
 
   return choice;
 }
 
-// ===== MOVE-ACTIES =====
+// ===== MOVE-ACTIES (zelfde gedrag, maar betere payload logging) =====
 
 async function performSnatch() {
   if (!gameRef || !playerRef) return;
@@ -1730,7 +1755,17 @@ async function performSnatch() {
   await updateDoc(playerRef, { loot });
   await updateDoc(gameRef, { lootDeck, movedPlayerIds: arrayUnion(playerId) });
 
-  await logMoveAction(game, player, "MOVE_SNATCH_FROM_DECK", "MOVE", { lootCard: card });
+  await logMoveAction(
+    game,
+    player,
+    "MOVE_SNATCH_FROM_DECK",
+    "MOVE",
+    {
+      lootType: card?.t || null,
+      lootValue: Number.isFinite(card?.v) ? card.v : null,
+      // liever geen volledige kaart loggen (scheelt bytes/ruis)
+    }
+  );
 
   const label = card.t || "Loot";
   const val = card.v ?? "?";
@@ -1769,7 +1804,14 @@ async function performForage() {
 
   await updateDoc(playerRef, { hand });
   await updateDoc(gameRef, { actionDeck, movedPlayerIds: arrayUnion(playerId) });
-  await logMoveAction(game, player, `MOVE_FORAGE_${drawn}cards`, "MOVE");
+
+  await logMoveAction(
+    game,
+    player,
+    `MOVE_FORAGE_${drawn}cards`,
+    "MOVE",
+    { drawn }
+  );
 }
 
 async function performScout() {
@@ -1824,7 +1866,14 @@ async function performScout() {
   });
   await updateDoc(gameRef, { movedPlayerIds: arrayUnion(playerId) });
 
-  await logMoveAction(game, player, `MOVE_SCOUT_${pos}`, "MOVE");
+  await logMoveAction(
+    game,
+    player,
+    `MOVE_SCOUT_${pos}`,
+    "MOVE",
+    { pos }
+  );
+
   setActionFeedback(`SCOUT: je hebt event #${pos} bekeken. Deze ronde zie je deze kaart als persoonlijke preview.`);
 }
 
@@ -1900,7 +1949,14 @@ async function performShift() {
     movedPlayerIds: arrayUnion(playerId),
   });
 
-  await logMoveAction(game, player, `MOVE_SHIFT_${pos1}<->${pos2}`, "MOVE");
+  await logMoveAction(
+    game,
+    player,
+    `MOVE_SHIFT_${pos1}<->${pos2}`,
+    "MOVE",
+    { pos1, pos2 }
+  );
+
   setActionFeedback(`SHIFT: je hebt toekomstige Events op posities ${pos1} en ${pos2} gewisseld.`);
 }
 
