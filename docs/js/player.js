@@ -2732,6 +2732,52 @@ async function ensurePlayerDoc() {
   await setDoc(playerRef, seed, { merge: true });
 }
 
+// ===== MODAL CLOSE WIRING (plak onderaan player.js) =====
+function bindModalClose(overlayEl, closeBtnEl, closeFn) {
+  if (closeBtnEl) {
+    closeBtnEl.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeFn();
+    });
+  }
+
+  // Klik op de donkere achtergrond sluit ook
+  if (overlayEl) {
+    overlayEl.addEventListener("click", (e) => {
+      if (e.target === overlayEl) closeFn();
+    });
+  }
+}
+
+// Lead Fox Command Center
+bindModalClose(leadCommandModalOverlay, leadCommandModalClose, closeLeadCommandCenter);
+
+// Action Cards Hand modal (jouw ids uit de HTML)
+const handModalOverlay = document.getElementById("handModalOverlay");
+const handModalClose   = document.getElementById("handModalClose");
+
+function closeHandModal() {
+  if (!handModalOverlay) return;
+  handModalOverlay.classList.add("hidden");
+}
+
+bindModalClose(handModalOverlay, handModalClose, closeHandModal);
+
+// ESC sluit alles
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+
+  // sluit lead CC
+  if (leadCommandModalOverlay && !leadCommandModalOverlay.classList.contains("hidden")) {
+    closeLeadCommandCenter();
+  }
+  // sluit action hand
+  if (handModalOverlay && !handModalOverlay.classList.contains("hidden")) {
+    closeHandModal();
+  }
+});
+
 // ====== AUTH START ======
 initAuth(async () => {
   if (!gameId || !playerId) return;
