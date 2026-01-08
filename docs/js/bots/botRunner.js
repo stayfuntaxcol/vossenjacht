@@ -1,4 +1,10 @@
-// ./bots/botRunner.js
+// docs/js/bots/botRunner.js
+// Complete Bot Runner (IQ1+ hardening)
+// - MOVE / ACTIONS / DECISION
+// - Turn-order + PASS fallback
+// - opsLocked hard rule
+// - Race mitigation via opsClaim (transaction)
+// - Optional logging to /log (pass addLog from log.js) + keeps /actions writes
 
 import {
   doc,
@@ -9,34 +15,52 @@ import {
   serverTimestamp,
   onSnapshot,
   arrayUnion,
+  getDocs,
+  query,
+  orderBy,
+  limit,
+  runTransaction,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 import { pickProfile, weightedPick } from "./botProfiles.js";
 import { getEventById } from "../cards.js";
 
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+// ------------------ utilities ------------------
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 function randBetween(min, max) {
   const a = Number(min) || 500;
   const b = Number(max) || 1400;
   return Math.floor(a + Math.random() * Math.max(0, b - a));
 }
 
+function safeArr(x) {
+  return Array.isArray(x) ? x : [];
+}
+
+function safeObj(x) {
+  return x && typeof x === "object" ? x : {};
+}
+
 function mergeRoundFlags(game) {
   const base = {
     lockEvents: false,
     scatter: false,
-    denImmune: {},
-    noPeek: [],
+    denImmune: {},     // { RED:true }
+    noPeek: [],        // [pos1based, ...]
     predictions: [],
     opsLocked: false,
-    followTail: {},
+    followTail: {},    // { playerId:true } (assumption)
     scentChecks: [],
   };
   return { ...base, ...(game?.flagsRound || {}) };
 }
 
 function isBotActive(p) {
-  return p.isBot === true && p.inYard !== false && !p.dashed;
+  return p?.isBot === true && p.inYard !== false && !p.dashed;
 }
 
 function canMoveNow(game, playerId) {
@@ -44,7 +68,7 @@ function canMoveNow(game, playerId) {
   if (game.status !== "round") return false;
   if (game.phase !== "MOVE") return false;
   if (game.raidEndedByRooster) return false;
-  const moved = game.movedPlayerIds || [];
+  const moved = safeArr(game.movedPlayerIds);
   return !moved.includes(playerId);
 }
 
@@ -56,52 +80,84 @@ function canDecideNow(game, p) {
   return !p.decision;
 }
 
-function botCanActNow({ game, me, intent }) {
-  const phase = game?.phase;
-
-  // intent: "MOVE" | "PLAY_CARD" | "PASS_OPS" | "DECISION"
-  if (!phase) return { ok: false, reason: "NO_PHASE" };
-
-  if (intent === "MOVE" && phase !== "MOVE") return { ok: false, reason: "PHASE_BLOCK_MOVE" };
-  if ((intent === "PLAY_CARD" || intent === "PASS_OPS") && phase !== "OPS")
-    return { ok: false, reason: "PHASE_BLOCK_OPS" };
-  if (intent === "DECISION" && phase !== "DECISION") return { ok: false, reason: "PHASE_BLOCK_DECISION" };
-
-  // OPS beurt check
-  if (phase === "OPS") {
-    if (typeof isMyOpsTurn === "function" && !isMyOpsTurn(game)) {
-      return { ok: false, reason: "NOT_MY_OPS_TURN" };
-    }
-    if (mergeRoundFlags?.(game)?.opsLocked) {
-      // Hold Still / opsLocked = hard rule
-      if (intent === "PLAY_CARD") return { ok: false, reason: "OPS_LOCKED" };
-    }
-  }
-
-  return { ok: true };
-}
-
 function canOpsNow(game, pId) {
   if (!game) return false;
   if (game.status !== "round") return false;
   if (game.phase !== "ACTIONS") return false;
   if (game.raidEndedByRooster) return false;
 
-  const order = game.opsTurnOrder || [];
+  const order = safeArr(game.opsTurnOrder);
   const idx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
   return order.length && order[idx] === pId;
 }
 
 function nextOpsIndex(game) {
-  const order = game.opsTurnOrder || [];
+  const order = safeArr(game.opsTurnOrder);
   if (!order.length) return 0;
   const idx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
   return (idx + 1) % order.length;
 }
 
+// ------------------ logging (optional) ------------------
+// If host passes addLog from log.js, we write a CHOICE style entry to /log.
+let ADD_LOG = null;
+
+function inferMove(choice) {
+  const s = String(choice || "");
+  if (s.includes("MOVE_SNATCH")) return "SNATCH";
+  if (s.includes("MOVE_FORAGE")) return "FORAGE";
+  if (s.includes("MOVE_SCOUT")) return "SCOUT";
+  if (s.includes("MOVE_SHIFT")) return "SHIFT";
+  return null;
+}
+function inferDecision(choice) {
+  const m = String(choice || "").match(/^DECISION_(.+)$/);
+  return m ? m[1] : null;
+}
+function inferCardId(choice) {
+  const s = String(choice || "");
+  if (s.startsWith("ACTION_") && s !== "ACTION_PASS") return s.replace("ACTION_", "");
+  return null;
+}
+
+async function logChoice(gameId, game, player, phase, choice, payload = null) {
+  if (typeof ADD_LOG !== "function") return;
+
+  const isPass = String(choice) === "ACTION_PASS";
+  const type =
+    phase === "MOVE" ? "MOVE_CHOSEN" :
+    phase === "ACTIONS" ? (isPass ? "OPS_PASSED" : "OPS_PLAYED") :
+    phase === "DECISION" ? "DECISION_CHOSEN" :
+    null;
+
+  const kind =
+    phase === "ACTIONS" ? (isPass ? "SYSTEM" : "ACTION_CARD") :
+    phase === "DECISION" ? "DECISION" :
+    "SYSTEM";
+
+  await ADD_LOG(gameId, {
+    round: game.round ?? null,
+    phase,
+    kind,
+    type,
+    actorId: player.id,
+    playerId: player.id,
+    playerName: player.name || "",
+    cardId: inferCardId(choice),
+    move: phase === "MOVE" ? inferMove(choice) : null,
+    decision: phase === "DECISION" ? inferDecision(choice) : null,
+    choice: { choice, payload },
+    payload: payload || null,
+    message: `${phase}: ${choice}`,
+  });
+}
+
+// Backwards compatible: keep writing to games/{gameId}/actions for UI/history
 async function writeAction(db, gameId, game, player, phase, choice, extra = null) {
+  await logChoice(gameId, game, player, phase, choice, extra);
+
   const actionsCol = collection(db, "games", gameId, "actions");
-  const payload = {
+  const docData = {
     round: game.round || 0,
     phase,
     playerId: player.id,
@@ -109,12 +165,14 @@ async function writeAction(db, gameId, game, player, phase, choice, extra = null
     choice,
     createdAt: serverTimestamp(),
   };
-  if (extra) payload.extra = extra;
-  await addDoc(actionsCol, payload);
+  if (extra) docData.extra = extra;
+  await addDoc(actionsCol, docData);
 }
 
+// ------------------ helpers: event track picks ------------------
+
 function pickTwoFutureIndexes(game) {
-  const track = Array.isArray(game.eventTrack) ? game.eventTrack : [];
+  const track = safeArr(game.eventTrack);
   const revealed = Array.isArray(game.eventRevealed) ? game.eventRevealed : track.map(() => false);
   const eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
 
@@ -131,7 +189,7 @@ function pickTwoFutureIndexes(game) {
 }
 
 function pickScoutIndex(game) {
-  const track = Array.isArray(game.eventTrack) ? game.eventTrack : [];
+  const track = safeArr(game.eventTrack);
   const eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
   if (!track.length) return null;
 
@@ -141,110 +199,256 @@ function pickScoutIndex(game) {
   const candidates = [];
   for (let i = eventIndex; i < track.length; i++) {
     const pos = i + 1; // 1-based
-    if (!flags.noPeek?.includes(pos)) candidates.push(i);
+    if (!safeArr(flags.noPeek).includes(pos)) candidates.push(i);
   }
   if (!candidates.length) return null;
 
   return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
-async function tryPlayActionCard(db, gameId, gameRef, playerRef, game, me) {
+function getNextUnrevealedEventId(game) {
+  const track = safeArr(game.eventTrack);
+  const revealed = Array.isArray(game.eventRevealed) ? game.eventRevealed : track.map(() => false);
+  const eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
+
+  for (let i = eventIndex; i < track.length; i++) {
+    if (!revealed[i]) return track[i];
+  }
+  return null;
+}
+
+function isDangerEventId(eventId) {
+  const id = String(eventId || "").toUpperCase();
+  // simpele heuristiek (veilig): rooster/charge/dog
+  return (
+    id.includes("ROOSTER") ||
+    id.includes("CHARGE") ||
+    id.includes("SHEEPDOG") ||
+    id.includes("DOG")
+  );
+}
+
+// ------------------ OPS claim (race mitigation) ------------------
+
+async function claimOpsTurn({ db, gameRef, gameId, game, meId }) {
+  // Claim key op basis van round+opsTurnIndex (geen extra schema nodig)
+  const turnKey = `${game.round ?? 0}|ACTIONS|${game.opsTurnIndex ?? 0}`;
+
+  try {
+    const res = await runTransaction(db, async (tx) => {
+      const snap = await tx.get(gameRef);
+      if (!snap.exists()) return { ok: false, reason: "NO_GAME" };
+      const g = snap.data();
+
+      if (!canOpsNow(g, meId)) return { ok: false, reason: "NOT_MY_OPS_TURN" };
+
+      const claim = g.opsClaim || null;
+      if (claim && claim.turnKey === turnKey && claim.playerId !== meId) {
+        return { ok: false, reason: "TURN_ALREADY_CLAIMED" };
+      }
+
+      tx.update(gameRef, { opsClaim: { turnKey, playerId: meId, at: serverTimestamp() } });
+      return { ok: true, turnKey };
+    });
+
+    return res;
+  } catch (e) {
+    // bij error: geen crash, gewoon niet acteren
+    return { ok: false, reason: "CLAIM_FAILED" };
+  }
+}
+
+// ------------------ ACTION CARDS ------------------
+
+async function tryPlayActionCard({ db, gameId, gameRef, playerRef, game, me }) {
   const flags = mergeRoundFlags(game);
 
-  // opsLocked => alleen PASS
+  // Hold Still => alleen PASS
   if (flags.opsLocked) return { played: false, reason: "OPS_LOCKED" };
 
-  const hand = Array.isArray(me.hand) ? [...me.hand] : [];
+  const hand = safeArr(me.hand).slice();
   if (!hand.length) return { played: false, reason: "NO_HAND" };
 
   const profile = pickProfile(me.botProfile);
-  if (Math.random() > (profile.actionPlayChance ?? 0.65)) {
-    return { played: false, reason: "CHOSE_PASS" };
+  const playChance = profile.actionPlayChance ?? 0.65;
+
+  // trigger: bij gevaar liefst iets defensiefs als beschikbaar
+  const nextEvent = getNextUnrevealedEventId(game);
+  const danger = isDangerEventId(nextEvent);
+
+  // helper: find card by name
+  const findIdx = (n) => hand.findIndex((c) => String(c?.name || "").trim() === n);
+
+  // Hard rules / triggers
+  // 1) opsLocked al behandeld
+  // 2) Danger + Den Signal in hand => prioriteit
+  if (danger) {
+    const denIdx = findIdx("Den Signal");
+    if (denIdx >= 0) return await playCardByIndex({ db, gameId, gameRef, playerRef, game, me, hand, idx: denIdx, flags });
   }
 
-  // probeer een “effect-kaart” die we zeker kunnen afhandelen
+  // probabilistisch: soms pass
+  if (Math.random() > playChance) return { played: false, reason: "CHOSE_PASS" };
+
+  // priority list (menselijker)
+  const priority = [
+    "Hold Still",
+    "Burrow Beacon",
+    "Scatter!",
+    "Pack Tinker",
+    "Kick Up Dust",
+    "No-Go Zone",
+    "Follow the Tail",
+    "Molting Mask",
+    "Den Signal",
+  ];
+
+  for (const cardName of priority) {
+    const idx = findIdx(cardName);
+    if (idx >= 0) {
+      const res = await playCardByIndex({ db, gameId, gameRef, playerRef, game, me, hand, idx, flags });
+      if (res.played) return res;
+    }
+  }
+
+  // fallback: random tries (max 3)
   for (let tries = 0; tries < Math.min(3, hand.length); tries++) {
     const idx = Math.floor(Math.random() * hand.length);
-    const card = hand[idx];
-    const name = String(card?.name || "").trim();
-    if (!name) continue;
-
-    let ok = false;
-
-    if (name === "Scatter!") {
-      flags.scatter = true;
-      ok = true;
-      await updateDoc(gameRef, { flagsRound: flags });
-    }
-
-    if (name === "Burrow Beacon") {
-      flags.lockEvents = true;
-      ok = true;
-      await updateDoc(gameRef, { flagsRound: flags });
-    }
-
-    if (name === "Hold Still") {
-      flags.opsLocked = true;
-      ok = true;
-      await updateDoc(gameRef, { flagsRound: flags });
-    }
-
-    if (name === "No-Go Zone") {
-      const track = Array.isArray(game.eventTrack) ? game.eventTrack : [];
-      const eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
-      if (track.length) {
-        const pos = Math.floor(1 + eventIndex + Math.random() * Math.max(1, track.length - eventIndex));
-        const noPeek = Array.isArray(flags.noPeek) ? [...flags.noPeek] : [];
-        if (!noPeek.includes(pos)) noPeek.push(pos);
-        flags.noPeek = noPeek;
-        ok = true;
-        await updateDoc(gameRef, { flagsRound: flags });
-      }
-    }
-
-    if (name === "Den Signal") {
-      const c = String(me.color || "RED").toUpperCase();
-      flags.denImmune = flags.denImmune || {};
-      flags.denImmune[c] = true;
-      ok = true;
-      await updateDoc(gameRef, { flagsRound: flags });
-    }
-
-    if (name === "Molting Mask") {
-      const colors = ["RED", "BLUE", "GREEN", "YELLOW"];
-      const cur = String(me.color || "").toUpperCase();
-      const pool = colors.filter((x) => x !== cur);
-      const newColor = pool.length ? pool[Math.floor(Math.random() * pool.length)] : "RED";
-      ok = true;
-      await updateDoc(playerRef, { color: newColor });
-    }
-
-    if (name === "Pack Tinker") {
-      if (!flags.lockEvents) {
-        const pair = pickTwoFutureIndexes(game);
-        if (pair) {
-          const track = Array.isArray(game.eventTrack) ? [...game.eventTrack] : [];
-          [track[pair[0]], track[pair[1]]] = [track[pair[1]], track[pair[0]]];
-          ok = true;
-          await updateDoc(gameRef, { eventTrack: track });
-        }
-      }
-    }
-
-    if (!ok) continue;
-
-    // consume kaart
-    hand.splice(idx, 1);
-    await updateDoc(playerRef, { hand });
-
-    return { played: true, cardName: name };
+    const res = await playCardByIndex({ db, gameId, gameRef, playerRef, game, me, hand, idx, flags });
+    if (res.played) return res;
   }
 
   return { played: false, reason: "NO_USABLE_CARD" };
 }
 
+async function playCardByIndex({ db, gameId, gameRef, playerRef, game, me, hand, idx, flags }) {
+  const card = hand[idx];
+  const name = String(card?.name || "").trim();
+  if (!name) return { played: false, reason: "BAD_CARD" };
+
+  // Respect lockEvents for track-manipulation cards
+  const lockEvents = !!flags.lockEvents;
+
+  let ok = false;
+  let extra = null;
+
+  // Effects (same as your current + a couple extras)
+  if (name === "Scatter!") {
+    flags.scatter = true;
+    ok = true;
+    extra = { set: "scatter", value: true };
+    await updateDoc(gameRef, { flagsRound: { ...flags } });
+  }
+
+  if (name === "Burrow Beacon") {
+    flags.lockEvents = true;
+    ok = true;
+    extra = { set: "lockEvents", value: true };
+    await updateDoc(gameRef, { flagsRound: { ...flags } });
+  }
+
+  if (name === "Hold Still") {
+    flags.opsLocked = true;
+    ok = true;
+    extra = { set: "opsLocked", value: true };
+    await updateDoc(gameRef, { flagsRound: { ...flags } });
+  }
+
+  if (name === "No-Go Zone") {
+    const track = safeArr(game.eventTrack);
+    const eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
+    if (track.length) {
+      const pos = Math.floor(1 + eventIndex + Math.random() * Math.max(1, track.length - eventIndex));
+      const noPeek = safeArr(flags.noPeek).slice();
+      if (!noPeek.includes(pos)) noPeek.push(pos);
+      flags.noPeek = noPeek;
+      ok = true;
+      extra = { addNoPeekPos: pos };
+      await updateDoc(gameRef, { flagsRound: { ...flags } });
+    }
+  }
+
+  if (name === "Den Signal") {
+    const c = String(me.color || "RED").toUpperCase();
+    flags.denImmune = safeObj(flags.denImmune);
+    flags.denImmune[c] = true;
+    ok = true;
+    extra = { denImmune: c };
+    await updateDoc(gameRef, { flagsRound: { ...flags } });
+  }
+
+  if (name === "Molting Mask") {
+    const colors = ["RED", "BLUE", "GREEN", "YELLOW"];
+    const cur = String(me.color || "").toUpperCase();
+    const pool = colors.filter((x) => x !== cur);
+    const newColor = pool.length ? pool[Math.floor(Math.random() * pool.length)] : "RED";
+    ok = true;
+    extra = { oldColor: cur, newColor };
+    await updateDoc(playerRef, { color: newColor });
+  }
+
+  if (name === "Pack Tinker") {
+    if (!lockEvents) {
+      const pair = pickTwoFutureIndexes(game);
+      if (pair) {
+        const track = safeArr(game.eventTrack).slice();
+        [track[pair[0]], track[pair[1]]] = [track[pair[1]], track[pair[0]]];
+        ok = true;
+        extra = { swap: [pair[0] + 1, pair[1] + 1] };
+        await updateDoc(gameRef, { eventTrack: track });
+      }
+    }
+  }
+
+  if (name === "Kick Up Dust") {
+    if (!lockEvents) {
+      const track = safeArr(game.eventTrack).slice();
+      const revealed = Array.isArray(game.eventRevealed) ? game.eventRevealed : track.map(() => false);
+      const eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
+
+      // shuffle ONLY future unrevealed to avoid breaking already revealed
+      const futureIdx = [];
+      for (let i = eventIndex; i < track.length; i++) if (!revealed[i]) futureIdx.push(i);
+
+      if (futureIdx.length >= 2) {
+        const pool = futureIdx.map((i) => track[i]);
+        // fisher-yates
+        for (let i = pool.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [pool[i], pool[j]] = [pool[j], pool[i]];
+        }
+        futureIdx.forEach((idx2, k) => (track[idx2] = pool[k]));
+        ok = true;
+        extra = { shuffledFuture: futureIdx.length };
+        await updateDoc(gameRef, { eventTrack: track });
+      }
+    }
+  }
+
+  if (name === "Follow the Tail") {
+    // assumption: store per playerId true
+    flags.followTail = safeObj(flags.followTail);
+    flags.followTail[me.id] = true;
+    ok = true;
+    extra = { followTail: me.id };
+    await updateDoc(gameRef, { flagsRound: { ...flags } });
+  }
+
+  if (!ok) return { played: false, reason: "NOT_IMPLEMENTED" };
+
+  // consume kaart uit hand
+  hand.splice(idx, 1);
+  await updateDoc(playerRef, { hand });
+
+  return { played: true, cardName: name, extra };
+}
+
+// ------------------ main runner ------------------
+
 export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false }) {
-  if (isBoardOnly) return; // ✅ bots niet op “board” scherm
+  if (isBoardOnly) return; // bots niet op board scherm
+
+  ADD_LOG = addLog;
 
   const gameRef = doc(db, "games", gameId);
   const playersRef = collection(db, "games", gameId, "players");
@@ -254,7 +458,15 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
   let running = false;
 
   const inFlight = new Set();
-  const keyFor = (botId) => `${game?.round ?? 0}|${game?.phase ?? "?"}|${botId}`;
+  const keyFor = (botId) => {
+    const r = game?.round ?? 0;
+    const p = game?.phase ?? "?";
+    const turn = p === "ACTIONS" ? `|${game?.opsTurnIndex ?? 0}` : "";
+    return `${r}|${p}${turn}|${botId}`;
+  };
+
+  let lastPhase = null;
+  let lastRound = null;
 
   async function tick() {
     if (running) return;
@@ -265,7 +477,7 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
     try {
       const bots = players.filter(isBotActive);
 
-      // MOVE
+      // ---- MOVE ----
       if (game.phase === "MOVE" && game.status === "round") {
         for (const me of bots) {
           if (!canMoveNow(game, me.id)) continue;
@@ -287,14 +499,15 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
           const playerRef = doc(db, "games", gameId, "players", me.id);
 
           if (move === "SNATCH") {
-            const lootDeck = Array.isArray(g.lootDeck) ? [...g.lootDeck] : [];
+            const lootDeck = safeArr(g.lootDeck).slice();
             if (!lootDeck.length) {
               await updateDoc(gameRef, { movedPlayerIds: arrayUnion(me.id) });
               await writeAction(db, gameId, g, me, "MOVE", "MOVE_SNATCH_EMPTY");
               continue;
             }
+
             const card = lootDeck.pop();
-            const loot = Array.isArray(me.loot) ? [...me.loot] : [];
+            const loot = safeArr(me.loot).slice();
             loot.push(card);
 
             await updateDoc(playerRef, { loot });
@@ -303,14 +516,16 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
           }
 
           if (move === "FORAGE") {
-            const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
-            const hand = Array.isArray(me.hand) ? [...me.hand] : [];
+            const actionDeck = safeArr(g.actionDeck).slice();
+            const hand = safeArr(me.hand).slice();
+
             let drawn = 0;
             for (let i = 0; i < 2; i++) {
               if (!actionDeck.length) break;
               hand.push(actionDeck.pop());
               drawn++;
             }
+
             await updateDoc(playerRef, { hand });
             await updateDoc(gameRef, { actionDeck, movedPlayerIds: arrayUnion(me.id) });
             await writeAction(db, gameId, g, me, "MOVE", `MOVE_FORAGE_${drawn}cards`);
@@ -323,10 +538,12 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
               await writeAction(db, gameId, g, me, "MOVE", "MOVE_SCOUT_BLOCKED");
               continue;
             }
-            const track = Array.isArray(g.eventTrack) ? g.eventTrack : [];
+            const track = safeArr(g.eventTrack);
             const eventId = track[idx];
+
             await updateDoc(playerRef, { scoutPeek: { round: g.round || 0, index: idx, eventId } });
             await updateDoc(gameRef, { movedPlayerIds: arrayUnion(me.id) });
+
             await writeAction(db, gameId, g, me, "MOVE", `MOVE_SCOUT_${idx + 1}`, {
               title: getEventById(eventId)?.title || eventId,
             });
@@ -339,13 +556,15 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
               await writeAction(db, gameId, g, me, "MOVE", "MOVE_SHIFT_BLOCKED");
               continue;
             }
+
             const pair = pickTwoFutureIndexes(g);
             if (!pair) {
               await updateDoc(gameRef, { movedPlayerIds: arrayUnion(me.id) });
               await writeAction(db, gameId, g, me, "MOVE", "MOVE_SHIFT_NO_TARGET");
               continue;
             }
-            const track = Array.isArray(g.eventTrack) ? [...g.eventTrack] : [];
+
+            const track = safeArr(g.eventTrack).slice();
             [track[pair[0]], track[pair[1]]] = [track[pair[1]], track[pair[0]]];
 
             await updateDoc(gameRef, { eventTrack: track, movedPlayerIds: arrayUnion(me.id) });
@@ -354,17 +573,25 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
         }
       }
 
-      // ACTIONS (OPS turn)
+      // ---- ACTIONS (OPS) ----
       if (game.phase === "ACTIONS" && game.status === "round") {
-        const order = game.opsTurnOrder || [];
+        const order = safeArr(game.opsTurnOrder);
         const idx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
         const currentId = order[idx];
-        const me = bots.find((p) => p.id === currentId);
 
+        const me = bots.find((p) => p.id === currentId);
         if (me && canOpsNow(game, me.id)) {
           const k = keyFor(me.id);
           if (!inFlight.has(k)) {
             inFlight.add(k);
+
+            // claim turn (race mitigation)
+            const claim = await claimOpsTurn({ db, gameRef, gameId, game, meId: me.id });
+            if (!claim.ok) {
+              // geen claim => niet acteren
+              return;
+            }
+
             await sleep(randBetween(me.botDelayMin, me.botDelayMax));
 
             const freshSnap = await getDoc(gameRef);
@@ -374,15 +601,16 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
 
             const playerRef = doc(db, "games", gameId, "players", me.id);
 
-            const res = await tryPlayActionCard(db, gameId, gameRef, playerRef, g, me);
+            const res = await tryPlayActionCard({ db, gameId, gameRef, playerRef, game: g, me });
 
             if (res.played) {
               await updateDoc(gameRef, {
                 opsTurnIndex: nextOpsIndex(g),
                 opsConsecutivePasses: 0,
               });
-              await writeAction(db, gameId, g, me, "ACTIONS", `ACTION_${res.cardName}`);
+              await writeAction(db, gameId, g, me, "ACTIONS", `ACTION_${res.cardName}`, res.extra || null);
             } else {
+              // ALWAYS PASS fallback
               await updateDoc(gameRef, {
                 opsTurnIndex: nextOpsIndex(g),
                 opsConsecutivePasses: (g.opsConsecutivePasses || 0) + 1,
@@ -393,7 +621,7 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
         }
       }
 
-      // DECISION
+      // ---- DECISION ----
       if (game.phase === "DECISION" && game.status === "round") {
         for (const me of bots) {
           if (!canDecideNow(game, me)) continue;
@@ -427,7 +655,17 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
 
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) return;
-    game = { id: snap.id, ...snap.data() };
+
+    const next = { id: snap.id, ...snap.data() };
+
+    // reset locks bij fase/round wissel (voorkomt ACTIONS freeze)
+    if (next.phase !== lastPhase || next.round !== lastRound) {
+      inFlight.clear();
+      lastPhase = next.phase;
+      lastRound = next.round;
+    }
+
+    game = next;
     tick();
   });
 
