@@ -1,10 +1,4 @@
 // docs/js/bots/botRunner.js
-// Complete Bot Runner (IQ1+ hardening)
-// - MOVE / ACTIONS / DECISION
-// - Turn-order + PASS fallback
-// - opsLocked hard rule
-// - Race mitigation via opsClaim (transaction)
-// - Optional logging to /log (pass addLog from log.js) + keeps /actions writes
 
 import {
   doc,
@@ -15,45 +9,32 @@ import {
   serverTimestamp,
   onSnapshot,
   arrayUnion,
-  getDocs,
-  query,
-  orderBy,
-  limit,
   runTransaction,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 import { pickProfile, weightedPick } from "./botProfiles.js";
 import { getEventById } from "../cards.js";
 
-// ------------------ utilities ------------------
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
+// ---------------- utils ----------------
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 function randBetween(min, max) {
   const a = Number(min) || 500;
   const b = Number(max) || 1400;
   return Math.floor(a + Math.random() * Math.max(0, b - a));
 }
-
-function safeArr(x) {
-  return Array.isArray(x) ? x : [];
-}
-
-function safeObj(x) {
-  return x && typeof x === "object" ? x : {};
-}
+const safeArr = (x) => (Array.isArray(x) ? x : []);
+const safeObj = (x) => (x && typeof x === "object" ? x : {});
+const str = (x) => (x == null ? "" : String(x));
 
 function mergeRoundFlags(game) {
   const base = {
     lockEvents: false,
     scatter: false,
-    denImmune: {},     // { RED:true }
-    noPeek: [],        // [pos1based, ...]
+    denImmune: {},
+    noPeek: [],
     predictions: [],
     opsLocked: false,
-    followTail: {},    // { playerId:true } (assumption)
+    followTail: {},
     scentChecks: [],
   };
   return { ...base, ...(game?.flagsRound || {}) };
@@ -63,6 +44,7 @@ function isBotActive(p) {
   return p?.isBot === true && p.inYard !== false && !p.dashed;
 }
 
+// ---------------- phase guards ----------------
 function canMoveNow(game, playerId) {
   if (!game) return false;
   if (game.status !== "round") return false;
@@ -98,12 +80,12 @@ function nextOpsIndex(game) {
   return (idx + 1) % order.length;
 }
 
-// ------------------ logging (optional) ------------------
-// If host passes addLog from log.js, we write a CHOICE style entry to /log.
+// ---------------- optional /log mirror ----------------
+// host.js kan addLog uit log.js meegeven; dan schrijven we ook naar games/{gameId}/log
 let ADD_LOG = null;
 
 function inferMove(choice) {
-  const s = String(choice || "");
+  const s = str(choice);
   if (s.includes("MOVE_SNATCH")) return "SNATCH";
   if (s.includes("MOVE_FORAGE")) return "FORAGE";
   if (s.includes("MOVE_SCOUT")) return "SCOUT";
@@ -111,11 +93,11 @@ function inferMove(choice) {
   return null;
 }
 function inferDecision(choice) {
-  const m = String(choice || "").match(/^DECISION_(.+)$/);
+  const m = str(choice).match(/^DECISION_(.+)$/);
   return m ? m[1] : null;
 }
 function inferCardId(choice) {
-  const s = String(choice || "");
+  const s = str(choice);
   if (s.startsWith("ACTION_") && s !== "ACTION_PASS") return s.replace("ACTION_", "");
   return null;
 }
@@ -123,23 +105,15 @@ function inferCardId(choice) {
 async function logChoice(gameId, game, player, phase, choice, payload = null) {
   if (typeof ADD_LOG !== "function") return;
 
-  const isPass = String(choice) === "ACTION_PASS";
-  const type =
-    phase === "MOVE" ? "MOVE_CHOSEN" :
-    phase === "ACTIONS" ? (isPass ? "OPS_PASSED" : "OPS_PLAYED") :
-    phase === "DECISION" ? "DECISION_CHOSEN" :
-    null;
-
-  const kind =
-    phase === "ACTIONS" ? (isPass ? "SYSTEM" : "ACTION_CARD") :
-    phase === "DECISION" ? "DECISION" :
-    "SYSTEM";
-
   await ADD_LOG(gameId, {
     round: game.round ?? null,
     phase,
-    kind,
-    type,
+    kind: "CHOICE",                 // <-- belangrijk: jouw player.js kijkt hiernaar
+    type:
+      phase === "MOVE" ? "MOVE_CHOSEN" :
+      phase === "ACTIONS" ? (choice === "ACTION_PASS" ? "OPS_PASSED" : "OPS_PLAYED") :
+      phase === "DECISION" ? "DECISION_CHOSEN" :
+      null,
     actorId: player.id,
     playerId: player.id,
     playerName: player.name || "",
@@ -152,7 +126,7 @@ async function logChoice(gameId, game, player, phase, choice, payload = null) {
   });
 }
 
-// Backwards compatible: keep writing to games/{gameId}/actions for UI/history
+// behoud /actions writes (host.js gebruikt dit nog op plekken)
 async function writeAction(db, gameId, game, player, phase, choice, extra = null) {
   await logChoice(gameId, game, player, phase, choice, extra);
 
@@ -169,8 +143,7 @@ async function writeAction(db, gameId, game, player, phase, choice, extra = null
   await addDoc(actionsCol, docData);
 }
 
-// ------------------ helpers: event track picks ------------------
-
+// ---------------- event helpers ----------------
 function pickTwoFutureIndexes(game) {
   const track = safeArr(game.eventTrack);
   const revealed = Array.isArray(game.eventRevealed) ? game.eventRevealed : track.map(() => false);
@@ -206,7 +179,7 @@ function pickScoutIndex(game) {
   return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
-function getNextUnrevealedEventId(game) {
+function nextUnrevealedEventId(game) {
   const track = safeArr(game.eventTrack);
   const revealed = Array.isArray(game.eventRevealed) ? game.eventRevealed : track.map(() => false);
   const eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
@@ -218,24 +191,16 @@ function getNextUnrevealedEventId(game) {
 }
 
 function isDangerEventId(eventId) {
-  const id = String(eventId || "").toUpperCase();
-  // simpele heuristiek (veilig): rooster/charge/dog
-  return (
-    id.includes("ROOSTER") ||
-    id.includes("CHARGE") ||
-    id.includes("SHEEPDOG") ||
-    id.includes("DOG")
-  );
+  const id = str(eventId).toUpperCase();
+  return id.includes("ROOSTER") || id.includes("CHARGE") || id.includes("DOG") || id.includes("SHEEPDOG");
 }
 
-// ------------------ OPS claim (race mitigation) ------------------
-
-async function claimOpsTurn({ db, gameRef, gameId, game, meId }) {
-  // Claim key op basis van round+opsTurnIndex (geen extra schema nodig)
+// ---------------- claim (anti double-turn) ----------------
+async function claimOpsTurn({ db, gameRef, game, meId }) {
   const turnKey = `${game.round ?? 0}|ACTIONS|${game.opsTurnIndex ?? 0}`;
 
   try {
-    const res = await runTransaction(db, async (tx) => {
+    return await runTransaction(db, async (tx) => {
       const snap = await tx.get(gameRef);
       if (!snap.exists()) return { ok: false, reason: "NO_GAME" };
       const g = snap.data();
@@ -250,20 +215,15 @@ async function claimOpsTurn({ db, gameRef, gameId, game, meId }) {
       tx.update(gameRef, { opsClaim: { turnKey, playerId: meId, at: serverTimestamp() } });
       return { ok: true, turnKey };
     });
-
-    return res;
-  } catch (e) {
-    // bij error: geen crash, gewoon niet acteren
+  } catch {
     return { ok: false, reason: "CLAIM_FAILED" };
   }
 }
 
-// ------------------ ACTION CARDS ------------------
-
+// ---------------- action cards ----------------
 async function tryPlayActionCard({ db, gameId, gameRef, playerRef, game, me }) {
   const flags = mergeRoundFlags(game);
 
-  // Hold Still => alleen PASS
   if (flags.opsLocked) return { played: false, reason: "OPS_LOCKED" };
 
   const hand = safeArr(me.hand).slice();
@@ -272,25 +232,19 @@ async function tryPlayActionCard({ db, gameId, gameRef, playerRef, game, me }) {
   const profile = pickProfile(me.botProfile);
   const playChance = profile.actionPlayChance ?? 0.65;
 
-  // trigger: bij gevaar liefst iets defensiefs als beschikbaar
-  const nextEvent = getNextUnrevealedEventId(game);
+  const nextEvent = nextUnrevealedEventId(game);
   const danger = isDangerEventId(nextEvent);
 
-  // helper: find card by name
-  const findIdx = (n) => hand.findIndex((c) => String(c?.name || "").trim() === n);
+  const findIdx = (n) => hand.findIndex((c) => str(c?.name).trim() === n);
 
-  // Hard rules / triggers
-  // 1) opsLocked al behandeld
-  // 2) Danger + Den Signal in hand => prioriteit
+  // Trigger: danger + Den Signal
   if (danger) {
     const denIdx = findIdx("Den Signal");
-    if (denIdx >= 0) return await playCardByIndex({ db, gameId, gameRef, playerRef, game, me, hand, idx: denIdx, flags });
+    if (denIdx >= 0) return playCardByIndex({ db, gameId, gameRef, playerRef, game, me, hand, idx: denIdx, flags });
   }
 
-  // probabilistisch: soms pass
   if (Math.random() > playChance) return { played: false, reason: "CHOSE_PASS" };
 
-  // priority list (menselijker)
   const priority = [
     "Hold Still",
     "Burrow Beacon",
@@ -311,7 +265,7 @@ async function tryPlayActionCard({ db, gameId, gameRef, playerRef, game, me }) {
     }
   }
 
-  // fallback: random tries (max 3)
+  // fallback: random tries
   for (let tries = 0; tries < Math.min(3, hand.length); tries++) {
     const idx = Math.floor(Math.random() * hand.length);
     const res = await playCardByIndex({ db, gameId, gameRef, playerRef, game, me, hand, idx, flags });
@@ -323,16 +277,14 @@ async function tryPlayActionCard({ db, gameId, gameRef, playerRef, game, me }) {
 
 async function playCardByIndex({ db, gameId, gameRef, playerRef, game, me, hand, idx, flags }) {
   const card = hand[idx];
-  const name = String(card?.name || "").trim();
+  const name = str(card?.name).trim();
   if (!name) return { played: false, reason: "BAD_CARD" };
 
-  // Respect lockEvents for track-manipulation cards
   const lockEvents = !!flags.lockEvents;
 
   let ok = false;
   let extra = null;
 
-  // Effects (same as your current + a couple extras)
   if (name === "Scatter!") {
     flags.scatter = true;
     ok = true;
@@ -369,7 +321,7 @@ async function playCardByIndex({ db, gameId, gameRef, playerRef, game, me, hand,
   }
 
   if (name === "Den Signal") {
-    const c = String(me.color || "RED").toUpperCase();
+    const c = str(me.color || "RED").toUpperCase();
     flags.denImmune = safeObj(flags.denImmune);
     flags.denImmune[c] = true;
     ok = true;
@@ -379,7 +331,7 @@ async function playCardByIndex({ db, gameId, gameRef, playerRef, game, me, hand,
 
   if (name === "Molting Mask") {
     const colors = ["RED", "BLUE", "GREEN", "YELLOW"];
-    const cur = String(me.color || "").toUpperCase();
+    const cur = str(me.color).toUpperCase();
     const pool = colors.filter((x) => x !== cur);
     const newColor = pool.length ? pool[Math.floor(Math.random() * pool.length)] : "RED";
     ok = true;
@@ -406,13 +358,11 @@ async function playCardByIndex({ db, gameId, gameRef, playerRef, game, me, hand,
       const revealed = Array.isArray(game.eventRevealed) ? game.eventRevealed : track.map(() => false);
       const eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
 
-      // shuffle ONLY future unrevealed to avoid breaking already revealed
       const futureIdx = [];
       for (let i = eventIndex; i < track.length; i++) if (!revealed[i]) futureIdx.push(i);
 
       if (futureIdx.length >= 2) {
         const pool = futureIdx.map((i) => track[i]);
-        // fisher-yates
         for (let i = pool.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1));
           [pool[i], pool[j]] = [pool[j], pool[i]];
@@ -426,7 +376,6 @@ async function playCardByIndex({ db, gameId, gameRef, playerRef, game, me, hand,
   }
 
   if (name === "Follow the Tail") {
-    // assumption: store per playerId true
     flags.followTail = safeObj(flags.followTail);
     flags.followTail[me.id] = true;
     ok = true;
@@ -436,17 +385,16 @@ async function playCardByIndex({ db, gameId, gameRef, playerRef, game, me, hand,
 
   if (!ok) return { played: false, reason: "NOT_IMPLEMENTED" };
 
-  // consume kaart uit hand
+  // consume card
   hand.splice(idx, 1);
   await updateDoc(playerRef, { hand });
 
   return { played: true, cardName: name, extra };
 }
 
-// ------------------ main runner ------------------
-
+// ---------------- main runner ----------------
 export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false }) {
-  if (isBoardOnly) return; // bots niet op board scherm
+  if (isBoardOnly) return;
 
   ADD_LOG = addLog;
 
@@ -477,7 +425,7 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
     try {
       const bots = players.filter(isBotActive);
 
-      // ---- MOVE ----
+      // MOVE
       if (game.phase === "MOVE" && game.status === "round") {
         for (const me of bots) {
           if (!canMoveNow(game, me.id)) continue;
@@ -505,7 +453,6 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
               await writeAction(db, gameId, g, me, "MOVE", "MOVE_SNATCH_EMPTY");
               continue;
             }
-
             const card = lootDeck.pop();
             const loot = safeArr(me.loot).slice();
             loot.push(card);
@@ -518,14 +465,12 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
           if (move === "FORAGE") {
             const actionDeck = safeArr(g.actionDeck).slice();
             const hand = safeArr(me.hand).slice();
-
             let drawn = 0;
             for (let i = 0; i < 2; i++) {
               if (!actionDeck.length) break;
               hand.push(actionDeck.pop());
               drawn++;
             }
-
             await updateDoc(playerRef, { hand });
             await updateDoc(gameRef, { actionDeck, movedPlayerIds: arrayUnion(me.id) });
             await writeAction(db, gameId, g, me, "MOVE", `MOVE_FORAGE_${drawn}cards`);
@@ -556,14 +501,12 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
               await writeAction(db, gameId, g, me, "MOVE", "MOVE_SHIFT_BLOCKED");
               continue;
             }
-
             const pair = pickTwoFutureIndexes(g);
             if (!pair) {
               await updateDoc(gameRef, { movedPlayerIds: arrayUnion(me.id) });
               await writeAction(db, gameId, g, me, "MOVE", "MOVE_SHIFT_NO_TARGET");
               continue;
             }
-
             const track = safeArr(g.eventTrack).slice();
             [track[pair[0]], track[pair[1]]] = [track[pair[1]], track[pair[0]]];
 
@@ -573,7 +516,7 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
         }
       }
 
-      // ---- ACTIONS (OPS) ----
+      // ACTIONS (OPS)
       if (game.phase === "ACTIONS" && game.status === "round") {
         const order = safeArr(game.opsTurnOrder);
         const idx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
@@ -585,12 +528,8 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
           if (!inFlight.has(k)) {
             inFlight.add(k);
 
-            // claim turn (race mitigation)
-            const claim = await claimOpsTurn({ db, gameRef, gameId, game, meId: me.id });
-            if (!claim.ok) {
-              // geen claim => niet acteren
-              return;
-            }
+            const claim = await claimOpsTurn({ db, gameRef, game, meId: me.id });
+            if (!claim.ok) return;
 
             await sleep(randBetween(me.botDelayMin, me.botDelayMax));
 
@@ -604,13 +543,9 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
             const res = await tryPlayActionCard({ db, gameId, gameRef, playerRef, game: g, me });
 
             if (res.played) {
-              await updateDoc(gameRef, {
-                opsTurnIndex: nextOpsIndex(g),
-                opsConsecutivePasses: 0,
-              });
+              await updateDoc(gameRef, { opsTurnIndex: nextOpsIndex(g), opsConsecutivePasses: 0 });
               await writeAction(db, gameId, g, me, "ACTIONS", `ACTION_${res.cardName}`, res.extra || null);
             } else {
-              // ALWAYS PASS fallback
               await updateDoc(gameRef, {
                 opsTurnIndex: nextOpsIndex(g),
                 opsConsecutivePasses: (g.opsConsecutivePasses || 0) + 1,
@@ -621,7 +556,7 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
         }
       }
 
-      // ---- DECISION ----
+      // DECISION
       if (game.phase === "DECISION" && game.status === "round") {
         for (const me of bots) {
           if (!canDecideNow(game, me)) continue;
@@ -658,7 +593,7 @@ export function startBotRunner({ db, gameId, addLog = null, isBoardOnly = false 
 
     const next = { id: snap.id, ...snap.data() };
 
-    // reset locks bij fase/round wissel (voorkomt ACTIONS freeze)
+    // reset locks bij fase/round wissel (fix ACTIONS freeze)
     if (next.phase !== lastPhase || next.round !== lastRound) {
       inFlight.clear();
       lastPhase = next.phase;
