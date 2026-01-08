@@ -1616,21 +1616,21 @@ function closeLootModal() {
 }
 
 // ==========================================
-// Advisor Hint Overlay — LEAD overlay stijl
+// Advisor Hint Overlay — LEAD overlay stijl (PLAYER COMPACT + WHY THIS FULL)
 // ==========================================
 
 (() => {
-  if (window.__advisorOverlayLoaded_v2) return;
-  window.__advisorOverlayLoaded_v2 = true;
+  if (window.__advisorOverlayLoaded_v3) return;
+  window.__advisorOverlayLoaded_v3 = true;
 
   let _advisorOverlay = null;
   let _advisorPanel = null;
   let _wired = false;
 
-  // -----------------------
-  // helpers
-  // -----------------------
   function safeArr(x) { return Array.isArray(x) ? x : []; }
+  function normLines(arr) {
+    return safeArr(arr).map((x) => String(x ?? "").trim()).filter(Boolean);
+  }
 
   function pct01(x) {
     const n = Number(x);
@@ -1647,31 +1647,7 @@ function closeLootModal() {
       .replace(/'/g, "&#039;");
   }
 
-  function normLines(lines) {
-    return safeArr(lines).map((x) => String(x ?? "").trim()).filter(Boolean);
-  }
-
-  function isRiskLine(t) {
-    return String(t || "").trim().startsWith("Volgende kaart:");
-  }
-
-  function isStrategyLine(t) {
-    const s = String(t || "").trim();
-    return (
-      /^Strategie:/i.test(s) ||
-      /^OPS tip:/i.test(s) ||
-      /^Let op:/i.test(s) ||
-      /^Alarm:/i.test(s)
-    );
-  }
-
-  function stripStrategyPrefix(t) {
-    return String(t || "").trim().replace(/^(Strategie:|OPS tip:|Let op:|Alarm:)\s*/i, "");
-  }
-
-  // -----------------------
-  // Mini pills bovenaan (kort)
-  // -----------------------
+  // ---- Mini pills bovenaan (kort, mag blijven)
   function buildMiniPills(ctx) {
     const me = ctx?.me || {};
     const pills = [];
@@ -1688,11 +1664,7 @@ function closeLootModal() {
       }
     } catch (_) {}
 
-    pills.push({ cls: inYard ? "safe" : "danger", text: `Yard: ${inYard ? "YES" : "NO"` + `}` }); // keep stable
-    // ^ bovenstaand was ooit een rare concatenation bug in sommige pastes; hieronder fixen we hem meteen:
-    pills.pop();
     pills.push({ cls: inYard ? "safe" : "danger", text: `Yard: ${inYard ? "YES" : "NO"}` });
-
     pills.push({ cls: caught ? "danger" : "info", text: `Caught: ${caught ? "YES" : "NO"}` });
     pills.push({ cls: "info", text: `Dash: ${dashed ? "YES" : "NO"}` });
     pills.push({ cls: "info", text: `Loot: ${score}` });
@@ -1700,9 +1672,7 @@ function closeLootModal() {
     return pills;
   }
 
-  // -----------------------
-  // Pick label in kaartkop
-  // -----------------------
+  // ---- Pick label in kaartkop
   function pickLine(best) {
     if (!best) return "—";
     if (best.pick) return String(best.pick);
@@ -1717,9 +1687,7 @@ function closeLootModal() {
     return "—";
   }
 
-  // -----------------------
-  // Bullets splitsen (legacy formaat met DEFENSIEF:/AANVALLEND:)
-  // -----------------------
+  // ---- Bullets splitsen (oude format)
   function splitBullets(bullets) {
     const src = normLines(bullets);
     const common = [];
@@ -1751,14 +1719,11 @@ function closeLootModal() {
     return { common, def, agg };
   }
 
-  // -----------------------
-  // Filter wat spelers NIET hoeven te zien (compact)
-  // -----------------------
+  // ---- Filter wat spelers NIET hoeven te zien (compact)
   function isPlayerHiddenLine(s) {
     if (!s) return true;
     const t = String(s).trim();
 
-    // meta die speler al weet / niet nodig heeft
     if (/^Ronde:/i.test(t)) return true;
     if (t.includes("Fase:")) return true;
     if (/^Hand:/i.test(t)) return true;
@@ -1767,162 +1732,127 @@ function closeLootModal() {
     if (/^Jouw Den-kleur:/i.test(t)) return true;
     if (/^Kans:\s*Den-event/i.test(t)) return true;
 
-    // herhaalde labels
     if (/^DEFENSIEF:/i.test(t)) return true;
     if (/^AANVALLEND:/i.test(t)) return true;
 
     return false;
   }
 
-  function pickRiskLineFromCommon(commonLines) {
-    const common = normLines(commonLines);
-    return common.find(isRiskLine) || null;
+  function isRiskLine(s) {
+    const t = String(s || "").trim();
+    return t.startsWith("Volgende kaart:");
   }
 
-  function pickStrategyPreferSpecific(specificLines, commonLines) {
-    const specific = normLines(specificLines);
-    const common = normLines(commonLines);
-
-    // 1) eerst strategy in specific
-    const s1 = specific.find(isStrategyLine);
-    if (s1) return s1;
-
-    // 2) anders in common
-    const s2 = common.find(isStrategyLine);
-    return s2 || null;
+  function isStrategyLine(s) {
+    const t = String(s || "").trim();
+    return /^Strategie:/i.test(t) || /^OPS tip:/i.test(t) || /^Let op:/i.test(t) || /^Alarm:/i.test(t);
   }
 
-  function pickReasonPreferSpecific(specificLines, commonLines) {
-    const specific = normLines(specificLines)
-      .filter((x) => !isPlayerHiddenLine(x))
-      .filter((x) => !isRiskLine(x))
-      .filter((x) => !isStrategyLine(x));
-
-    if (specific.length) return specific[0];
-
-    const common = normLines(commonLines)
-      .filter((x) => !isPlayerHiddenLine(x))
-      .filter((x) => !isRiskLine(x))
-      .filter((x) => !isStrategyLine(x));
-
-    return common[0] || null;
+  function stripStrategyPrefix(s) {
+    return String(s || "").replace(/^(Strategie:|OPS tip:|Let op:|Alarm:)\s*/i, "").trim();
   }
 
-  // -----------------------
-  // Player compact bullets (NO mixing def/agg)
-  // - risico altijd uit common
-  // - reden prefereert SPECIFIC
-  // - strategie prefereert SPECIFIC, anders common
-  // - dedupe zodat bullet 2/3 niet hetzelfde is
-  // -----------------------
+  function pickRiskLineFromCommon(lines) {
+    const arr = normLines(lines);
+    return arr.find((x) => x.startsWith("Volgende kaart:")) || null;
+  }
+
   function normKey(s) {
-  return String(s || "").trim().toLowerCase();
-}
-
-function firstUniqueLine(specific, common, predicate) {
-  const commonSet = new Set(normLines(common).map(normKey));
-  for (const l of normLines(specific)) {
-    if (predicate && !predicate(l)) continue;
-    const k = normKey(l);
-    if (!commonSet.has(k)) return l;
-  }
-  return null;
-}
-
-function fallbackReasonFromPick(best, style) {
-  const pick = pickLine(best).toUpperCase();
-
-  if (style === "DEFENSIEF") {
-    if (pick.includes("SHIFT")) return "SHIFT verlaagt je directe risico door de track slimmer te zetten.";
-    if (pick.includes("SCOUT")) return "SCOUT geeft info zonder extra risico, zodat je straks beter kiest.";
-    if (pick.includes("LURK")) return "LURK houdt je veilig en laat je flexibel reageren.";
-    if (pick.includes("BURROW")) return "BURROW is je noodrem tegen gevaar, maar is schaars.";
-    return "Defensief minimaliseert risico en houdt je opties open.";
+    return String(s || "").trim().toLowerCase();
   }
 
-  // AANVALLEND
-  if (pick.includes("SNATCH")) return "SNATCH maximaliseert je loot-kans nu (tempo maken).";
-  if (pick.includes("FORAGE")) return "FORAGE is steady loot pakken met laag gedoe.";
-  if (pick.includes("DASH")) return "DASH converteert je loot naar score voordat iets misgaat.";
-  return "Aanvallend maximaliseert loot/tempo, met bewust meer risico.";
-}
-
-function fallbackPlayFromPick(best, style) {
-  const pick = pickLine(best).toUpperCase();
-
-  if (style === "DEFENSIEF") {
-    if (pick.includes("SHIFT")) return "Zet risico/ellende later; hou de ronde gecontroleerd.";
-    if (pick.includes("SCOUT")) return "Gebruik info om straks de veiligste keuze te maken.";
-    if (pick.includes("BURROW")) return "Bewaar BURROW voor echte dreiging; niet panieken.";
-    return "Speel op veiligheid: pak alleen loot als het ‘gratis’ voelt.";
+  // pak een regel uit SPECIFIC die niet al in COMMON zit
+  function firstUniqueLine(specific, common, predicate) {
+    const commonSet = new Set(normLines(common).map(normKey));
+    for (const l of normLines(specific)) {
+      if (predicate && !predicate(l)) continue;
+      const k = normKey(l);
+      if (!commonSet.has(k)) return l;
+    }
+    return null;
   }
 
-  // AANVALLEND
-  if (pick.includes("SNATCH")) return "Ga voor maximale buit nu; druk zetten op de ronde.";
-  if (pick.includes("FORAGE")) return "Pak consistente loot, maar blijf tempo houden.";
-  if (pick.includes("DASH")) return "Cash out als de timing gunstig is; voorkom verliezen.";
-  return "Speel op tempo: loot pakken, kansen benutten, risico accepteren.";
-}
+  function fallbackReasonFromPick(best, style) {
+    const pick = pickLine(best).toUpperCase();
 
-function buildPlayerCardBullets({ style, best, common, specific }) {
-  const c = normLines(common);
-  const s = normLines(specific);
+    if (style === "DEFENSIEF") {
+      if (pick.includes("SHIFT")) return "SHIFT verlaagt je directe risico door de track slimmer te zetten.";
+      if (pick.includes("SCOUT")) return "SCOUT geeft info zonder extra risico, zodat je straks beter kiest.";
+      if (pick.includes("LURK")) return "LURK houdt je veilig en laat je flexibel reageren.";
+      if (pick.includes("BURROW")) return "BURROW is je noodrem tegen gevaar, maar is schaars.";
+      return "Defensief minimaliseert risico en houdt je opties open.";
+    }
 
-  // 1) risico is bewust common (zelfde voor beide)
-  const risk = pickRiskLineFromCommon(c);
-
-  // 2) reden: alleen UNIQUE uit specific, anders fallback op pick+style
-  const reasonLine =
-    firstUniqueLine(
-      s,
-      c,
-      (x) => x && !isPlayerHiddenLine(x) && !isRiskLine(x) && !isStrategyLine(x)
-    ) || fallbackReasonFromPick(best, style);
-
-  // 3) strategie: alleen UNIQUE strategy uit specific, anders fallback op pick+style
-  const stratRaw =
-    firstUniqueLine(s, c, (x) => isStrategyLine(x)) || null;
-
-  const stratLine = stratRaw ? stripStrategyPrefix(stratRaw) : fallbackPlayFromPick(best, style);
-
-  const out = [];
-  if (risk) out.push(risk);
-
-  if (reasonLine) out.push(`Waarom dit werkt: ${reasonLine}`);
-
-  // dedupe: als strategie al in reden zit, skip
-  const r = normKey(reasonLine);
-  const st = normKey(stratLine);
-  if (stratLine && (!r || (st && !r.includes(st)))) {
-    out.push(`Speel dit uit: ${stratLine}`);
+    // AANVALLEND
+    if (pick.includes("SNATCH")) return "SNATCH maximaliseert je loot-kans nu (tempo maken).";
+    if (pick.includes("FORAGE")) return "FORAGE is steady loot pakken met laag gedoe.";
+    if (pick.includes("DASH")) return "DASH converteert je loot naar score voordat iets misgaat.";
+    return "Aanvallend maximaliseert loot/tempo, met bewust meer risico.";
   }
 
-  if (!out.length) out.push("Geen compact advies beschikbaar (check Why this).");
-  return out.slice(0, 3);
-}
-    // fallback
+  function fallbackPlayFromPick(best, style) {
+    const pick = pickLine(best).toUpperCase();
+
+    if (style === "DEFENSIEF") {
+      if (pick.includes("SHIFT")) return "Zet risico later; hou de ronde gecontroleerd.";
+      if (pick.includes("SCOUT")) return "Gebruik info om straks de veiligste keuze te maken.";
+      if (pick.includes("BURROW")) return "Bewaar BURROW voor echte dreiging; niet panieken.";
+      return "Speel op veiligheid: pak loot als het ‘gratis’ voelt.";
+    }
+
+    // AANVALLEND
+    if (pick.includes("SNATCH")) return "Ga voor maximale buit nu; druk zetten op de ronde.";
+    if (pick.includes("FORAGE")) return "Pak consistente loot, maar blijf tempo houden.";
+    if (pick.includes("DASH")) return "Cash out als de timing gunstig is; voorkom verliezen.";
+    return "Speel op tempo: loot pakken, kansen benutten, risico accepteren.";
+  }
+
+  // ---- Compact bullets per kaart (NU: reden/strategie alleen uit SPECIFIC -> anders fallback)
+  function buildPlayerCardBullets({ style, best, common, specific }) {
+    const c = normLines(common);
+    const s = normLines(specific);
+
+    // 1) risk is common (zelfde voor beide)
+    const risk = pickRiskLineFromCommon(c);
+
+    // 2) reason: unieke inhoud uit SPECIFIC, anders fallback op pick+style
+    const reasonLine =
+      firstUniqueLine(
+        s,
+        c,
+        (x) => x && !isPlayerHiddenLine(x) && !isRiskLine(x) && !isStrategyLine(x)
+      ) || fallbackReasonFromPick(best, style);
+
+    // 3) strategy: unieke strategy uit SPECIFIC, anders fallback op pick+style
+    const stratRaw = firstUniqueLine(s, c, (x) => isStrategyLine(x)) || null;
+    const stratLine = stratRaw ? stripStrategyPrefix(stratRaw) : fallbackPlayFromPick(best, style);
+
+    const out = [];
+    if (risk) out.push(risk);
+    if (reasonLine) out.push(`Waarom dit werkt: ${reasonLine}`);
+
+    // dedupe: als strategie hetzelfde is als reden, skip
+    const r = normKey(reasonLine);
+    const st = normKey(stratLine);
+    if (stratLine && (!r || (st && !r.includes(st)))) {
+      out.push(`Speel dit uit: ${stratLine}`);
+    }
+
     if (!out.length) out.push("Geen compact advies beschikbaar (check Why this).");
-
     return out.slice(0, 3);
   }
 
-  // -----------------------
-  // Why this = alles + debug + raw bullets
-  // -----------------------
+  // ---- Why this = alles (incl. raw bullets + debug)
   function buildWhyThis(hint, ctx, split) {
     const v = hint?.version ? `Advisor: ${hint.version}` : "";
     const title = hint?.title ? `Titel: ${hint.title}` : "";
     const phase = hint?.phase || hint?.debug?.phase || "";
 
-    const handLine = hint?.debug?.hand?.lineHand || "";
-    const knownLine = hint?.debug?.hand?.lineKnown || "";
-    const unkLine = hint?.debug?.hand?.lineUnknown || "";
-
     const pills = buildMiniPills(ctx);
 
-    const common = safeArr(split?.common);
-    const def = safeArr(split?.def);
-    const agg = safeArr(split?.agg);
+    const common = normLines(split?.common);
+    const def = normLines(split?.def);
+    const agg = normLines(split?.agg);
 
     const dbg = hint?.debug ? JSON.stringify(hint.debug, null, 2) : "";
 
@@ -1934,12 +1864,6 @@ function buildPlayerCardBullets({ style, best, common, specific }) {
       <div class="advisor-tags" style="margin-top:.4rem;">
         ${pills.map((p) => `<span class="advisor-tag">${escapeHtml(p.text)}</span>`).join("")}
       </div>
-
-      ${(handLine || knownLine || unkLine) ? `<div style="margin-top:.6rem; opacity:.9;">
-        ${handLine ? `<div>${escapeHtml(handLine)}</div>` : ""}
-        ${knownLine ? `<div>${escapeHtml(knownLine)}</div>` : ""}
-        ${unkLine ? `<div>${escapeHtml(unkLine)}</div>` : ""}
-      </div>` : ""}
 
       <div style="margin-top:.75rem;">
         <div style="font-weight:700; margin-bottom:.25rem;">Alle bullets (raw)</div>
@@ -1957,13 +1881,10 @@ function buildPlayerCardBullets({ style, best, common, specific }) {
     `;
   }
 
-  // -----------------------
-  // Card renderer
-  // -----------------------
   function renderCard({ label, best, bullets }) {
     const pick = pickLine(best);
     const risk = best?.riskLabel || best?.risk || "—";
-    const conf = pct01(best?.confidence ?? best?.conf);
+    const conf = pct01(best?.confidence) ?? pct01(best?.conf);
 
     const list = safeArr(bullets).filter(Boolean).slice(0, 4);
 
@@ -1979,9 +1900,6 @@ function buildPlayerCardBullets({ style, best, common, specific }) {
     `;
   }
 
-  // -----------------------
-  // DOM wiring
-  // -----------------------
   function ensureDom() {
     if (_advisorOverlay && _advisorPanel) return;
 
@@ -2065,9 +1983,6 @@ function buildPlayerCardBullets({ style, best, common, specific }) {
     window.closeAdvisorHintOverlay = closeAdvisorHintOverlay;
   }
 
-  // -----------------------
-  // Open/Close
-  // -----------------------
   function openAdvisorHintOverlay(hint, ctx = {}) {
     ensureDom();
 
@@ -2083,7 +1998,7 @@ function buildPlayerCardBullets({ style, best, common, specific }) {
     const pills = buildMiniPills(ctx);
     mini.innerHTML = pills.map((p) => `<span class="advisor-pill ${p.cls}">${escapeHtml(p.text)}</span>`).join("");
 
-    const hasNew = !!(hint?.def && hint?.agg);
+    const hasNew = hint?.def && hint?.agg;
 
     let split = { common: [], def: [], agg: [] };
     let bestDef = null;
@@ -2101,9 +2016,19 @@ function buildPlayerCardBullets({ style, best, common, specific }) {
       bestAgg = hint?.debug?.bestAgg || null;
     }
 
-    // ✅ NO mixing: reason/strategy prefer SPECIFIC
-    const defPlayerBullets = buildPlayerCardBullets({ common: split.common, specific: split.def });
-    const aggPlayerBullets = buildPlayerCardBullets({ common: split.common, specific: split.agg });
+    const defPlayerBullets = buildPlayerCardBullets({
+      style: "DEFENSIEF",
+      best: bestDef,
+      common: split.common,
+      specific: split.def,
+    });
+
+    const aggPlayerBullets = buildPlayerCardBullets({
+      style: "AANVALLEND",
+      best: bestAgg,
+      common: split.common,
+      specific: split.agg,
+    });
 
     grid.innerHTML = `
       ${renderCard({ label: "DEFENSIEF", best: bestDef, bullets: defPlayerBullets })}
