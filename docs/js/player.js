@@ -2350,177 +2350,222 @@ async function selectDecision(kind) {
   await logMoveAction(game, player, `DECISION_${kind}`, "DECISION");
 }
 
-// ===== ACTION CARDS / OPS =====
+// ===== ACTION TURN HELPERS + ACTION PLAY/PASS (SAFE + DOUBLE-CLICK PROOF) =====
 
-  // ===== OPS TURN HELPER (needed by playActionCard/passAction) =====
-// Safe: geen "Identifier already declared" als je dit per ongeluk 2x plakt.
-window.computeNextOpsIndex = window.computeNextOpsIndex || function (game, players) {
-  const list = Array.isArray(players) ? players.slice() : [];
+// 1) Next OPS index (no redeclare)
+globalThis.computeNextOpsIndex =
+  globalThis.computeNextOpsIndex ||
+  function computeNextOpsIndex(game, players) {
+    const list = Array.isArray(players) ? [...players] : [];
 
-  // Zelfde joinOrder logica als jij overal gebruikt
-  const ordered = (typeof sortPlayersByJoinOrder === "function")
-    ? sortPlayersByJoinOrder(list)
-    : list.sort((a, b) => {
-        const ao = Number.isFinite(a?.joinOrder) ? a.joinOrder : 999999;
-        const bo = Number.isFinite(b?.joinOrder) ? b.joinOrder : 999999;
-        return ao - bo;
-      });
+    const ordered =
+      typeof sortPlayersByJoinOrder === "function"
+        ? sortPlayersByJoinOrder(list)
+        : list.sort((a, b) => {
+            const ao = Number.isFinite(a?.joinOrder) ? a.joinOrder : 999999;
+            const bo = Number.isFinite(b?.joinOrder) ? b.joinOrder : 999999;
+            return ao - bo;
+          });
 
-  // Alleen spelers die nog meedoen in de Yard
-  const active = ordered.filter((p) => p && p.inYard !== false && !p.dashed);
+    const active = ordered.filter((p) => p && p.inYard !== false && !p.dashed);
+    const n = active.length;
+    if (!n) return 0;
 
-  const n = active.length;
-  if (!n) return 0;
+    const raw =
+      game?.opsTurnIndex ??
+      game?.opsIndex ??
+      game?.actionsIndex ??
+      0;
 
-  const curRaw =
-    game?.opsTurnIndex ??
-    game?.opsIndex ??
-    game?.actionsIndex ??
-    0;
+    const cur = Number.isFinite(Number(raw)) ? Number(raw) : 0;
+    return (cur + 1) % n;
+  };
 
-  const cur = Number.isFinite(Number(curRaw)) ? Number(curRaw) : 0;
-  return (cur + 1) % n;
-};
+// 2) Simple in-flight guard (prevents double click / double submit)
+let __opsActionInFlight = false;
+function beginOpsAction() {
+  if (__opsActionInFlight) return false;
+  __opsActionInFlight = true;
 
-async function playActionCard(index) {
-  if (!gameRef || !playerRef) return;
+  // sluit hand modal meteen (als jouw global bestaat)
+  try { globalThis.closeHandModal?.(); } catch {}
 
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
-
-  if (!canPlayActionNow(game, player)) {
-    alert("Je kunt nu geen Actiekaarten spelen.");
-    return;
-  }
-  if (!isMyOpsTurn(game)) {
-    alert("Je bent niet aan de beurt in de OPS-fase.");
-    return;
-  }
-
-  const hand = Array.isArray(player.hand) ? [...player.hand] : [];
-  if (index < 0 || index >= hand.length) return;
-
-  const card = hand[index];
-  const cardName =
-    typeof card === "string" ? card.trim() : String(card?.name || card?.id || "").trim();
-
-  if (!cardName) {
-    alert("Onbekende Action Card in je hand (geen name/id).");
-    return;
-  }
-
-  const flagsBefore = mergeRoundFlags(game);
-  if (flagsBefore.opsLocked) {
-    alert("Hold Still is actief: er mogen geen nieuwe Action Cards meer worden gespeeld. Je kunt alleen PASS kiezen.");
-    setActionFeedback("Hold Still is actief – speel geen kaarten meer, kies PASS als je aan de beurt bent.");
-    return;
-  }
-
-  let executed = false;
-
-  switch (cardName) {
-    case "Scatter!":
-      executed = await playScatter(game, player);
-      break;
-    case "Den Signal":
-      executed = await playDenSignal(game, player);
-      break;
-    case "No-Go Zone":
-      executed = await playNoGoZone(game, player);
-      break;
-    case "Kick Up Dust":
-      executed = await playKickUpDust(game, player);
-      break;
-    case "Burrow Beacon":
-      executed = await playBurrowBeacon(game, player);
-      break;
-    case "Molting Mask":
-      executed = await playMoltingMask(game, player);
-      break;
-    case "Hold Still":
-      executed = await playHoldStill(game, player);
-      break;
-    case "Nose for Trouble":
-      executed = await playNoseForTrouble(game, player);
-      break;
-    case "Scent Check":
-      executed = await playScentCheck(game, player);
-      break;
-    case "Follow the Tail":
-      executed = await playFollowTail(game, player);
-      break;
-    case "Alpha Call":
-      executed = await playAlphaCall(game, player);
-      break;
-    case "Pack Tinker":
-      executed = await playPackTinker(game, player);
-      break;
-    case "Mask Swap":
-      executed = await playMaskSwap(game, player);
-      break;
-    default:
-      alert(
-        'Deze kaart is nog niet volledig geïmplementeerd in de online versie. Gebruik eventueel de fysieke regels als huisregel.'
-      );
-      executed = false;
-      break;
-  }
-
-  if (!executed) {
-    setActionFeedback(`De kaart "${cardName}" kon nu niet worden gespeeld. Hij blijft in je hand.`);
-    return;
-  }
-
-  hand.splice(index, 1);
-  await updateDoc(playerRef, { hand });
-  await logMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
-  setHost("success", `Kaart gespeeld: ${cardName}`);
-  hostSay("action_success");
-
-  const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
-  await updateDoc(gameRef, {
-    opsTurnIndex: nextIndex,
-    opsConsecutivePasses: 0,
-  });
-
-  setActionFeedback(`Je speelde "${cardName}". Het effect is uitgevoerd (zie ook de Community log).`);
+  return true;
+}
+function endOpsAction() {
+  __opsActionInFlight = false;
 }
 
+// 3) Helper: normalize card name
+function getActionCardName(card) {
+  if (typeof card === "string") return card.trim();
+  return String(card?.name || card?.id || "").trim();
+}
+
+// ===== PLAY ACTION CARD =====
+
+let __actionPlayInFlight = false;
+
+function beginActionPlay() {
+  if (__actionPlayInFlight) return false;
+  __actionPlayInFlight = true;
+
+  // sluit overlay meteen
+  try { globalThis.closeHandModal?.(); } catch {}
+
+  return true;
+}
+
+function endActionPlay() {
+  __actionPlayInFlight = false;
+}
+
+async function playActionCard(index) {
+  if (!beginActionPlay()) return;
+  if (!beginOpsAction()) return;
+
+  try {
+    if (!gameRef || !playerRef) return;
+
+    const gameSnap = await getDoc(gameRef);
+    const playerSnap = await getDoc(playerRef);
+    if (!gameSnap.exists() || !playerSnap.exists()) return;
+
+    const game = gameSnap.data();
+    const player = playerSnap.data();
+
+    if (!canPlayActionNow(game, player)) {
+      alert("Je kunt nu geen Actiekaarten spelen.");
+      return;
+    }
+    if (!isMyOpsTurn(game)) {
+      alert("Je bent niet aan de beurt in de OPS-fase.");
+      return;
+    }
+
+    const hand = Array.isArray(player.hand) ? [...player.hand] : [];
+    if (!Number.isFinite(index) || index < 0 || index >= hand.length) return;
+
+    const card = hand[index];
+    const cardName = getActionCardName(card);
+
+    if (!cardName) {
+      alert("Onbekende Action Card in je hand (geen name/id).");
+      return;
+    }
+
+    const flagsBefore = mergeRoundFlags(game);
+    if (flagsBefore?.opsLocked) {
+      alert(
+        "Hold Still is actief: er mogen geen nieuwe Action Cards meer worden gespeeld. Je kunt alleen PASS kiezen."
+      );
+      setActionFeedback(
+        "Hold Still is actief – speel geen kaarten meer, kies PASS als je aan de beurt bent."
+      );
+      return;
+    }
+
+    // ✅ extra guard: als je al gespeeld hebt deze ronde, stop meteen
+    // (werkt alleen als jij opsActionPlayedRound gebruikt in je player doc)
+    const roundNum = Number(game.round || 0);
+    if (Number(player.opsActionPlayedRound || 0) === roundNum) {
+      setActionFeedback("Je hebt deze ronde al een Action gespeeld. Kies PASS als je weer aan de beurt bent.");
+      return;
+    }
+
+    // ---- execute effect ----
+    let executed = false;
+
+    switch (cardName) {
+      case "Scatter!":        executed = await playScatter(game, player); break;
+      case "Den Signal":      executed = await playDenSignal(game, player); break;
+      case "No-Go Zone":      executed = await playNoGoZone(game, player); break;
+      case "Kick Up Dust":    executed = await playKickUpDust(game, player); break;
+      case "Burrow Beacon":   executed = await playBurrowBeacon(game, player); break;
+      case "Molting Mask":    executed = await playMoltingMask(game, player); break;
+      case "Hold Still":      executed = await playHoldStill(game, player); break;
+      case "Nose for Trouble":executed = await playNoseForTrouble(game, player); break;
+      case "Scent Check":     executed = await playScentCheck(game, player); break;
+      case "Follow the Tail": executed = await playFollowTail(game, player); break;
+      case "Alpha Call":      executed = await playAlphaCall(game, player); break;
+      case "Pack Tinker":     executed = await playPackTinker(game, player); break;
+      case "Mask Swap":       executed = await playMaskSwap(game, player); break;
+      default:
+        alert(
+          'Deze kaart is nog niet volledig geïmplementeerd in de online versie. Gebruik eventueel de fysieke regels als huisregel.'
+        );
+        executed = false;
+        break;
+    }
+
+    if (!executed) {
+      setActionFeedback(`De kaart "${cardName}" kon nu niet worden gespeeld. Hij blijft in je hand.`);
+      return;
+    }
+
+    // ---- consume card + log ----
+    hand.splice(index, 1);
+
+    // markeer ook: gespeeld deze ronde (voorkomt dubbel spelen)
+    await updateDoc(playerRef, { hand, opsActionPlayedRound: roundNum });
+
+    await logMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
+    setHost("success", `Kaart gespeeld: ${cardName}`);
+    hostSay("action_success");
+
+    // ---- advance OPS turn ----
+    const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
+    await updateDoc(gameRef, {
+      opsTurnIndex: nextIndex,
+      opsConsecutivePasses: 0,
+    });
+
+    setActionFeedback(`Je speelde "${cardName}". Het effect is uitgevoerd (zie ook de Community log).`);
+  } finally {
+    endOpsAction();
+  }
+}
+
+// ===== PASS =====
 async function passAction() {
-  if (!gameRef || !playerRef) return;
+  if (!beginOpsAction()) return;
 
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
+  try {
+    if (!gameRef || !playerRef) return;
 
-  const game = gameSnap.data();
-  const player = playerSnap.data();
+    const gameSnap = await getDoc(gameRef);
+    const playerSnap = await getDoc(playerRef);
+    if (!gameSnap.exists() || !playerSnap.exists()) return;
 
-  if (!canPlayActionNow(game, player)) {
-    alert("Je kunt nu geen PASS doen in deze fase.");
-    return;
+    const game = gameSnap.data();
+    const player = playerSnap.data();
+
+    if (!canPlayActionNow(game, player)) {
+      alert("Je kunt nu geen PASS doen in deze fase.");
+      return;
+    }
+    if (!isMyOpsTurn(game)) {
+      alert("Je bent niet aan de beurt in de OPS-fase.");
+      return;
+    }
+
+    const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
+    const newPasses = (game.opsConsecutivePasses || 0) + 1;
+
+    await updateDoc(gameRef, {
+      opsTurnIndex: nextIndex,
+      opsConsecutivePasses: newPasses,
+    });
+
+    await logMoveAction(game, player, "ACTION_PASS", "ACTIONS");
+
+    setHost(
+      "pass",
+      "PASS – je slaat deze beurt over. Als de ronde omgaat en iemand weer een kaart speelt, kun je later opnieuw meedoen."
+    );
+  } finally {
+    endOpsAction();
   }
-  if (!isMyOpsTurn(game)) {
-    alert("Je bent niet aan de beurt in de OPS-fase.");
-    return;
-  }
-
-  const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
-  const newPasses = (game.opsConsecutivePasses || 0) + 1;
-
-  await updateDoc(gameRef, {
-    opsTurnIndex: nextIndex,
-    opsConsecutivePasses: newPasses,
-  });
-  await logMoveAction(game, player, "ACTION_PASS", "ACTIONS");
-  setHost(
-    "pass",
-    "PASS – je slaat deze beurt over. Als de ronde omgaat en iemand weer een kaart speelt, kun je later opnieuw meedoen."
-  );
 }
 
 // ===== CONCRETE ACTION CARD EFFECTS =====
@@ -2958,6 +3003,11 @@ async function ensurePlayerDoc() {
     // maar we hebben hem niet nodig
     if (handOverlay) handOverlay.classList.add("hidden");
   };
+  
+// ✅ maak 'm weer bruikbaar voor playActionCard / andere code
+if (typeof globalThis.closeHandModal !== "function") {
+  globalThis.closeHandModal = closeHand;
+}
 
   bindModalClose(handOverlay, handCloseBtn, closeHand);
 
