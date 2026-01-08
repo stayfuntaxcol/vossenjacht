@@ -39,6 +39,22 @@ if (gameId) {
   playersColRef = collection(db, "games", gameId, "players");
 }
 
+let hostUid = null;
+let stopBots = null;
+
+function startBotsForGame(id) {
+  if (!id) return;
+
+  // stop vorige listeners (als je gameId wisselt bij new raid)
+  if (typeof stopBots === "function") {
+    stopBots();
+    stopBots = null;
+  }
+
+  // start nieuwe runner (botRunner regelt zelf isBoardOnly)
+  stopBots = startBotRunner({ db, gameId: id, addLog, isBoardOnly, hostUid });
+}
+
 // ===============================
 // Basis host UI
 // ===============================
@@ -1012,19 +1028,26 @@ function initBotsOnHost() {
 }
 
 // ===============================
-// MAIN INIT
+// MAIN INIT (clean — bots moved to botRunner.js)
 // ===============================
 if (!gameId && gameInfo) {
   gameInfo.textContent = "Geen gameId in de URL";
 }
+
+let hostUid = null;
+let stopBots = null;
 
 initAuth(async (authUser) => {
   hostUid = authUser?.uid || null;
 
   if (!gameId || !gameRef || !playersColRef) return;
 
-  startBotRunner({ db, gameId, addLog, isBoardOnly });
+  // ✅ Start autonome bots (en onthoud stop-functie)
+  stopBots = startBotRunner({ db, gameId, addLog, isBoardOnly, hostUid });
 
+  // ===============================
+  // GAME SNAPSHOT
+  // ===============================
   onSnapshot(gameRef, (snap) => {
     if (!snap.exists()) {
       if (gameInfo) gameInfo.textContent = "Spel niet gevonden";
@@ -1037,8 +1060,13 @@ initAuth(async (authUser) => {
     currentRoundNumber = game.round || 0;
     currentPhase = game.phase || "MOVE";
 
-    if (isGameFinished(game)) stopBotLoop();
+    // ✅ stop bot listeners zodra game klaar is
+    if (isGameFinished(game) && typeof stopBots === "function") {
+      stopBots();
+      stopBots = null;
+    }
 
+    // Event poster flow
     if (game.phase === "REVEAL" && game.currentEventId) {
       if (game.currentEventId !== lastRevealedEventId) {
         lastRevealedEventId = game.currentEventId;
@@ -1059,14 +1087,17 @@ initAuth(async (authUser) => {
 
     if (game.code) renderJoinQr(game);
 
+    // Status line
     let extraStatus = "";
     if (game.raidEndedByRooster) extraStatus = " – Raid geëindigd door Rooster Crow (limiet bereikt)";
     if (game.status === "finished") extraStatus = extraStatus ? extraStatus + " – spel afgelopen." : " – spel afgelopen.";
 
     if (gameInfo) {
-      gameInfo.textContent = `Code: ${game.code} – Status: ${game.status} – Ronde: ${currentRoundNumber} – Fase: ${currentPhase}${extraStatus}`;
+      gameInfo.textContent =
+        `Code: ${game.code} – Status: ${game.status} – Ronde: ${currentRoundNumber} – Fase: ${currentPhase}${extraStatus}`;
     }
 
+    // Finished
     if (isGameFinished(game)) {
       if (unsubActions) {
         unsubActions();
@@ -1076,6 +1107,7 @@ initAuth(async (authUser) => {
       return;
     }
 
+    // Not active round
     if (!isActiveRaidStatus(game.status)) {
       if (roundInfo) roundInfo.textContent = "Nog geen actieve ronde.";
       if (unsubActions) {
@@ -1085,13 +1117,13 @@ initAuth(async (authUser) => {
       return;
     }
 
+    // Round actions monitor (per round)
     if (currentRoundForActions === currentRoundNumber && unsubActions) return;
     currentRoundForActions = currentRoundNumber;
 
     const event =
       game.currentEventId && game.phase === "REVEAL" ? getEventById(game.currentEventId) : null;
 
-    const logCol = collection(db, "games", gameId, "log");
     const actionsQuery = query(actionsCol, where("round", "==", currentRoundForActions));
 
     if (unsubActions) unsubActions();
@@ -1132,6 +1164,9 @@ initAuth(async (authUser) => {
     });
   });
 
+  // ===============================
+  // PLAYERS SNAPSHOT
+  // ===============================
   onSnapshot(playersColRef, (snapshot) => {
     const players = [];
     snapshot.forEach((pDoc) => players.push({ id: pDoc.id, ...pDoc.data() }));
@@ -1140,55 +1175,58 @@ initAuth(async (authUser) => {
     renderPlayerZones();
   });
 
+  // ===============================
+  // LOG PANEL (host-only UI)
+  // ===============================
   if (!isBoardOnly) {
     const logCol = collection(db, "games", gameId, "log");
     const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
 
     function formatChoiceForDisplay(phase, rawChoice, payload) {
-  const choice = String(rawChoice || "");
-  const p = payload || {};
+      const choice = String(rawChoice || "");
+      const p = payload || {};
 
-  if (phase === "DECISION" && choice.startsWith("DECISION_")) {
-    const k = choice.slice("DECISION_".length);
-    if (k === "LURK") return "DECISION: LURK";
-    if (k === "BURROW") return "DECISION: BURROW";
-    if (k === "DASH") return "DECISION: DASH";
-    return `DECISION: ${k}`;
-  }
+      if (phase === "DECISION" && choice.startsWith("DECISION_")) {
+        const k = choice.slice("DECISION_".length);
+        if (k === "LURK") return "DECISION: LURK";
+        if (k === "BURROW") return "DECISION: BURROW";
+        if (k === "DASH") return "DECISION: DASH";
+        return `DECISION: ${k}`;
+      }
 
-  if (phase === "MOVE" && choice.startsWith("MOVE_")) {
-    if (choice.includes("SNATCH")) return "MOVE: SNATCH";
-    if (choice.includes("FORAGE")) return "MOVE: FORAGE";
-    if (choice.includes("SCOUT_")) return `MOVE: SCOUT (pos ${choice.split("_").pop()})`;
-    if (choice.includes("SHIFT_")) return `MOVE: SHIFT (${choice.split("SHIFT_")[1]})`;
-    return `MOVE: ${choice.slice("MOVE_".length)}`;
-  }
+      if (phase === "MOVE" && choice.startsWith("MOVE_")) {
+        if (choice.includes("SNATCH")) return "MOVE: SNATCH";
+        if (choice.includes("FORAGE")) return "MOVE: FORAGE";
+        if (choice.includes("SCOUT_")) return `MOVE: SCOUT (pos ${choice.split("_").pop()})`;
+        if (choice.includes("SHIFT_")) return `MOVE: SHIFT (${choice.split("SHIFT_")[1]})`;
+        return `MOVE: ${choice.slice("MOVE_".length)}`;
+      }
 
-  if (phase === "ACTIONS" && choice.startsWith("ACTION_")) {
-    const name = choice.slice("ACTION_".length);
-    if (name === "PASS") return "ACTIONS: PASS";
-    let extra = "";
-    if (p.color) extra = ` (Den ${p.color})`;
-    if (Number.isFinite(p.pos)) extra = ` (pos ${p.pos})`;
-    if (Number.isFinite(p.pos1) && Number.isFinite(p.pos2)) extra = ` (${p.pos1}↔${p.pos2})`;
-    return `ACTIONS: ${name}${extra}`;
-  }
+      if (phase === "ACTIONS" && choice.startsWith("ACTION_")) {
+        const name = choice.slice("ACTION_".length);
+        if (name === "PASS") return "ACTIONS: PASS";
+        let extra = "";
+        if (p.color) extra = ` (Den ${p.color})`;
+        if (Number.isFinite(p.pos)) extra = ` (pos ${p.pos})`;
+        if (Number.isFinite(p.pos1) && Number.isFinite(p.pos2)) extra = ` (${p.pos1}↔${p.pos2})`;
+        return `ACTIONS: ${name}${extra}`;
+      }
 
-  return choice || "—";
-}
+      return choice || "—";
+    }
 
-function formatLogLine(e) {
-  const round = e.round ?? "?";
-  const phase = e.phase ?? "?";
-  const who = e.playerName || e.actorName || "SYSTEEM";
+    function formatLogLine(e) {
+      const round = e.round ?? "?";
+      const phase = e.phase ?? "?";
+      const who = e.playerName || e.actorName || "SYSTEEM";
 
-  if (e.choice) {
-    const nice = formatChoiceForDisplay(phase, e.choice, e.payload);
-    return `[R${round} – ${phase}] ${who} • ${nice}`;
-  }
-  return `[R${round} – ${phase} – ${e.kind ?? "?"}] ${e.message ?? ""}`;
-}
-    
+      if (e.choice) {
+        const nice = formatChoiceForDisplay(phase, e.choice, e.payload);
+        return `[R${round} – ${phase}] ${who} • ${nice}`;
+      }
+      return `[R${round} – ${phase} – ${e.kind ?? "?"}] ${e.message ?? ""}`;
+    }
+
     onSnapshot(logQuery, (snap) => {
       const entries = [];
       snap.forEach((docSnap) => entries.push(docSnap.data()));
@@ -1196,6 +1234,7 @@ function formatLogLine(e) {
 
       if (!logPanel) return;
       logPanel.innerHTML = "";
+
       const inner = document.createElement("div");
       inner.className = "log-lines";
 
@@ -1205,9 +1244,11 @@ function formatLogLine(e) {
         div.textContent = formatLogLine(e);
         inner.appendChild(div);
       });
+
       logPanel.appendChild(inner);
     });
   }
+});
 
   // ==== START ROUND ====
   if (startBtn) {
