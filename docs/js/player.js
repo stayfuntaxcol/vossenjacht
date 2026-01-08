@@ -1616,7 +1616,7 @@ function closeLootModal() {
 }
 
 // ==========================================
-// Advisor Hint Overlay — LEAD overlay stijl (PLAYER COMPACT + WHY THIS FULL)
+// Advisor Hint Overlay — LEAD overlay stijl
 // ==========================================
 
 (() => {
@@ -1627,6 +1627,9 @@ function closeLootModal() {
   let _advisorPanel = null;
   let _wired = false;
 
+  // -----------------------
+  // helpers
+  // -----------------------
   function safeArr(x) { return Array.isArray(x) ? x : []; }
 
   function pct01(x) {
@@ -1644,7 +1647,31 @@ function closeLootModal() {
       .replace(/'/g, "&#039;");
   }
 
-  // ---- Mini pills bovenaan (kort, mag blijven)
+  function normLines(lines) {
+    return safeArr(lines).map((x) => String(x ?? "").trim()).filter(Boolean);
+  }
+
+  function isRiskLine(t) {
+    return String(t || "").trim().startsWith("Volgende kaart:");
+  }
+
+  function isStrategyLine(t) {
+    const s = String(t || "").trim();
+    return (
+      /^Strategie:/i.test(s) ||
+      /^OPS tip:/i.test(s) ||
+      /^Let op:/i.test(s) ||
+      /^Alarm:/i.test(s)
+    );
+  }
+
+  function stripStrategyPrefix(t) {
+    return String(t || "").trim().replace(/^(Strategie:|OPS tip:|Let op:|Alarm:)\s*/i, "");
+  }
+
+  // -----------------------
+  // Mini pills bovenaan (kort)
+  // -----------------------
   function buildMiniPills(ctx) {
     const me = ctx?.me || {};
     const pills = [];
@@ -1661,7 +1688,11 @@ function closeLootModal() {
       }
     } catch (_) {}
 
+    pills.push({ cls: inYard ? "safe" : "danger", text: `Yard: ${inYard ? "YES" : "NO"` + `}` }); // keep stable
+    // ^ bovenstaand was ooit een rare concatenation bug in sommige pastes; hieronder fixen we hem meteen:
+    pills.pop();
     pills.push({ cls: inYard ? "safe" : "danger", text: `Yard: ${inYard ? "YES" : "NO"}` });
+
     pills.push({ cls: caught ? "danger" : "info", text: `Caught: ${caught ? "YES" : "NO"}` });
     pills.push({ cls: "info", text: `Dash: ${dashed ? "YES" : "NO"}` });
     pills.push({ cls: "info", text: `Loot: ${score}` });
@@ -1669,7 +1700,9 @@ function closeLootModal() {
     return pills;
   }
 
-  // ---- Pick label in kaartkop
+  // -----------------------
+  // Pick label in kaartkop
+  // -----------------------
   function pickLine(best) {
     if (!best) return "—";
     if (best.pick) return String(best.pick);
@@ -1684,9 +1717,11 @@ function closeLootModal() {
     return "—";
   }
 
-  // ---- Bullets splitsen (oude format)
+  // -----------------------
+  // Bullets splitsen (legacy formaat met DEFENSIEF:/AANVALLEND:)
+  // -----------------------
   function splitBullets(bullets) {
-    const src = safeArr(bullets).map((x) => String(x || ""));
+    const src = normLines(bullets);
     const common = [];
     const def = [];
     const agg = [];
@@ -1716,12 +1751,14 @@ function closeLootModal() {
     return { common, def, agg };
   }
 
-  // ---- Filter wat spelers WEL zien (compact)
+  // -----------------------
+  // Filter wat spelers NIET hoeven te zien (compact)
+  // -----------------------
   function isPlayerHiddenLine(s) {
     if (!s) return true;
     const t = String(s).trim();
 
-    // weg met meta die speler al weet / niet nodig heeft
+    // meta die speler al weet / niet nodig heeft
     if (/^Ronde:/i.test(t)) return true;
     if (t.includes("Fase:")) return true;
     if (/^Hand:/i.test(t)) return true;
@@ -1737,62 +1774,87 @@ function closeLootModal() {
     return false;
   }
 
-  function pickRiskLine(lines) {
-    const arr = safeArr(lines).map((x) => String(x || ""));
-    return arr.find((x) => String(x).trim().startsWith("Volgende kaart:")) || null;
+  function pickRiskLineFromCommon(commonLines) {
+    const common = normLines(commonLines);
+    return common.find(isRiskLine) || null;
   }
 
-  function pickStrategyLine(lines) {
-    const arr = safeArr(lines).map((x) => String(x || "")).filter(Boolean);
-    const want = arr.filter((x) => {
-      const t = x.trim();
-      return (
-        /^Strategie:/i.test(t) ||
-        /^OPS tip:/i.test(t) ||
-        /^Let op:/i.test(t) ||
-        /^Alarm:/i.test(t)
-      );
-    });
-    return want[0] || null;
+  function pickStrategyPreferSpecific(specificLines, commonLines) {
+    const specific = normLines(specificLines);
+    const common = normLines(commonLines);
+
+    // 1) eerst strategy in specific
+    const s1 = specific.find(isStrategyLine);
+    if (s1) return s1;
+
+    // 2) anders in common
+    const s2 = common.find(isStrategyLine);
+    return s2 || null;
   }
 
-  function pickReasonLine(lines) {
-    const arr = safeArr(lines)
-      .map((x) => String(x || "").trim())
-      .filter((x) => x && !isPlayerHiddenLine(x));
+  function pickReasonPreferSpecific(specificLines, commonLines) {
+    const specific = normLines(specificLines)
+      .filter((x) => !isPlayerHiddenLine(x))
+      .filter((x) => !isRiskLine(x))
+      .filter((x) => !isStrategyLine(x));
 
-    // liever geen “Volgende kaart:” want die komt apart
-    const filtered = arr.filter((x) => !x.startsWith("Volgende kaart:"));
+    if (specific.length) return specific[0];
 
-    // pak de eerste inhoudelijke reden
-    return filtered[0] || null;
+    const common = normLines(commonLines)
+      .filter((x) => !isPlayerHiddenLine(x))
+      .filter((x) => !isRiskLine(x))
+      .filter((x) => !isStrategyLine(x));
+
+    return common[0] || null;
   }
 
+  // -----------------------
+  // Player compact bullets (NO mixing def/agg)
+  // - risico altijd uit common
+  // - reden prefereert SPECIFIC
+  // - strategie prefereert SPECIFIC, anders common
+  // - dedupe zodat bullet 2/3 niet hetzelfde is
+  // -----------------------
   function buildPlayerCardBullets({ common, specific }) {
-    const all = [...safeArr(common), ...safeArr(specific)]
-      .map((x) => String(x || "").trim())
-      .filter(Boolean);
+    const c = normLines(common);
+    const s = normLines(specific);
 
-    const risk = pickRiskLine(all);
-    const reason = pickReasonLine(all);
-    const strat = pickStrategyLine(all);
+    const risk = pickRiskLineFromCommon(c);
+    const reason = pickReasonPreferSpecific(s, c);
+    const stratRaw = pickStrategyPreferSpecific(s, c);
 
     const out = [];
-    if (risk) out.push(risk);
-    if (reason) out.push(`Waarom dit werkt: ${reason}`);
-    if (strat) out.push(`Speel dit uit: ${strat.replace(/^(Strategie:|OPS tip:|Let op:|Alarm:)\s*/i, "")}`);
 
-    // fallback: als alles weg gefilterd is
+    if (risk) out.push(risk);
+
+    if (reason) {
+      out.push(`Waarom dit werkt: ${reason}`);
+    }
+
+    if (stratRaw) {
+      const strat = stripStrategyPrefix(stratRaw);
+      // dedupe: als reason dezelfde tekst bevat, niet nog eens herhalen
+      const reasonText = reason ? String(reason).trim().toLowerCase() : "";
+      const stratText = String(strat).trim().toLowerCase();
+      if (!reasonText || (stratText && !reasonText.includes(stratText))) {
+        out.push(`Speel dit uit: ${strat}`);
+      }
+    }
+
+    // fallback
     if (!out.length) out.push("Geen compact advies beschikbaar (check Why this).");
 
     return out.slice(0, 3);
   }
 
-  // ---- Why this = alles (incl. hand/den/round etc) + debug
+  // -----------------------
+  // Why this = alles + debug + raw bullets
+  // -----------------------
   function buildWhyThis(hint, ctx, split) {
     const v = hint?.version ? `Advisor: ${hint.version}` : "";
     const title = hint?.title ? `Titel: ${hint.title}` : "";
     const phase = hint?.phase || hint?.debug?.phase || "";
+
     const handLine = hint?.debug?.hand?.lineHand || "";
     const knownLine = hint?.debug?.hand?.lineKnown || "";
     const unkLine = hint?.debug?.hand?.lineUnknown || "";
@@ -1836,10 +1898,13 @@ function closeLootModal() {
     `;
   }
 
+  // -----------------------
+  // Card renderer
+  // -----------------------
   function renderCard({ label, best, bullets }) {
     const pick = pickLine(best);
     const risk = best?.riskLabel || best?.risk || "—";
-    const conf = pct01(best?.confidence) ?? pct01(best?.conf);
+    const conf = pct01(best?.confidence ?? best?.conf);
 
     const list = safeArr(bullets).filter(Boolean).slice(0, 4);
 
@@ -1855,6 +1920,9 @@ function closeLootModal() {
     `;
   }
 
+  // -----------------------
+  // DOM wiring
+  // -----------------------
   function ensureDom() {
     if (_advisorOverlay && _advisorPanel) return;
 
@@ -1938,6 +2006,9 @@ function closeLootModal() {
     window.closeAdvisorHintOverlay = closeAdvisorHintOverlay;
   }
 
+  // -----------------------
+  // Open/Close
+  // -----------------------
   function openAdvisorHintOverlay(hint, ctx = {}) {
     ensureDom();
 
@@ -1947,14 +2018,13 @@ function closeLootModal() {
     const why = _advisorOverlay.querySelector("#advisorHintWhy");
 
     const conf = pct01(hint?.confidence);
-    // subtitle: kort + (optioneel) versie voor check
     const v = hint?.version ? ` • ${hint.version}` : "";
     sub.textContent = `Risico: ${hint?.risk || "—"}${conf !== null ? ` • Zekerheid: ${conf}%` : ""}${v}`;
 
     const pills = buildMiniPills(ctx);
     mini.innerHTML = pills.map((p) => `<span class="advisor-pill ${p.cls}">${escapeHtml(p.text)}</span>`).join("");
 
-    const hasNew = hint?.def && hint?.agg;
+    const hasNew = !!(hint?.def && hint?.agg);
 
     let split = { common: [], def: [], agg: [] };
     let bestDef = null;
@@ -1972,6 +2042,7 @@ function closeLootModal() {
       bestAgg = hint?.debug?.bestAgg || null;
     }
 
+    // ✅ NO mixing: reason/strategy prefer SPECIFIC
     const defPlayerBullets = buildPlayerCardBullets({ common: split.common, specific: split.def });
     const aggPlayerBullets = buildPlayerCardBullets({ common: split.common, specific: split.agg });
 
