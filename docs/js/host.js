@@ -999,13 +999,6 @@ if (newRaidBtn) newRaidBtn.addEventListener("click", startNewRaidFromBoard);
 // ===============================
 // BOTS (moved out of host.js)
 // ===============================
-// Vereist exports in ./bots/botRunner.js:
-// - startBotRunner({ db, gameId, addLog, isBoardOnly })
-// - addBotToCurrentGame({ db, gameId, denColors })
-
-import { startBotRunner, addBotToCurrentGame } from "./bots/botRunner.js";
-// als addLog al elders in host.js geïmporteerd is: deze import weglaten
-import { addLog } from "./log.js";
 
 // 1x aanroepen zodra db + gameId bekend zijn
 function initBotsOnHost() {
