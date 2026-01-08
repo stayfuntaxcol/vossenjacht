@@ -39,9 +39,6 @@ if (gameId) {
   playersColRef = collection(db, "games", gameId, "players");
 }
 
-let hostUid = null;
-let stopBots = null;
-
 function startBotsForGame(id) {
   if (!id) return;
 
