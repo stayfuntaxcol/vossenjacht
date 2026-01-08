@@ -1815,32 +1815,91 @@ function closeLootModal() {
   // - strategie prefereert SPECIFIC, anders common
   // - dedupe zodat bullet 2/3 niet hetzelfde is
   // -----------------------
-  function buildPlayerCardBullets({ common, specific }) {
-    const c = normLines(common);
-    const s = normLines(specific);
+  function normKey(s) {
+  return String(s || "").trim().toLowerCase();
+}
 
-    const risk = pickRiskLineFromCommon(c);
-    const reason = pickReasonPreferSpecific(s, c);
-    const stratRaw = pickStrategyPreferSpecific(s, c);
+function firstUniqueLine(specific, common, predicate) {
+  const commonSet = new Set(normLines(common).map(normKey));
+  for (const l of normLines(specific)) {
+    if (predicate && !predicate(l)) continue;
+    const k = normKey(l);
+    if (!commonSet.has(k)) return l;
+  }
+  return null;
+}
 
-    const out = [];
+function fallbackReasonFromPick(best, style) {
+  const pick = pickLine(best).toUpperCase();
 
-    if (risk) out.push(risk);
+  if (style === "DEFENSIEF") {
+    if (pick.includes("SHIFT")) return "SHIFT verlaagt je directe risico door de track slimmer te zetten.";
+    if (pick.includes("SCOUT")) return "SCOUT geeft info zonder extra risico, zodat je straks beter kiest.";
+    if (pick.includes("LURK")) return "LURK houdt je veilig en laat je flexibel reageren.";
+    if (pick.includes("BURROW")) return "BURROW is je noodrem tegen gevaar, maar is schaars.";
+    return "Defensief minimaliseert risico en houdt je opties open.";
+  }
 
-    if (reason) {
-      out.push(`Waarom dit werkt: ${reason}`);
-    }
+  // AANVALLEND
+  if (pick.includes("SNATCH")) return "SNATCH maximaliseert je loot-kans nu (tempo maken).";
+  if (pick.includes("FORAGE")) return "FORAGE is steady loot pakken met laag gedoe.";
+  if (pick.includes("DASH")) return "DASH converteert je loot naar score voordat iets misgaat.";
+  return "Aanvallend maximaliseert loot/tempo, met bewust meer risico.";
+}
 
-    if (stratRaw) {
-      const strat = stripStrategyPrefix(stratRaw);
-      // dedupe: als reason dezelfde tekst bevat, niet nog eens herhalen
-      const reasonText = reason ? String(reason).trim().toLowerCase() : "";
-      const stratText = String(strat).trim().toLowerCase();
-      if (!reasonText || (stratText && !reasonText.includes(stratText))) {
-        out.push(`Speel dit uit: ${strat}`);
-      }
-    }
+function fallbackPlayFromPick(best, style) {
+  const pick = pickLine(best).toUpperCase();
 
+  if (style === "DEFENSIEF") {
+    if (pick.includes("SHIFT")) return "Zet risico/ellende later; hou de ronde gecontroleerd.";
+    if (pick.includes("SCOUT")) return "Gebruik info om straks de veiligste keuze te maken.";
+    if (pick.includes("BURROW")) return "Bewaar BURROW voor echte dreiging; niet panieken.";
+    return "Speel op veiligheid: pak alleen loot als het ‘gratis’ voelt.";
+  }
+
+  // AANVALLEND
+  if (pick.includes("SNATCH")) return "Ga voor maximale buit nu; druk zetten op de ronde.";
+  if (pick.includes("FORAGE")) return "Pak consistente loot, maar blijf tempo houden.";
+  if (pick.includes("DASH")) return "Cash out als de timing gunstig is; voorkom verliezen.";
+  return "Speel op tempo: loot pakken, kansen benutten, risico accepteren.";
+}
+
+function buildPlayerCardBullets({ style, best, common, specific }) {
+  const c = normLines(common);
+  const s = normLines(specific);
+
+  // 1) risico is bewust common (zelfde voor beide)
+  const risk = pickRiskLineFromCommon(c);
+
+  // 2) reden: alleen UNIQUE uit specific, anders fallback op pick+style
+  const reasonLine =
+    firstUniqueLine(
+      s,
+      c,
+      (x) => x && !isPlayerHiddenLine(x) && !isRiskLine(x) && !isStrategyLine(x)
+    ) || fallbackReasonFromPick(best, style);
+
+  // 3) strategie: alleen UNIQUE strategy uit specific, anders fallback op pick+style
+  const stratRaw =
+    firstUniqueLine(s, c, (x) => isStrategyLine(x)) || null;
+
+  const stratLine = stratRaw ? stripStrategyPrefix(stratRaw) : fallbackPlayFromPick(best, style);
+
+  const out = [];
+  if (risk) out.push(risk);
+
+  if (reasonLine) out.push(`Waarom dit werkt: ${reasonLine}`);
+
+  // dedupe: als strategie al in reden zit, skip
+  const r = normKey(reasonLine);
+  const st = normKey(stratLine);
+  if (stratLine && (!r || (st && !r.includes(st)))) {
+    out.push(`Speel dit uit: ${stratLine}`);
+  }
+
+  if (!out.length) out.push("Geen compact advies beschikbaar (check Why this).");
+  return out.slice(0, 3);
+}
     // fallback
     if (!out.length) out.push("Geen compact advies beschikbaar (check Why this).");
 
