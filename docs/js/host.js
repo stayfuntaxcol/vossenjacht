@@ -1,4 +1,4 @@
-// host.js — VOSSENJACHT (FULL FEATURE PARITY + AUTONOMOUS BOTS incl. Action Cards)
+// host.js — VOSSENJACHT (clean host + bots in botRunner.js)
 
 import { initAuth } from "./firebase.js";
 import { getEventById, CARD_BACK } from "./cards.js";
@@ -21,14 +21,13 @@ import {
   limit,
   addDoc,
   serverTimestamp,
-  runTransaction,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const db = getFirestore();
 
 const params = new URLSearchParams(window.location.search);
-let gameId = params.get("game"); // let (wordt opnieuw gezet bij new raid)
-const mode = params.get("mode") || "host"; // "host" of "board"
+let gameId = params.get("game");
+const mode = params.get("mode") || "host"; // "host" | "board"
 const isBoardOnly = mode === "board";
 
 let gameRef = null;
@@ -39,19 +38,6 @@ if (gameId) {
   playersColRef = collection(db, "games", gameId, "players");
 }
 
-function startBotsForGame(id) {
-  if (!id) return;
-
-  // stop vorige listeners (als je gameId wisselt bij new raid)
-  if (typeof stopBots === "function") {
-    stopBots();
-    stopBots = null;
-  }
-
-  // start nieuwe runner (botRunner regelt zelf isBoardOnly)
-  stopBots = startBotRunner({ db, gameId: id, addLog, isBoardOnly, hostUid });
-}
-
 // ===============================
 // Basis host UI
 // ===============================
@@ -60,9 +46,7 @@ const roundInfo = document.getElementById("roundInfo");
 const logPanel = document.getElementById("logPanel");
 
 // Logpaneel verbergen in Community Board modus
-if (isBoardOnly && logPanel) {
-  logPanel.style.display = "none";
-}
+if (isBoardOnly && logPanel) logPanel.style.display = "none";
 
 const startBtn = document.getElementById("startRoundBtn");
 const endBtn = document.getElementById("endRoundBtn"); // oude testknop
@@ -120,13 +104,14 @@ const eventPosterCloseBtn = document.getElementById("eventPosterCloseBtn");
 let lastRevealedEventId = null;
 
 // Verberg oude test-knop (endBtn)
-if (endBtn) {
-  endBtn.style.display = "none";
-}
+if (endBtn) endBtn.style.display = "none";
 
 // ===============================
 // State
 // ===============================
+let hostUid = null;
+let stopBots = null;
+
 let currentRoundNumber = 0;
 let currentRoundForActions = 0;
 let currentPhase = "MOVE";
@@ -135,18 +120,15 @@ let unsubActions = null;
 let latestPlayers = [];
 let latestGame = null;
 
-// Voor Lead Fox highlight & kaart
 let currentLeadFoxId = null;
 let currentLeadFoxName = "";
 
-// Scoreboard cache
 let latestPlayersCacheForScoreboard = [];
 
-// Kleur-cycling voor Dens
 const DEN_COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
 
 // ===============================
-// Helpers (status/yard)
+// Helpers
 // ===============================
 function isActiveRaidStatus(status) {
   return status === "raid" || status === "round";
@@ -161,6 +143,15 @@ function isInYardLocal(p) {
 }
 function isInYardForEvents(p) {
   return isInYardLocal(p);
+}
+
+function shuffleArray(array) {
+  const arr = [...array];
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
 }
 
 // ===============================
@@ -236,6 +227,7 @@ function closeQrOverlay() {
   if (!qrJoinOverlay) return;
   qrJoinOverlay.classList.remove("is-open");
 }
+
 if (qrJoinToggleBtn && qrJoinOverlay) qrJoinToggleBtn.addEventListener("click", openQrOverlay);
 if (qrJoinCloseBtn && qrJoinOverlay) qrJoinCloseBtn.addEventListener("click", closeQrOverlay);
 
@@ -255,18 +247,10 @@ if (showScoreboardBtn && scoreOverlay) showScoreboardBtn.addEventListener("click
 if (scoreOverlayCloseBtn && scoreOverlay) scoreOverlayCloseBtn.addEventListener("click", closeScoreOverlay);
 
 // ===============================
-// Deck helpers
+// Deck builders
 // ===============================
-function shuffleArray(array) {
-  const arr = [...array];
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
 
-// Event track: 12 kaarten, met DOG_CHARGE eerste helft en SECOND_CHARGE tweede helft
+// Event track: 12 kaarten, met DOG_CHARGE in eerste helft en SECOND_CHARGE in tweede helft
 function buildEventTrack() {
   const SAFE_FIRST_EVENT = "SHEEPDOG_PATROL";
   const others = [
@@ -302,7 +286,7 @@ function buildEventTrack() {
   return track;
 }
 
-// Action deck ZONDER Countermove
+// Action deck (zonder countermove)
 function buildActionDeck() {
   const defs = [
     { name: "Molting Mask", count: 4 },
@@ -467,8 +451,156 @@ function renderStatusCards(game) {
 }
 
 // ===============================
-// EINDSCORE / SCOREBOARD + LEADERBOARDS
+// Scoreboard + leaderboards
 // ===============================
+function calcLeaderboardScore(data) {
+  if (!data) return 0;
+  const eggs = Number(data.eggs || 0);
+  const hens = Number(data.hens || 0);
+  const prize = Number(data.prize || 0);
+  const bonus = Number(data.bonus || 0);
+  const baseFromCounts = eggs + hens * 2 + prize * 3;
+  const stored = Number(data.score || 0);
+  return Math.max(stored, baseFromCounts + bonus);
+}
+
+function appendLeaderboardRow(listEl, rank, data) {
+  const eggs = data.eggs || 0;
+  const hens = data.hens || 0;
+  const prize = data.prize || 0;
+  const bonus = data.bonus || 0;
+  const score = calcLeaderboardScore(data);
+  if (score <= 0) return;
+
+  let dateLabel = "";
+  if (data.playedAt && data.playedAt.seconds != null) {
+    const d = new Date(data.playedAt.seconds * 1000);
+    dateLabel = d.toLocaleDateString();
+  }
+
+  const li = document.createElement("li");
+  li.className = "leaderboard-item";
+  li.innerHTML = `
+    <div class="leaderboard-item-main">
+      <span>${rank}. ${data.name || "Fox"}</span>
+      <span class="leaderboard-item-loot">E:${eggs} H:${hens} P:${prize} +${bonus}</span>
+    </div>
+    <div class="leaderboard-item-meta">
+      <div>${score} pts</div>
+      <div class="leaderboard-item-date">${dateLabel}</div>
+    </div>
+  `;
+  listEl.appendChild(li);
+}
+
+async function fillLeaderboardAllTime(listEl) {
+  const leaderboardCol = collection(db, "leaderboard");
+  const qAll = query(leaderboardCol, orderBy("score", "desc"), limit(100));
+  const snap = await getDocs(qAll);
+
+  if (snap.empty) {
+    const li = document.createElement("li");
+    li.className = "leaderboard-empty";
+    li.textContent = "Nog geen scores.";
+    listEl.appendChild(li);
+    return;
+  }
+
+  let docsArr = [];
+  snap.forEach((docSnap) => docsArr.push(docSnap.data()));
+
+  docsArr = docsArr.filter((d) => calcLeaderboardScore(d) > 0);
+  docsArr.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
+
+  let rank = 1;
+  docsArr.forEach((data) => appendLeaderboardRow(listEl, rank++, data));
+}
+
+async function fillLeaderboardToday(listEl) {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  const leaderboardCol = collection(db, "leaderboard");
+  const qToday = query(
+    leaderboardCol,
+    where("playedAt", ">=", todayStart),
+    orderBy("playedAt", "desc"),
+    limit(200)
+  );
+
+  const snap = await getDocs(qToday);
+
+  if (snap.empty) {
+    const li = document.createElement("li");
+    li.className = "leaderboard-empty";
+    li.textContent = "Nog geen scores voor vandaag.";
+    listEl.appendChild(li);
+    return;
+  }
+
+  let docsArr = [];
+  snap.forEach((docSnap) => docsArr.push(docSnap.data()));
+
+  docsArr = docsArr.filter((d) => calcLeaderboardScore(d) > 0);
+  docsArr.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
+
+  const top = docsArr.slice(0, 10);
+  top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
+}
+
+async function fillLeaderboardMonth(listEl) {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const leaderboardCol = collection(db, "leaderboard");
+  const qMonth = query(
+    leaderboardCol,
+    where("playedAt", ">=", monthStart),
+    orderBy("playedAt", "desc"),
+    limit(500)
+  );
+
+  const snap = await getDocs(qMonth);
+
+  if (snap.empty) {
+    const li = document.createElement("li");
+    li.className = "leaderboard-empty";
+    li.textContent = "Nog geen scores voor deze maand.";
+    listEl.appendChild(li);
+    return;
+  }
+
+  let docsArr = [];
+  snap.forEach((docSnap) => docsArr.push(docSnap.data()));
+
+  docsArr = docsArr.filter((d) => calcLeaderboardScore(d) > 0);
+  docsArr.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
+
+  const top = docsArr.slice(0, 25);
+  top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
+}
+
+async function loadLeaderboardsMulti(rootEl) {
+  const listToday = rootEl.querySelector("#leaderboardToday");
+  const listMonth = rootEl.querySelector("#leaderboardMonth");
+  const listAllTime = rootEl.querySelector("#leaderboardAllTime");
+  if (!listToday || !listMonth || !listAllTime) return;
+
+  listToday.innerHTML = "";
+  listMonth.innerHTML = "";
+  listAllTime.innerHTML = "";
+
+  try {
+    await Promise.all([
+      fillLeaderboardToday(listToday),
+      fillLeaderboardMonth(listMonth),
+      fillLeaderboardAllTime(listAllTime),
+    ]);
+  } catch (err) {
+    console.error("Fout bij laden leaderboards:", err);
+  }
+}
+
 async function renderFinalScoreboard(game) {
   if (!roundInfo) return;
 
@@ -578,190 +710,18 @@ async function renderFinalScoreboard(game) {
       </div>
     </div>
   `;
-  section.appendChild(leaderboardSection);
 
+  section.appendChild(leaderboardSection);
   roundInfo.appendChild(section);
 
-  await loadLeaderboardsMulti();
+  await loadLeaderboardsMulti(section);
 
   if (scoreOverlayContent) {
-    const scoreboardClone = section.cloneNode(true);
+    const clone = section.cloneNode(true);
     scoreOverlayContent.innerHTML = "";
-    scoreOverlayContent.appendChild(scoreboardClone);
+    scoreOverlayContent.appendChild(clone);
+    await loadLeaderboardsMulti(scoreOverlayContent);
   }
-}
-
-function calcLeaderboardScore(data) {
-  if (!data) return 0;
-  const eggs = Number(data.eggs || 0);
-  const hens = Number(data.hens || 0);
-  const prize = Number(data.prize || 0);
-  const bonus = Number(data.bonus || 0);
-  const baseFromCounts = eggs + hens * 2 + prize * 3;
-  const stored = Number(data.score || 0);
-  return Math.max(stored, baseFromCounts + bonus);
-}
-
-function appendLeaderboardRow(listEl, rank, data) {
-  const eggs = data.eggs || 0;
-  const hens = data.hens || 0;
-  const prize = data.prize || 0;
-  const bonus = data.bonus || 0;
-  const score = calcLeaderboardScore(data);
-  if (score <= 0) return;
-
-  let dateLabel = "";
-  if (data.playedAt && data.playedAt.seconds != null) {
-    const d = new Date(data.playedAt.seconds * 1000);
-    dateLabel = d.toLocaleDateString();
-  }
-
-  const li = document.createElement("li");
-  li.className = "leaderboard-item";
-  li.innerHTML = `
-    <div class="leaderboard-item-main">
-      <span>${rank}. ${data.name || "Fox"}</span>
-      <span class="leaderboard-item-loot">
-        E:${eggs} H:${hens} P:${prize} +${bonus}
-      </span>
-    </div>
-    <div class="leaderboard-item-meta">
-      <div>${score} pts</div>
-      <div class="leaderboard-item-date">${dateLabel}</div>
-    </div>
-  `;
-  listEl.appendChild(li);
-}
-
-async function loadLeaderboardsMulti() {
-  if (!roundInfo) return;
-
-  const listToday = roundInfo.querySelector("#leaderboardToday");
-  const listMonth = roundInfo.querySelector("#leaderboardMonth");
-  const listAllTime = roundInfo.querySelector("#leaderboardAllTime");
-  if (!listToday || !listMonth || !listAllTime) return;
-
-  listToday.innerHTML = "";
-  listMonth.innerHTML = "";
-  listAllTime.innerHTML = "";
-
-  try {
-    await Promise.all([
-      fillLeaderboardToday(listToday),
-      fillLeaderboardMonth(listMonth),
-      fillLeaderboardAllTime(listAllTime),
-    ]);
-  } catch (err) {
-    console.error("Fout bij laden leaderboards:", err);
-  }
-}
-
-async function fillLeaderboardAllTime(listEl) {
-  const leaderboardCol = collection(db, "leaderboard");
-  const qAll = query(leaderboardCol, orderBy("score", "desc"), limit(100));
-  const snap = await getDocs(qAll);
-
-  if (snap.empty) {
-    const li = document.createElement("li");
-    li.className = "leaderboard-empty";
-    li.textContent = "Nog geen scores.";
-    listEl.appendChild(li);
-    return;
-  }
-
-  let docsArr = [];
-  snap.forEach((docSnap) => docsArr.push(docSnap.data()));
-
-  docsArr = docsArr.filter((d) => calcLeaderboardScore(d) > 0);
-  if (!docsArr.length) {
-    const li = document.createElement("li");
-    li.className = "leaderboard-empty";
-    li.textContent = "Nog geen scores.";
-    listEl.appendChild(li);
-    return;
-  }
-
-  docsArr.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
-  let rank = 1;
-  docsArr.forEach((data) => appendLeaderboardRow(listEl, rank++, data));
-}
-
-async function fillLeaderboardToday(listEl) {
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-  const leaderboardCol = collection(db, "leaderboard");
-  const qToday = query(
-    leaderboardCol,
-    where("playedAt", ">=", todayStart),
-    orderBy("playedAt", "desc"),
-    limit(200)
-  );
-
-  const snap = await getDocs(qToday);
-
-  if (snap.empty) {
-    const li = document.createElement("li");
-    li.className = "leaderboard-empty";
-    li.textContent = "Nog geen scores voor vandaag.";
-    listEl.appendChild(li);
-    return;
-  }
-
-  let docsArr = [];
-  snap.forEach((docSnap) => docsArr.push(docSnap.data()));
-
-  docsArr = docsArr.filter((d) => calcLeaderboardScore(d) > 0);
-  if (!docsArr.length) {
-    const li = document.createElement("li");
-    li.className = "leaderboard-empty";
-    li.textContent = "Nog geen scores voor vandaag.";
-    listEl.appendChild(li);
-    return;
-  }
-
-  docsArr.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
-  const top = docsArr.slice(0, 10);
-  top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
-}
-
-async function fillLeaderboardMonth(listEl) {
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-
-  const leaderboardCol = collection(db, "leaderboard");
-  const qMonth = query(
-    leaderboardCol,
-    where("playedAt", ">=", monthStart),
-    orderBy("playedAt", "desc"),
-    limit(500)
-  );
-
-  const snap = await getDocs(qMonth);
-
-  if (snap.empty) {
-    const li = document.createElement("li");
-    li.className = "leaderboard-empty";
-    li.textContent = "Nog geen scores voor deze maand.";
-    listEl.appendChild(li);
-    return;
-  }
-
-  let docsArr = [];
-  snap.forEach((docSnap) => docsArr.push(docSnap.data()));
-
-  docsArr = docsArr.filter((d) => calcLeaderboardScore(d) > 0);
-  if (!docsArr.length) {
-    const li = document.createElement("li");
-    li.className = "leaderboard-empty";
-    li.textContent = "Nog geen scores voor deze maand.";
-    listEl.appendChild(li);
-    return;
-  }
-
-  docsArr.sort((a, b) => calcLeaderboardScore(b) - calcLeaderboardScore(a));
-  const top = docsArr.slice(0, 25);
-  top.forEach((data, idx) => appendLeaderboardRow(listEl, idx + 1, data));
 }
 
 // ===============================
@@ -771,7 +731,6 @@ async function initRaidIfNeeded(gameRefParam) {
   const snap = await getDoc(gameRefParam);
   if (!snap.exists()) return null;
   const game = snap.data();
-
   if (game.raidStarted) return game;
 
   const playersCol = collection(db, "games", gameId, "players");
@@ -804,7 +763,7 @@ async function initRaidIfNeeded(gameRefParam) {
     opsLocked: false,
     followTail: {},
     scentChecks: [],
-    holdStill: {},   
+    holdStill: {},
   };
 
   const colorOffset = Math.floor(Math.random() * DEN_COLORS.length);
@@ -820,7 +779,7 @@ async function initRaidIfNeeded(gameRefParam) {
       updateDoc(pref, {
         joinOrder: index,
         color,
-        den: color, 
+        den: color,
         inYard: true,
         dashed: false,
         burrowUsed: false,
@@ -836,7 +795,6 @@ async function initRaidIfNeeded(gameRefParam) {
   if (lootDeck.length) sack.push(lootDeck.pop());
 
   const leadIndex = Math.floor(Math.random() * sorted.length);
-
   const botsEnabled = game.botsEnabled === true;
 
   updates.push(
@@ -881,7 +839,7 @@ async function initRaidIfNeeded(gameRefParam) {
 }
 
 // ===============================
-// HELPER: SPELERS ZONES RENDEREN
+// Spelers zones renderen
 // ===============================
 function renderPlayerZones() {
   if (!yardZone || !caughtZone || !dashZone) return;
@@ -952,7 +910,7 @@ function renderPlayerZones() {
 }
 
 // ===============================
-// GAME CODE generator + NEW RAID FROM BOARD
+// NEW RAID (board)
 // ===============================
 function generateCode(length = 4) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -994,17 +952,25 @@ async function startNewRaidFromBoard() {
 if (newRaidBtn) newRaidBtn.addEventListener("click", startNewRaidFromBoard);
 
 // ===============================
-// BOTS (moved out of host.js)
+// MAIN INIT
 // ===============================
+if (!gameId && gameInfo) {
+  gameInfo.textContent = "Geen gameId in de URL";
+}
 
-// 1x aanroepen zodra db + gameId bekend zijn
-function initBotsOnHost() {
-  if (!gameId || !db) return;
+initAuth(async (authUser) => {
+  hostUid = authUser?.uid || null;
 
-  // Start autonome bots (botRunner regelt snapshots/locks zelf)
-  startBotRunner({ db, gameId, addLog, isBoardOnly });
+  if (!gameId || !gameRef || !playersColRef) return;
 
-  // Button: BOT toevoegen (maakt bot-speler aan in Firestore)
+  // ✅ start bots (botRunner doet zelf: boardOnly guard + locks)
+  if (typeof stopBots === "function") {
+    stopBots();
+    stopBots = null;
+  }
+  stopBots = startBotRunner({ db, gameId, addLog, isBoardOnly, hostUid });
+
+  // ✅ BOT toevoegen knop blijft in host.js (alleen create bot-player)
   if (addBotBtn) {
     addBotBtn.addEventListener("click", async () => {
       try {
@@ -1015,230 +981,6 @@ function initBotsOnHost() {
       }
     });
   }
-}
-
-// ===============================
-// MAIN INIT (clean — bots moved to botRunner.js)
-// ===============================
-if (!gameId && gameInfo) {
-  gameInfo.textContent = "Geen gameId in de URL";
-}
-
-let hostUid = null;
-let stopBots = null;
-
-initAuth(async (authUser) => {
-  hostUid = authUser?.uid || null;
-
-  if (!gameId || !gameRef || !playersColRef) return;
-
-  // ✅ Start autonome bots (en onthoud stop-functie)
-  stopBots = startBotRunner({ db, gameId, addLog, isBoardOnly, hostUid });
-
-  // ===============================
-  // GAME SNAPSHOT
-  // ===============================
-  onSnapshot(gameRef, (snap) => {
-    if (!snap.exists()) {
-      if (gameInfo) gameInfo.textContent = "Spel niet gevonden";
-      return;
-    }
-
-    const game = snap.data();
-    latestGame = { id: snap.id, ...game };
-
-    currentRoundNumber = game.round || 0;
-    currentPhase = game.phase || "MOVE";
-
-    // ✅ stop bot listeners zodra game klaar is
-    if (isGameFinished(game) && typeof stopBots === "function") {
-      stopBots();
-      stopBots = null;
-    }
-
-    // Event poster flow
-    if (game.phase === "REVEAL" && game.currentEventId) {
-      if (game.currentEventId !== lastRevealedEventId) {
-        lastRevealedEventId = game.currentEventId;
-        openEventPoster(game.currentEventId);
-      }
-    } else {
-      lastRevealedEventId = null;
-    }
-
-    renderPlayerZones();
-
-    if (startBtn) {
-      startBtn.disabled = game.status === "finished" || game.raidEndedByRooster === true;
-    }
-
-    renderEventTrack(game);
-    renderStatusCards(game);
-
-    if (game.code) renderJoinQr(game);
-
-    // Status line
-    let extraStatus = "";
-    if (game.raidEndedByRooster) extraStatus = " – Raid geëindigd door Rooster Crow (limiet bereikt)";
-    if (game.status === "finished") extraStatus = extraStatus ? extraStatus + " – spel afgelopen." : " – spel afgelopen.";
-
-    if (gameInfo) {
-      gameInfo.textContent =
-        `Code: ${game.code} – Status: ${game.status} – Ronde: ${currentRoundNumber} – Fase: ${currentPhase}${extraStatus}`;
-    }
-
-    // Finished
-    if (isGameFinished(game)) {
-      if (unsubActions) {
-        unsubActions();
-        unsubActions = null;
-      }
-      renderFinalScoreboard(game);
-      return;
-    }
-
-    // Not active round
-    if (!isActiveRaidStatus(game.status)) {
-      if (roundInfo) roundInfo.textContent = "Nog geen actieve ronde.";
-      if (unsubActions) {
-        unsubActions();
-        unsubActions = null;
-      }
-      return;
-    }
-
-    // Round actions monitor (per round)
-    if (currentRoundForActions === currentRoundNumber && unsubActions) return;
-    currentRoundForActions = currentRoundNumber;
-
-    const event =
-      game.currentEventId && game.phase === "REVEAL" ? getEventById(game.currentEventId) : null;
-
-    const actionsQuery = query(actionsCol, where("round", "==", currentRoundForActions));
-
-    if (unsubActions) unsubActions();
-    unsubActions = onSnapshot(actionsQuery, (snapActions) => {
-      if (!roundInfo) return;
-      roundInfo.innerHTML = "";
-
-      const phaseLabel = currentPhase;
-
-      if (event) {
-        const h2 = document.createElement("h2");
-        h2.textContent = `Ronde ${currentRoundForActions} – fase: ${phaseLabel}: ${event.title}`;
-        const pText = document.createElement("p");
-        pText.textContent = event.text;
-        roundInfo.appendChild(h2);
-        roundInfo.appendChild(pText);
-      } else {
-        const h2 = document.createElement("h2");
-        h2.textContent = `Ronde ${currentRoundForActions} – fase: ${phaseLabel}`;
-        roundInfo.appendChild(h2);
-      }
-
-      const count = snapActions.size;
-      const p = document.createElement("p");
-      p.textContent = `Registraties (moves/actions/decisions): ${count}`;
-      roundInfo.appendChild(p);
-
-      const list = document.createElement("div");
-      list.className = "round-actions-list";
-      snapActions.forEach((aDoc) => {
-        const a = aDoc.data();
-        const line = document.createElement("div");
-        line.className = "round-action-line";
-        line.textContent = `${a.playerName || a.playerId}: ${a.phase} – ${a.choice}`;
-        list.appendChild(line);
-      });
-      roundInfo.appendChild(list);
-    });
-  });
-
-  // ===============================
-  // PLAYERS SNAPSHOT
-  // ===============================
-  onSnapshot(playersColRef, (snapshot) => {
-    const players = [];
-    snapshot.forEach((pDoc) => players.push({ id: pDoc.id, ...pDoc.data() }));
-    latestPlayers = players;
-
-    renderPlayerZones();
-  });
-
-  // ===============================
-  // LOG PANEL (host-only UI)
-  // ===============================
-  if (!isBoardOnly) {
-    const logCol = collection(db, "games", gameId, "log");
-    const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
-
-    function formatChoiceForDisplay(phase, rawChoice, payload) {
-      const choice = String(rawChoice || "");
-      const p = payload || {};
-
-      if (phase === "DECISION" && choice.startsWith("DECISION_")) {
-        const k = choice.slice("DECISION_".length);
-        if (k === "LURK") return "DECISION: LURK";
-        if (k === "BURROW") return "DECISION: BURROW";
-        if (k === "DASH") return "DECISION: DASH";
-        return `DECISION: ${k}`;
-      }
-
-      if (phase === "MOVE" && choice.startsWith("MOVE_")) {
-        if (choice.includes("SNATCH")) return "MOVE: SNATCH";
-        if (choice.includes("FORAGE")) return "MOVE: FORAGE";
-        if (choice.includes("SCOUT_")) return `MOVE: SCOUT (pos ${choice.split("_").pop()})`;
-        if (choice.includes("SHIFT_")) return `MOVE: SHIFT (${choice.split("SHIFT_")[1]})`;
-        return `MOVE: ${choice.slice("MOVE_".length)}`;
-      }
-
-      if (phase === "ACTIONS" && choice.startsWith("ACTION_")) {
-        const name = choice.slice("ACTION_".length);
-        if (name === "PASS") return "ACTIONS: PASS";
-        let extra = "";
-        if (p.color) extra = ` (Den ${p.color})`;
-        if (Number.isFinite(p.pos)) extra = ` (pos ${p.pos})`;
-        if (Number.isFinite(p.pos1) && Number.isFinite(p.pos2)) extra = ` (${p.pos1}↔${p.pos2})`;
-        return `ACTIONS: ${name}${extra}`;
-      }
-
-      return choice || "—";
-    }
-
-    function formatLogLine(e) {
-      const round = e.round ?? "?";
-      const phase = e.phase ?? "?";
-      const who = e.playerName || e.actorName || "SYSTEEM";
-
-      if (e.choice) {
-        const nice = formatChoiceForDisplay(phase, e.choice, e.payload);
-        return `[R${round} – ${phase}] ${who} • ${nice}`;
-      }
-      return `[R${round} – ${phase} – ${e.kind ?? "?"}] ${e.message ?? ""}`;
-    }
-
-    onSnapshot(logQuery, (snap) => {
-      const entries = [];
-      snap.forEach((docSnap) => entries.push(docSnap.data()));
-      entries.reverse();
-
-      if (!logPanel) return;
-      logPanel.innerHTML = "";
-
-      const inner = document.createElement("div");
-      inner.className = "log-lines";
-
-      entries.forEach((e) => {
-        const div = document.createElement("div");
-        div.className = "log-line";
-        div.textContent = formatLogLine(e);
-        inner.appendChild(div);
-      });
-
-      logPanel.appendChild(inner);
-    });
-  }
-});
 
   // ==== START ROUND ====
   if (startBtn) {
@@ -1250,7 +992,6 @@ initAuth(async (authUser) => {
         alert("Dit spel is al afgelopen. Start een nieuwe game als je opnieuw wilt spelen.");
         return;
       }
-
       if (game.raidEndedByRooster) {
         alert("De raid is geëindigd door de Rooster-limiet. Er kunnen geen nieuwe rondes meer gestart worden.");
         return;
@@ -1301,6 +1042,7 @@ initAuth(async (authUser) => {
           opsLocked: false,
           followTail: {},
           scentChecks: [],
+          holdStill: {},
         },
         leadIndex,
       });
@@ -1328,7 +1070,6 @@ initAuth(async (authUser) => {
         alert("Het spel is al afgelopen; er is geen volgende fase meer.");
         return;
       }
-
       if (!isActiveRaidStatus(game.status)) {
         alert("Er is geen actieve ronde in de raid.");
         return;
@@ -1385,7 +1126,6 @@ initAuth(async (authUser) => {
           kind: "SYSTEM",
           message: "OPS-fase gestart. Lead Fox begint met het spelen van Action Cards of PASS.",
         });
-
         return;
       }
 
@@ -1397,19 +1137,17 @@ initAuth(async (authUser) => {
         const opsLocked = !!game.flagsRound?.opsLocked;
 
         if (!opsLocked && activeCount > 0 && passes < activeCount) {
-        alert(`OPS-fase is nog bezig: opeenvolgende PASSes: ${passes}/${activeCount}.`);
-        return;
-      }
+          alert(`OPS-fase is nog bezig: opeenvolgende PASSes: ${passes}/${activeCount}.`);
+          return;
+        }
 
         await updateDoc(gameRef, { phase: "DECISION" });
-
         await addLog(gameId, {
           round: roundNumber,
           phase: "DECISION",
           kind: "SYSTEM",
           message: "Iedereen heeft na elkaar gepast in OPS – door naar DECISION-fase.",
         });
-
         return;
       }
 
@@ -1497,31 +1235,225 @@ initAuth(async (authUser) => {
         if (latest && isGameFinished(latest)) return;
 
         const activeAfterReveal = latestPlayers.filter(isInYardLocal);
-
         if (activeAfterReveal.length === 0) {
           await updateDoc(gameRef, { status: "finished", phase: "END" });
-
           await addLog(gameId, {
             round: roundNumber,
             phase: "END",
             kind: "SYSTEM",
             message: "Geen vossen meer in de Yard na REVEAL – de raid is afgelopen.",
           });
-
           return;
         }
 
         await updateDoc(gameRef, { phase: "MOVE" });
-
         await addLog(gameId, {
           round: roundNumber,
           phase: "MOVE",
           kind: "SYSTEM",
           message: "REVEAL afgerond. Terug naar MOVE-fase voor de volgende ronde.",
         });
-
         return;
       }
+    });
+  }
+
+  // ===============================
+  // GAME SNAPSHOT
+  // ===============================
+  onSnapshot(gameRef, (snap) => {
+    if (!snap.exists()) {
+      if (gameInfo) gameInfo.textContent = "Spel niet gevonden";
+      return;
+    }
+
+    const game = snap.data();
+    latestGame = { id: snap.id, ...game };
+
+    currentRoundNumber = game.round || 0;
+    currentPhase = game.phase || "MOVE";
+
+    // stop bots zodra game klaar is
+    if (isGameFinished(game) && typeof stopBots === "function") {
+      stopBots();
+      stopBots = null;
+    }
+
+    // Event poster flow
+    if (game.phase === "REVEAL" && game.currentEventId) {
+      if (game.currentEventId !== lastRevealedEventId) {
+        lastRevealedEventId = game.currentEventId;
+        openEventPoster(game.currentEventId);
+      }
+    } else {
+      lastRevealedEventId = null;
+    }
+
+    renderPlayerZones();
+
+    if (startBtn) startBtn.disabled = game.status === "finished" || game.raidEndedByRooster === true;
+
+    renderEventTrack(game);
+    renderStatusCards(game);
+
+    if (game.code) renderJoinQr(game);
+
+    let extraStatus = "";
+    if (game.raidEndedByRooster) extraStatus = " – Raid geëindigd door Rooster Crow (limiet bereikt)";
+    if (game.status === "finished") extraStatus = extraStatus ? extraStatus + " – spel afgelopen." : " – spel afgelopen.";
+
+    if (gameInfo) {
+      gameInfo.textContent =
+        `Code: ${game.code} – Status: ${game.status} – Ronde: ${currentRoundNumber} – Fase: ${currentPhase}${extraStatus}`;
+    }
+
+    if (isGameFinished(game)) {
+      if (unsubActions) {
+        unsubActions();
+        unsubActions = null;
+      }
+      renderFinalScoreboard(game);
+      return;
+    }
+
+    if (!isActiveRaidStatus(game.status)) {
+      if (roundInfo) roundInfo.textContent = "Nog geen actieve ronde.";
+      if (unsubActions) {
+        unsubActions();
+        unsubActions = null;
+      }
+      return;
+    }
+
+    // Per ronde acties tonen
+    if (currentRoundForActions === currentRoundNumber && unsubActions) return;
+    currentRoundForActions = currentRoundNumber;
+
+    const event =
+      game.currentEventId && game.phase === "REVEAL" ? getEventById(game.currentEventId) : null;
+
+    const actionsCol = collection(db, "games", gameId, "actions");
+    const actionsQuery = query(actionsCol, where("round", "==", currentRoundForActions));
+
+    if (unsubActions) unsubActions();
+    unsubActions = onSnapshot(actionsQuery, (snapActions) => {
+      if (!roundInfo) return;
+      roundInfo.innerHTML = "";
+
+      const phaseLabel = currentPhase;
+
+      if (event) {
+        const h2 = document.createElement("h2");
+        h2.textContent = `Ronde ${currentRoundForActions} – fase: ${phaseLabel}: ${event.title}`;
+        const pText = document.createElement("p");
+        pText.textContent = event.text;
+        roundInfo.appendChild(h2);
+        roundInfo.appendChild(pText);
+      } else {
+        const h2 = document.createElement("h2");
+        h2.textContent = `Ronde ${currentRoundForActions} – fase: ${phaseLabel}`;
+        roundInfo.appendChild(h2);
+      }
+
+      const count = snapActions.size;
+      const p = document.createElement("p");
+      p.textContent = `Registraties (moves/actions/decisions): ${count}`;
+      roundInfo.appendChild(p);
+
+      const list = document.createElement("div");
+      list.className = "round-actions-list";
+      snapActions.forEach((aDoc) => {
+        const a = aDoc.data();
+        const line = document.createElement("div");
+        line.className = "round-action-line";
+        line.textContent = `${a.playerName || a.playerId}: ${a.phase} – ${a.choice}`;
+        list.appendChild(line);
+      });
+      roundInfo.appendChild(list);
+    });
+  });
+
+  // ===============================
+  // PLAYERS SNAPSHOT
+  // ===============================
+  onSnapshot(playersColRef, (snapshot) => {
+    const players = [];
+    snapshot.forEach((pDoc) => players.push({ id: pDoc.id, ...pDoc.data() }));
+    latestPlayers = players;
+    renderPlayerZones();
+  });
+
+  // ===============================
+  // LOG PANEL (host-only)
+  // ===============================
+  if (!isBoardOnly) {
+    const logCol = collection(db, "games", gameId, "log");
+    const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
+
+    function formatChoiceForDisplay(phase, rawChoice, payload) {
+      const choice = String(rawChoice || "");
+      const p = payload || {};
+
+      if (phase === "DECISION" && choice.startsWith("DECISION_")) {
+        const k = choice.slice("DECISION_".length);
+        if (k === "LURK") return "DECISION: LURK";
+        if (k === "BURROW") return "DECISION: BURROW";
+        if (k === "DASH") return "DECISION: DASH";
+        return `DECISION: ${k}`;
+      }
+
+      if (phase === "MOVE" && choice.startsWith("MOVE_")) {
+        if (choice.includes("SNATCH")) return "MOVE: SNATCH";
+        if (choice.includes("FORAGE")) return "MOVE: FORAGE";
+        if (choice.includes("SCOUT_")) return `MOVE: SCOUT (pos ${choice.split("_").pop()})`;
+        if (choice.includes("SHIFT_")) return `MOVE: SHIFT (${choice.split("SHIFT_")[1]})`;
+        return `MOVE: ${choice.slice("MOVE_".length)}`;
+      }
+
+      if (phase === "ACTIONS" && choice.startsWith("ACTION_")) {
+        const name = choice.slice("ACTION_".length);
+        if (name === "PASS") return "ACTIONS: PASS";
+        let extra = "";
+        if (p.color) extra = ` (Den ${p.color})`;
+        if (Number.isFinite(p.pos)) extra = ` (pos ${p.pos})`;
+        if (Number.isFinite(p.pos1) && Number.isFinite(p.pos2)) extra = ` (${p.pos1}↔${p.pos2})`;
+        return `ACTIONS: ${name}${extra}`;
+      }
+
+      return choice || "—";
+    }
+
+    function formatLogLine(e) {
+      const round = e.round ?? "?";
+      const phase = e.phase ?? "?";
+      const who = e.playerName || e.actorName || "SYSTEEM";
+
+      if (e.choice) {
+        const nice = formatChoiceForDisplay(phase, e.choice, e.payload);
+        return `[R${round} – ${phase}] ${who} • ${nice}`;
+      }
+      return `[R${round} – ${phase} – ${e.kind ?? "?"}] ${e.message ?? ""}`;
+    }
+
+    onSnapshot(logQuery, (snap) => {
+      const entries = [];
+      snap.forEach((docSnap) => entries.push(docSnap.data()));
+      entries.reverse();
+
+      if (!logPanel) return;
+      logPanel.innerHTML = "";
+
+      const inner = document.createElement("div");
+      inner.className = "log-lines";
+
+      entries.forEach((e) => {
+        const div = document.createElement("div");
+        div.className = "log-line";
+        div.textContent = formatLogLine(e);
+        inner.appendChild(div);
+      });
+
+      logPanel.appendChild(inner);
     });
   }
 });
