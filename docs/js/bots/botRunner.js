@@ -56,6 +56,31 @@ function canDecideNow(game, p) {
   return !p.decision;
 }
 
+function botCanActNow({ game, me, intent }) {
+  const phase = game?.phase;
+
+  // intent: "MOVE" | "PLAY_CARD" | "PASS_OPS" | "DECISION"
+  if (!phase) return { ok: false, reason: "NO_PHASE" };
+
+  if (intent === "MOVE" && phase !== "MOVE") return { ok: false, reason: "PHASE_BLOCK_MOVE" };
+  if ((intent === "PLAY_CARD" || intent === "PASS_OPS") && phase !== "OPS")
+    return { ok: false, reason: "PHASE_BLOCK_OPS" };
+  if (intent === "DECISION" && phase !== "DECISION") return { ok: false, reason: "PHASE_BLOCK_DECISION" };
+
+  // OPS beurt check
+  if (phase === "OPS") {
+    if (typeof isMyOpsTurn === "function" && !isMyOpsTurn(game)) {
+      return { ok: false, reason: "NOT_MY_OPS_TURN" };
+    }
+    if (mergeRoundFlags?.(game)?.opsLocked) {
+      // Hold Still / opsLocked = hard rule
+      if (intent === "PLAY_CARD") return { ok: false, reason: "OPS_LOCKED" };
+    }
+  }
+
+  return { ok: true };
+}
+
 function canOpsNow(game, pId) {
   if (!game) return false;
   if (game.status !== "round") return false;
