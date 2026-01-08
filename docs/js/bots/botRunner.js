@@ -1,4 +1,48 @@
 // docs/js/bots/botRunner.js
+import {
+  doc, getDoc, getDocs, collection, addDoc, updateDoc, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
+
+export async function addBotToCurrentGame({ db, gameId, denColors }) {
+  if (!gameId) throw new Error("Geen gameId");
+
+  const gSnap = await getDoc(doc(db, "games", gameId));
+  if (!gSnap.exists()) throw new Error("Game niet gevonden");
+  const g = gSnap.data();
+
+  const playersSnap = await getDocs(collection(db, "games", gameId, "players"));
+  const players = [];
+  playersSnap.forEach((pDoc) => players.push({ id: pDoc.id, ...pDoc.data() }));
+
+  const maxJoin = players.reduce((m, p) => (typeof p.joinOrder === "number" ? Math.max(m, p.joinOrder) : m), -1);
+  const joinOrder = maxJoin + 1;
+  const color = denColors[joinOrder % denColors.length];
+
+  let actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
+  const hand = [];
+  for (let i = 0; i < 3; i++) if (actionDeck.length) hand.push(actionDeck.pop());
+
+  await addDoc(collection(db, "games", gameId, "players"), {
+    name: `BOT Fox ${joinOrder + 1}`,
+    isBot: true,
+    isHost: false,
+    uid: null,
+    score: 0,
+    joinedAt: serverTimestamp(),
+    joinOrder,
+    color,
+    den: color,
+    inYard: true,
+    dashed: false,
+    burrowUsed: false,
+    decision: null,
+    hand,
+    loot: [],
+    opsActionPlayedRound: null,
+  });
+
+  await updateDoc(doc(db, "games", gameId), { botsEnabled: true, actionDeck });
+}
 
 import {
   doc,
