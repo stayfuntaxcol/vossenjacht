@@ -2269,7 +2269,7 @@ async function performScout() {
   const posStr = prompt(`Welke event-positie wil je scouten? (1-${track.length})`);
   if (!posStr) return;
 
-  const pos = parseInt(posStr, 10);
+  const pos = parseInt(String(posStr).trim(), 10);
   if (Number.isNaN(pos) || pos < 1 || pos > track.length) {
     alert("Ongeldige positie.");
     return;
@@ -2294,7 +2294,9 @@ async function performScout() {
 
   await logMoveAction(game, player, `MOVE_SCOUT_${pos}`, "MOVE", { pos, eventId });
 
-  setActionFeedback(`SCOUT: je hebt event #${pos} bekeken. Deze ronde zie je deze kaart als persoonlijke preview.`);
+  setActionFeedback(
+    `SCOUT: je hebt event #${pos} bekeken. Deze ronde zie je deze kaart als persoonlijke preview.`
+  );
 }
 
 async function performShift() {
