@@ -653,106 +653,146 @@ async function botDoDecision({ db, gameId, botId }) {
   if (logPayload) await logBotAction({ db, gameId, addLog: null, payload: logPayload });
 }
 
-/** ===== exported: start runner ===== */
+/** ===== exported: start runner (1 action per tick + backoff, no interval storm) ===== */
 export function startBotRunner({ db, gameId, addLog, isBoardOnly = false, hostUid = null }) {
   if (!db || !gameId) return () => {};
-  if (isBoardOnly) return () => {}; // board screens should not drive bots
+  if (isBoardOnly) return () => {}; // board screens must NOT drive bots
 
   const runnerKey = hostUid || getRunnerId();
 
   const gameRef = doc(db, "games", gameId);
   const playersCol = collection(db, "games", gameId, "players");
 
+  // Safe defaults (no ReferenceError if constants not defined elsewhere)
+  const DEBOUNCE_MS = typeof BOT_DEBOUNCE_MS === "number" ? BOT_DEBOUNCE_MS : 200;
+  const MIN_ACTION_MS = 1500;      // <- critical: slows writes, prevents quota/hot-doc
+  const IDLE_MS = 2500;            // when nothing to do
+  const MAX_BACKOFF_MS = 8000;
+
   let latestGame = null;
   let latestPlayers = [];
+
   let unsubGame = null;
   let unsubPlayers = null;
 
-  let interval = null;
-  let scheduled = false;
+  let stopped = false;
   let busy = false;
 
-  function scheduleTick() {
+  let timer = null;
+  let scheduled = false;
+
+  let backoffMs = 0;
+
+  function clearTimer() {
+    if (timer) clearTimeout(timer);
+    timer = null;
+  }
+
+  function plan(ms) {
+    if (stopped) return;
+    clearTimer();
+    timer = setTimeout(loop, ms);
+  }
+
+  function nudge() {
+    // debounce snapshot storms
+    if (stopped) return;
     if (scheduled) return;
     scheduled = true;
     setTimeout(() => {
       scheduled = false;
-      tick().catch((e) => console.warn("[BOTS] tick error", e));
-    }, BOT_DEBOUNCE_MS);
+      // push loop soon, but don't spam
+      if (!timer) plan(0);
+    }, DEBOUNCE_MS);
   }
 
-  async function tick() {
-    if (busy) return;
+  function pickOneJob(g, bots) {
+    if (!g || !bots?.length) return null;
+
+    if (g.phase === "MOVE") {
+      const b = bots.find((x) => canBotMove(g, x));
+      return b ? { kind: "MOVE", botId: b.id } : null;
+    }
+
+    if (g.phase === "ACTIONS") {
+      const turnId = getOpsTurnId(g);
+      if (!turnId) return null;
+      const b = bots.find((x) => x.id === turnId);
+      return b ? { kind: "ACTIONS", botId: b.id } : null;
+    }
+
+    if (g.phase === "DECISION") {
+      const b = bots.find((x) => canBotDecide(g, x));
+      return b ? { kind: "DECISION", botId: b.id } : null;
+    }
+
+    return null;
+  }
+
+  async function loop() {
+    if (stopped) return;
+    if (busy) return plan(400);
 
     const g = latestGame;
-    if (!g || g.botsEnabled !== true) return;
-    if (isGameFinished(g)) return;
-    if (!isActiveRaidStatus(g.status)) return;
-    if (g.raidEndedByRooster) return;
+
+    // Guardrails
+    if (!g || g.botsEnabled !== true) return plan(IDLE_MS);
+    if (isGameFinished(g)) return plan(IDLE_MS);
+    if (!isActiveRaidStatus(g.status)) return plan(IDLE_MS);
+    if (g.raidEndedByRooster) return plan(IDLE_MS);
 
     const bots = (latestPlayers || []).filter((p) => p?.isBot);
-    if (!bots.length) return;
-
-    // do we need work?
-    let workNeeded = false;
-    if (g.phase === "MOVE") {
-      workNeeded = bots.some((b) => canBotMove(g, b));
-    } else if (g.phase === "ACTIONS") {
-      const turnId = getOpsTurnId(g);
-      workNeeded = !!turnId && bots.some((b) => b.id === turnId);
-    } else if (g.phase === "DECISION") {
-      workNeeded = bots.some((b) => canBotDecide(g, b));
-    } else {
-      return;
-    }
-    if (!workNeeded) return;
+    const job = pickOneJob(g, bots);
+    if (!job) return plan(IDLE_MS);
 
     busy = true;
     try {
       const gotLock = await acquireBotLock({ db, gameId, gameRef, runnerKey });
-      if (!gotLock) return;
-
-      // re-check by latest snapshots (still fine; each op uses tx anyway)
-      const gNow = latestGame;
-      if (!gNow) return;
-
-      if (gNow.phase === "MOVE") {
-        for (const b of bots) {
-          if (!canBotMove(gNow, b)) continue;
-          await botDoMove({ db, gameId, botId: b.id });
-        }
-      } else if (gNow.phase === "ACTIONS") {
-        const turnId = getOpsTurnId(gNow);
-        if (!turnId) return;
-        const b = bots.find((x) => x.id === turnId);
-        if (!b) return;
-        await botDoOpsTurn({ db, gameId, botId: b.id, latestPlayers });
-      } else if (gNow.phase === "DECISION") {
-        for (const b of bots) {
-          if (!canBotDecide(gNow, b)) continue;
-          await botDoDecision({ db, gameId, botId: b.id });
-        }
+      if (!gotLock) {
+        // backoff on contention
+        backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs ? backoffMs * 2 : 1000);
+        return plan(backoffMs);
       }
+
+      backoffMs = 0;
+
+      // Execute EXACTLY ONE action per loop (huge quota win)
+      if (job.kind === "MOVE") {
+        await botDoMove({ db, gameId, botId: job.botId });
+      } else if (job.kind === "ACTIONS") {
+        await botDoOpsTurn({ db, gameId, botId: job.botId, latestPlayers });
+      } else if (job.kind === "DECISION") {
+        await botDoDecision({ db, gameId, botId: job.botId });
+      }
+    } catch (e) {
+      console.warn("[BOTS] loop error", e);
+      backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs ? backoffMs * 2 : 1000);
+      return plan(backoffMs);
     } finally {
       busy = false;
     }
+
+    // schedule next allowed action
+    plan(MIN_ACTION_MS);
   }
 
+  // --- snapshots ---
   unsubGame = onSnapshot(gameRef, (snap) => {
     latestGame = snap.exists() ? { id: snap.id, ...snap.data() } : null;
-    scheduleTick();
+    nudge();
   });
 
   unsubPlayers = onSnapshot(playersCol, (snap) => {
     latestPlayers = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    scheduleTick();
+    nudge();
   });
 
-  interval = setInterval(scheduleTick, BOT_TICK_MS);
+  // kickstart
+  plan(500);
 
   return function stop() {
-    if (interval) clearInterval(interval);
-    interval = null;
+    stopped = true;
+    clearTimer();
     if (typeof unsubGame === "function") unsubGame();
     if (typeof unsubPlayers === "function") unsubPlayers();
     unsubGame = null;
