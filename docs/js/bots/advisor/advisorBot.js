@@ -2,14 +2,11 @@
 // Log-first Advisor (single source of truth: /log)
 // - Werkt ook met legacy /actions docs (zelfde shape: round/phase/playerId/choice)
 // - Neemt roundState + flags uit logs mee (Den Signal / Scatter / No-Go Zone / Hold Still / Follow Tail / Burrow Beacon)
+// - Per-speler “Scout Intel”: onthoudt (en verplaatst) gescoute event-kennis via track-swaps (Pack Tinker / Kick Up Dust / SHIFT)
+// - “Hold Still” = OPS lock (global), NIET target-buff in DECISION
 // - Voorkomt “Defensief vs Aanvallend is hetzelfde” via lichte style tie-break
 // - Leakt geen event IDs/titels naar UI (sanitizers)
 // - NEW output shape: { version, phase, commonBullets, def, agg, ... } voor de nieuwe overlay
-//
-// UPDATE (SCOUT INTEL):
-// - Als speler SCOUT heeft gedaan: advisor weet welke kaart “bekend” is
-// - Als daarna Pack Tinker swaps doet: die persoonlijke kennis schuift mee (indexA<->indexB)
-// - Als “next card” bekend is: 100% zekerheid voor gevaar/veilig/nadelig status
 
 import { ADVISOR_PROFILES } from "../core/botConfig.js";
 import { buildPlayerView } from "../core/stateView.js";
@@ -19,7 +16,36 @@ import { scoreMoveMoves, scoreOpsPlays, scoreDecisions } from "../core/scoring.j
 // Action defs + info (1 bron: cards.js)
 import { getActionDefByName, getActionInfoByName } from "../../cards.js";
 
-const VERSION = "ADVISOR_V2026-01-09_SCOUTINTEL_1";
+const VERSION = "ADVISOR_V2026-01-09_1";
+
+// ------------------------------
+// Utils
+// ------------------------------
+function safeArr(x) {
+  return Array.isArray(x) ? x : [];
+}
+function clamp01(x) {
+  return Math.max(0, Math.min(1, Number(x) || 0));
+}
+function pct(x) {
+  return `${Math.round(clamp01(x) * 100)}%`;
+}
+function normalizeKey(s) {
+  return String(s || "").trim().toLowerCase();
+}
+function dedupeLines(lines) {
+  const out = [];
+  const seen = new Set();
+  for (const l of safeArr(lines)) {
+    const s = String(l || "").trim();
+    if (!s) continue;
+    const k = normalizeKey(s);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
 
 // ------------------------------
 // Phase normalisatie
@@ -36,6 +62,8 @@ function normalizePhase(phase) {
 
 // ------------------------------
 // View adapter: jouw buildPlayerView() shape -> advisor shape
+// buildPlayerView geeft: { phase, round, eventTrack, eventCursor, flags, me, playersPublic }
+// advisor verwacht: view.game, view.me, view.players, view.phase, view.round
 // ------------------------------
 function adaptAdvisorView(rawView, fallback = {}) {
   const r = rawView || {};
@@ -233,13 +261,14 @@ function getLootCount(p) {
 // /log adapter (accept /log or legacy /actions)
 // ------------------------------
 function normalizeLogRow(raw) {
-  const x = raw && typeof raw?.data === "function" ? raw.data() : (raw || {});
+  const x = raw && typeof raw?.data === "function" ? raw.data() : raw || {};
 
   const round = Number.isFinite(Number(x.round)) ? Number(x.round) : 0;
   const phaseNorm = normalizePhase(x.phase);
   const playerId = x.playerId || x.actorId || null;
 
-  const choice = typeof x.choice === "string" ? x.choice : (x.choice == null ? "" : String(x.choice));
+  const choice = typeof x.choice === "string" ? x.choice : x.choice == null ? "" : String(x.choice);
+
   const payload = x.payload && typeof x.payload === "object" ? x.payload : null;
 
   const createdAt = x.createdAt || null;
@@ -256,18 +285,6 @@ function normalizeLogRow(raw) {
     createdAt,
     clientAt,
   };
-}
-
-function logMs(d) {
-  if (!d) return 0;
-  if (Number.isFinite(Number(d.clientAt)) && Number(d.clientAt) > 0) return Number(d.clientAt);
-  const t = d.createdAt;
-  try {
-    if (!t) return 0;
-    if (typeof t.toMillis === "function") return t.toMillis();
-    if (typeof t.seconds === "number") return t.seconds * 1000;
-  } catch {}
-  return 0;
 }
 
 function parseActionNameFromChoice(choice, payload) {
@@ -290,32 +307,104 @@ function parseActionNameFromChoice(choice, payload) {
 }
 
 // ------------------------------
-// RoundState uit /log (keuzes + flags + tellingen)
+// RoundState uit /log (keuzes + flags + tellingen + track ops + scout intel)
 // ------------------------------
+function parsePosFromScoutChoice(choice, payload) {
+  const p0 = Number(payload?.pos ?? payload?.position);
+  if (Number.isFinite(p0) && p0 > 0) return p0;
+
+  const m = String(choice || "").match(/MOVE_SCOUT_(\d+)/i);
+  if (m && m[1]) {
+    const n = Number(m[1]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+function extractSwapIndicesFromPayload(payload) {
+  const p = payload || {};
+  const a0 = Number(p.indexA ?? p.a ?? p.iA);
+  const b0 = Number(p.indexB ?? p.b ?? p.iB);
+
+  if (Number.isFinite(a0) && Number.isFinite(b0)) {
+    return { indexA: a0, indexB: b0 };
+  }
+
+  // pos1/pos2 zijn 1-based in jouw logs
+  const pos1 = Number(p.pos1 ?? p.position1);
+  const pos2 = Number(p.pos2 ?? p.position2);
+  if (Number.isFinite(pos1) && Number.isFinite(pos2)) {
+    return { indexA: pos1 - 1, indexB: pos2 - 1 };
+  }
+
+  // andere varianten
+  const x = Number(p.x);
+  const y = Number(p.y);
+  if (Number.isFinite(x) && Number.isFinite(y)) return { indexA: x, indexB: y };
+
+  return null;
+}
+
 function buildRoundStateFromLog(logs, round) {
   const state = {
     round,
     choices: { move: {}, ops: {}, decision: {} },
     decisionCounts: { LURK: 0, BURROW: 0, DASH: 0 },
+
+    // flags die live gebruikt worden
     flags: {
       scatter: false,
       lockEvents: false,
-      denImmune: {},     // {RED:true}
-      noPeek: [],        // [pos]
-      holdStill: {},     // {playerId:true}
-      followTail: {},    // {followerId: targetId}
+      opsLocked: false,   // <-- Hold Still (global) (NIEUW)
+      denImmune: {},      // {RED:true}
+      noPeek: [],         // [pos]
+      followTail: {},     // {followerId: targetId}
+    },
+
+    // track-manip ops (voor scout-kennis verplaatsen)
+    trackOps: [],         // [{at, by, indexA, indexB, actorId}]
+
+    // per speler: wat heeft hij gescout (met timestamp)
+    intel: {
+      scout: {},           // {playerId: {pos,index,eventId,at}}
     },
   };
 
-  const arr = Array.isArray(logs) ? logs : [];
-  for (const raw of arr) {
-    const d = normalizeLogRow(raw);
-    if ((d.round || 0) !== round) continue;
-    if (!d.playerId || !d.phase) continue;
-    if (!d.choice) continue;
+  const arr = safeArr(logs)
+    .map(normalizeLogRow)
+    .filter((d) => (d.round || 0) === round)
+    .sort((a, b) => (a.clientAt || 0) - (b.clientAt || 0));
+
+  for (const d of arr) {
+    if (!d.playerId || !d.phase || !d.choice) continue;
 
     if (d.phase === "MOVE") {
       state.choices.move[d.playerId] = { choice: d.choice, payload: d.payload || null };
+
+      // Scout intel (per speler)
+      if (String(d.choice).startsWith("MOVE_SCOUT_") || String(d.choice).toUpperCase().includes("SCOUT")) {
+        const pos = parsePosFromScoutChoice(d.choice, d.payload);
+        const idx = Number.isFinite(Number(d.payload?.index)) ? Number(d.payload.index) : (Number.isFinite(pos) ? pos - 1 : null);
+        const eventId = d.payload?.eventId || d.payload?.id || null;
+
+        if (Number.isFinite(pos) && Number.isFinite(idx) && eventId) {
+          state.intel.scout[d.playerId] = { pos, index: idx, eventId: String(eventId), at: d.clientAt || 0 };
+        }
+      }
+
+      // SHIFT kan ook track manipuleren (als je logs payload pos1/pos2 bevat)
+      if (String(d.choice || "").toUpperCase().includes("SHIFT")) {
+        const sw = extractSwapIndicesFromPayload(d.payload);
+        if (sw && Number.isFinite(sw.indexA) && Number.isFinite(sw.indexB)) {
+          state.trackOps.push({
+            at: d.clientAt || 0,
+            by: "SHIFT",
+            indexA: sw.indexA,
+            indexB: sw.indexB,
+            actorId: d.playerId,
+          });
+        }
+      }
+
       continue;
     }
 
@@ -323,11 +412,13 @@ function buildRoundStateFromLog(logs, round) {
       state.choices.ops[d.playerId] = { choice: d.choice, payload: d.payload || null };
 
       const actionName = parseActionNameFromChoice(d.choice, d.payload);
-      if (!actionName) continue;
 
       // flags afleiden uit actie-naam
       if (actionName === "Scatter!") state.flags.scatter = true;
       if (actionName === "Burrow Beacon") state.flags.lockEvents = true;
+
+      // Hold Still = OPS lock (global) (NIEUW)
+      if (actionName === "Hold Still") state.flags.opsLocked = true;
 
       if (actionName === "Den Signal") {
         const c = String(d.payload?.color || d.payload?.denColor || "").trim().toUpperCase();
@@ -339,14 +430,29 @@ function buildRoundStateFromLog(logs, round) {
         if (Number.isFinite(pos)) state.flags.noPeek.push(pos);
       }
 
-      if (actionName === "Hold Still") {
-        const tid = d.payload?.targetId || d.payload?.targetPlayerId;
-        if (tid) state.flags.holdStill[tid] = true;
-      }
-
       if (actionName === "Follow the Tail") {
         const tid = d.payload?.targetId || d.payload?.targetPlayerId;
         if (tid) state.flags.followTail[d.playerId] = tid;
+      }
+
+      // Track ops: Pack Tinker / Kick Up Dust effect logs (en ook als actie-play payload indices bevat)
+      const choiceUpper = String(d.choice || "").toUpperCase();
+      const isPackTinker =
+        actionName === "Pack Tinker" || choiceUpper.includes("PACK_TINKER") || choiceUpper.includes("EFFECT_PACK_TINKER");
+      const isKickUpDust =
+        actionName === "Kick Up Dust" || choiceUpper.includes("KICK_UP_DUST") || choiceUpper.includes("EFFECT_KICK_UP_DUST");
+
+      if (isPackTinker || isKickUpDust) {
+        const sw = extractSwapIndicesFromPayload(d.payload);
+        if (sw && Number.isFinite(sw.indexA) && Number.isFinite(sw.indexB)) {
+          state.trackOps.push({
+            at: d.clientAt || 0,
+            by: isPackTinker ? "PACK_TINKER" : "KICK_UP_DUST",
+            indexA: sw.indexA,
+            indexB: sw.indexB,
+            actorId: d.playerId,
+          });
+        }
       }
 
       continue;
@@ -364,6 +470,9 @@ function buildRoundStateFromLog(logs, round) {
   // dedupe noPeek
   state.flags.noPeek = [...new Set(state.flags.noPeek.filter((n) => Number.isFinite(Number(n))))];
 
+  // sort trackOps ook op at
+  state.trackOps = safeArr(state.trackOps).sort((a, b) => (a.at || 0) - (b.at || 0));
+
   return state;
 }
 
@@ -374,7 +483,11 @@ function mergeEffectiveFlags(gameFlags, logFlags) {
   const g = gameFlags || {};
   const l = logFlags || {};
 
-  const denImmune = { ...(g.denImmune || {}), ...(l.denImmune || {}) };
+  const denImmune = {
+    ...(g.denImmune || {}),
+    ...(l.denImmune || {}),
+  };
+
   const noPeek = [...new Set([...(g.noPeek || []), ...(l.noPeek || [])])];
 
   return {
@@ -383,148 +496,6 @@ function mergeEffectiveFlags(gameFlags, logFlags) {
     denImmune,
     noPeek,
     followTail: { ...(g.followTail || {}), ...(l.followTail || {}) },
-    holdStill: { ...(g.holdStill || {}), ...(l.holdStill || {}) },
-  };
-}
-
-// ------------------------------
-// SCOUT intel + track mutations (Pack Tinker)
-// ------------------------------
-function readScoutPeek(me) {
-  const sp = me?.scoutPeek || null;
-  const index = Number(sp?.index);
-  const eventId = sp?.eventId ? String(sp.eventId) : "";
-  if (!Number.isFinite(index) || index < 0) return null;
-  if (!eventId) return null;
-  return { index, eventId, round: Number(sp?.round ?? 0) || 0 };
-}
-
-function findLatestScoutMs(logs, playerId) {
-  const arr = Array.isArray(logs) ? logs : [];
-  let best = 0;
-
-  for (const raw of arr) {
-    const d = normalizeLogRow(raw);
-    if (!d.playerId || d.playerId !== playerId) continue;
-    if (d.phase !== "MOVE") continue;
-
-    const c = String(d.choice || "");
-    // jouw logMoveAction: `MOVE_SCOUT_${pos}`
-    if (!/^MOVE_SCOUT_\d+$/i.test(c)) continue;
-
-    const ms = logMs(d);
-    if (ms > best) best = ms;
-  }
-
-  return best;
-}
-
-function extractPackTinkerSwaps(logs) {
-  const arr = Array.isArray(logs) ? logs : [];
-  const out = [];
-
-  for (const raw of arr) {
-    const d = normalizeLogRow(raw);
-    const c = String(d.choice || "").trim();
-
-    // vanuit engine.js: choice: "EFFECT_PACK_TINKER"
-    if (c !== "EFFECT_PACK_TINKER") continue;
-
-    const p = d.payload || {};
-    let a = Number(p.indexA);
-    let b = Number(p.indexB);
-
-    // fallback: pos1/pos2 (1-based)
-    if (!Number.isFinite(a) || !Number.isFinite(b)) {
-      const pos1 = Number(p.pos1);
-      const pos2 = Number(p.pos2);
-      if (Number.isFinite(pos1) && Number.isFinite(pos2)) {
-        a = pos1 - 1;
-        b = pos2 - 1;
-      }
-    }
-
-    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
-
-    out.push({
-      ms: logMs(d),
-      indexA: a,
-      indexB: b,
-      kind: "SWAP",
-      source: "PACK_TINKER",
-    });
-  }
-
-  // sort chronologisch (oud -> nieuw)
-  out.sort((x, y) => (x.ms || 0) - (y.ms || 0));
-  return out;
-}
-
-function didKickUpDustHappenAfter(logs, afterMs) {
-  const arr = Array.isArray(logs) ? logs : [];
-  for (const raw of arr) {
-    const d = normalizeLogRow(raw);
-    const ms = logMs(d);
-    if (afterMs && ms && ms <= afterMs) continue;
-
-    const actionName = parseActionNameFromChoice(d.choice, d.payload);
-    const c = String(d.choice || "");
-
-    // accepteer zowel actie-log als effect-log (als je die hebt)
-    if (actionName === "Kick Up Dust") return true;
-    if (c.includes("EFFECT_KICK_UP_DUST")) return true;
-  }
-  return false;
-}
-
-function computePersonalScoutIntel({ view, me, logs }) {
-  const pid = me?.id || me?.playerId || null;
-  const sp = readScoutPeek(me);
-  if (!pid || !sp) return null;
-
-  const eventIndex = Number(view?.game?.eventIndex ?? 0) || 0;
-
-  // Als de gescoute index al onthuld is, is het info “stale”
-  if (sp.index < eventIndex) return null;
-
-  const scoutMs = findLatestScoutMs(logs, pid) || 0;
-
-  // Als na scout een shuffle gebeurde -> info ongeldig
-  if (didKickUpDustHappenAfter(logs, scoutMs)) {
-    return {
-      known: false,
-      reason: "KICK_UP_DUST",
-      source: "SCOUT",
-      scoutIndex: sp.index,
-      eventId: sp.eventId,
-    };
-  }
-
-  // swaps na scout: schuif jouw “bekende kaart” mee
-  const swaps = extractPackTinkerSwaps(logs).filter((x) => !scoutMs || (x.ms || 0) >= scoutMs);
-
-  let idx = sp.index;
-  for (const sw of swaps) {
-    const a = sw.indexA;
-    const b = sw.indexB;
-    if (idx === a) idx = b;
-    else if (idx === b) idx = a;
-  }
-
-  // Als ondertussen eventIndex voorbij jouw idx is geschoven (zou normaal niet gebeuren binnen zelfde ronde, maar safe)
-  if (idx < eventIndex) return null;
-
-  const nextKnown = idx === eventIndex;
-
-  return {
-    known: true,
-    source: "SCOUT",
-    scoutIndex: sp.index,
-    indexNow: idx,
-    eventId: sp.eventId,
-    nextKnown,
-    nextEventId: nextKnown ? sp.eventId : null,
-    swapsApplied: swaps.length,
   };
 }
 
@@ -542,7 +513,7 @@ function isDenImmuneForColor(flagsRound, color) {
 }
 
 // ------------------------------
-// Event danger evaluation (LURK baseline)
+// Event danger/harmful evaluation (baseline LURK)
 // Houdt rekening met Den Signal (immune) via ctx.denSignalActive
 // ------------------------------
 function isDangerousEventForMe(eventId, ctx) {
@@ -563,7 +534,7 @@ function isDangerousEventForMe(eventId, ctx) {
     return !ctx.denSignalActive;
   }
 
-  // Sheepdog Patrol: baseline LURK = veilig
+  // Sheepdog Patrol: baseline LURK = veilig (gevaar zit op DASH)
   if (id === "SHEEPDOG_PATROL") return false;
 
   // Gate Toll: als je geen loot hebt, word je gepakt (als je niet DASHt)
@@ -572,15 +543,36 @@ function isDangerousEventForMe(eventId, ctx) {
   // Magpie Snitch: gevaarlijk voor Lead Fox (baseline LURK = gevaar)
   if (id === "MAGPIE_SNITCH") return !!ctx.isLead;
 
+  // Silent Alarm: geen catch, wel penalty (dus niet "dangerous")
+  if (id === "SILENT_ALARM") return false;
+
+  // Barn Fire Drill: geen catch
+  if (id === "BARN_FIRE_DRILL") return false;
+
+  // Bad Map / Stormy Night: geen directe catch
+  if (id === "BAD_MAP" || id === "STORMY_NIGHT") return false;
+
   return false;
 }
 
-// "harmful" evaluation (veilig, maar nadelig)
 function isHarmfulEventForMe(eventId, ctx) {
   const id = String(eventId || "");
   if (!id) return false;
 
+  // Sack reset is nadelig als er iets in Sack zit
   if (id === "PAINT_BOMB_NEST") return (ctx.sackCount ?? 0) > 0;
+
+  // Bad Map = chaos: kan toekomstige events randomizen
+  if (id === "BAD_MAP") return true;
+
+  // Stormy Night = condition: verandert waarde/risico van rooster/hond later (altijd impact)
+  if (id === "STORMY_NIGHT") return true;
+
+  // Silent Alarm = lead penalty (loot/lead)
+  if (id === "SILENT_ALARM") return !!ctx.isLead || (ctx.lootCount ?? 0) >= 2;
+
+  // Barn Fire Drill = Sack eerlijk verdeeld: nadelig als jij juist op Sack/tempo speelt
+  if (id === "BARN_FIRE_DRILL") return (ctx.sackCount ?? 0) > 0;
 
   return false;
 }
@@ -601,13 +593,6 @@ function countRemainingOf(remainingIds, predicate) {
   return n;
 }
 
-function clamp01(x) {
-  return Math.max(0, Math.min(1, Number(x) || 0));
-}
-function pct(x) {
-  return `${Math.round(clamp01(x) * 100)}%`;
-}
-
 // ------------------------------
 // Bullet sanitizing: geen Event IDs/titels lekken
 // ------------------------------
@@ -620,6 +605,10 @@ const KNOWN_EVENT_IDS = [
   "MAGPIE_SNITCH",
   "PAINT_BOMB_NEST",
   "ROOSTER_CROW",
+  "BAD_MAP",
+  "STORMY_NIGHT",
+  "SILENT_ALARM",
+  "BARN_FIRE_DRILL",
   "DEN_RED",
   "DEN_BLUE",
   "DEN_GREEN",
@@ -633,14 +622,21 @@ function sanitizeTextNoEventNames(text) {
     const re = new RegExp(`\\b${id}\\b`, "g");
     s = s.replace(re, "opkomend event");
   }
+
+  // DEN IDs -> Den-event
   s = s.replace(/\bDEN_(RED|BLUE|GREEN|YELLOW)\b/g, "Den-event");
 
+  // Veel voorkomende titels -> generiek
   s = s.replace(/\bRooster Crow\b/gi, "rooster-event");
   s = s.replace(/\bHidden Nest\b/gi, "bonus-event");
   s = s.replace(/\bSheepdog Patrol\b/gi, "patrol-event");
   s = s.replace(/\bSecond Charge\b/gi, "charge-event");
   s = s.replace(/\bSheepdog Charge\b/gi, "charge-event");
   s = s.replace(/\bPaint[- ]?Bomb Nest\b/gi, "sack-reset event");
+  s = s.replace(/\bBad Map\b/gi, "chaos-event");
+  s = s.replace(/\bStormy Night\b/gi, "conditie-event");
+  s = s.replace(/\bSilent Alarm\b/gi, "lead-penalty event");
+  s = s.replace(/\bBarn Fire Drill\b/gi, "sack-split event");
 
   return s;
 }
@@ -650,12 +646,13 @@ function sanitizeBullets(bullets) {
 }
 
 // ------------------------------
-// Headerregels
+// Headerregels (met “bekend 100%”)
 // ------------------------------
 function headerLinesCompact(view, riskMeta) {
+  const knownTag = riskMeta.nextKnown ? " (BEKEND • 100%)" : " (ONBEKEND)";
   return [
     `Ronde: ${view.round ?? 0} • Fase: ${view.phase ?? "?"}`,
-    `Volgende kaart: ${riskMeta.nextLabel} • Kans gevaar (deck): ${pct(riskMeta.probNextDanger)} • Kans nadelig (deck): ${pct(riskMeta.probNextHarmful)}`,
+    `Volgende kaart: ${riskMeta.nextLabel}${knownTag} • Kans gevaar (deck): ${pct(riskMeta.probNextDanger)} • Kans nadelig (deck): ${pct(riskMeta.probNextHarmful)}`,
   ];
 }
 
@@ -683,9 +680,89 @@ function resolveMyDenColor(view, me, players) {
 }
 
 // ------------------------------
-// Risk meta (met effective flags + personal scout intel)
+// Per speler: Scout Intel (bekende eventId op indices) + verplaats via swaps
 // ------------------------------
-function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags, logs }) {
+function buildPlayerScoutIntel({ view, me, roundState }) {
+  const myId = me?.id || me?.playerId || null;
+  const round = Number(view?.round ?? view?.game?.round ?? 0) || 0;
+
+  const game = view?.game || {};
+  const eventIndex = Number(game.eventIndex ?? 0) || 0;
+
+  // prefer: log-derived scout (timestamped)
+  let peek = myId ? roundState?.intel?.scout?.[myId] || null : null;
+
+  // fallback: player doc field (geen timestamp -> at=0)
+  if (!peek && me?.scoutPeek && Number(me.scoutPeek.round) === round) {
+    const idx = Number(me.scoutPeek.index);
+    const eventId = me.scoutPeek.eventId;
+    if (Number.isFinite(idx) && eventId) {
+      peek = { pos: idx + 1, index: idx, eventId: String(eventId), at: 0 };
+    }
+  }
+
+  const knownByIndex = {}; // index -> eventId
+  if (peek && Number.isFinite(Number(peek.index)) && peek.eventId) {
+    knownByIndex[Number(peek.index)] = String(peek.eventId);
+  }
+
+  // verplaats kennis via trackOps (alleen ops NA scout-moment als we timestamp hebben)
+  const ops = safeArr(roundState?.trackOps).sort((a, b) => (a.at || 0) - (b.at || 0));
+  const peekAt = Number(peek?.at || 0);
+
+  const hasKey = (obj, k) => Object.prototype.hasOwnProperty.call(obj, k);
+
+  for (const op of ops) {
+    const at = Number(op?.at || 0);
+    if (peek && peekAt && at && at < peekAt) continue;
+
+    const a = Number(op?.indexA);
+    const b = Number(op?.indexB);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+
+    const aKnown = hasKey(knownByIndex, a);
+    const bKnown = hasKey(knownByIndex, b);
+    if (!aKnown && !bKnown) continue;
+
+    const va = aKnown ? knownByIndex[a] : undefined;
+    const vb = bKnown ? knownByIndex[b] : undefined;
+
+    // swap
+    if (aKnown) knownByIndex[b] = va;
+    else delete knownByIndex[b];
+
+    if (bKnown) knownByIndex[a] = vb;
+    else delete knownByIndex[a];
+  }
+
+  const nextIndex = eventIndex;
+  const nextKnownId = Object.prototype.hasOwnProperty.call(knownByIndex, nextIndex)
+    ? knownByIndex[nextIndex]
+    : null;
+
+  const knownAhead = [];
+  for (const [k, v] of Object.entries(knownByIndex)) {
+    const idx = Number(k);
+    if (!Number.isFinite(idx)) continue;
+    if (idx < eventIndex) continue;
+    knownAhead.push({ index: idx, eventId: String(v || "") });
+  }
+  knownAhead.sort((a, b) => a.index - b.index);
+
+  return {
+    peek,                // {pos,index,eventId,at} | null
+    knownByIndex,        // { [index]: eventId }
+    knownAhead,          // [{index,eventId}]
+    nextIndex,
+    nextKnownId,
+    nextKnown: !!nextKnownId,
+  };
+}
+
+// ------------------------------
+// Risk meta (met effective flags + scout-known “100%” status)
+// ------------------------------
+function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags, scoutIntel }) {
   const myColor = resolveMyDenColor(view, me, players);
   const roosterSeen = Number(game?.roosterSeen || 0);
 
@@ -702,6 +779,8 @@ function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags, 
   const ctx = { myColor, roosterSeen, lootCount, lootPts, isLead, sackCount, denSignalActive };
 
   const remaining = getRemainingEventIds(game);
+
+  // “Deck”-kansen (uit remaining track)
   const probNextDanger = calcDangerProbFromRemaining(remaining, ctx);
 
   const total = remaining.length || 1;
@@ -717,24 +796,20 @@ function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags, 
   const pThirdRooster =
     roosterSeen >= 2 ? countRemainingOf(remaining, (id) => id === "ROOSTER_CROW") / total : 0;
 
-  // PERSONAL intel (SCOUT + swaps)
-  const personalIntel = computePersonalScoutIntel({ view, me, logs });
+  // Scout-known next (100%)
+  const nextKnown = !!scoutIntel?.nextKnown;
+  const nextKnownId = scoutIntel?.nextKnownId || null;
 
-  // upcoming peek (intern) -> default next
-  let nextId = upcomingPeek?.[0]?.id || null;
+  const nextKnownIsDanger = nextKnownId ? isDangerousEventForMe(nextKnownId, ctx) : false;
+  const nextKnownIsHarmful = nextKnownId ? isHarmfulEventForMe(nextKnownId, ctx) : false;
 
-  // override: als de volgende kaart bij jou bekend is door SCOUT
-  const nextKnown = !!personalIntel?.known && !!personalIntel?.nextKnown && !!personalIntel?.nextEventId;
-  if (nextKnown) nextId = personalIntel.nextEventId;
-
-  const nextIsDanger = nextId ? isDangerousEventForMe(nextId, ctx) : false;
-  const nextIsHarmful = nextId ? isHarmfulEventForMe(nextId, ctx) : false;
-
-  const baseLabel = nextId
-    ? (nextIsDanger ? "GEVAARLIJK" : (nextIsHarmful ? "VEILIG maar NADELIG" : "VEILIG"))
-    : "—";
-
-  const nextLabel = nextKnown ? `${baseLabel} (BEKEND)` : baseLabel;
+  const nextLabel = nextKnown
+    ? nextKnownIsDanger
+      ? "GEVAARLIJK"
+      : nextKnownIsHarmful
+      ? "VEILIG maar NADELIG"
+      : "VEILIG"
+    : "ONBEKEND";
 
   return {
     ctx,
@@ -745,17 +820,14 @@ function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags, 
     pCharges,
     pThirdRooster,
 
-    // intern
-    nextId,
-    nextIsDanger,
-    nextIsHarmful,
+    // scout-known
+    nextKnown,
+    nextKnownId,
+    nextKnownIsDanger,
+    nextKnownIsHarmful,
 
     // toonbaar
     nextLabel,
-
-    // nieuw
-    nextKnown,
-    personalIntel,
   };
 }
 
@@ -792,6 +864,7 @@ function postRankByStyle(ranked, style) {
 
         if (p.includes("DEN SIGNAL")) delta += 0.08;
         if (p.includes("BURROW BEACON")) delta += 0.05;
+        if (p.includes("HOLD STILL")) delta += 0.05;
 
         return bump(x, delta);
       })
@@ -827,111 +900,230 @@ function postRankByStyle(ranked, style) {
 }
 
 // ------------------------------
-// OPS: tactische override (met effective flags + scout intel)
+// Extra “Why/How” bullets per keuze (voor je overlay: onderste 2 regels)
 // ------------------------------
-function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
+const ACTION_TIPS = {
+  "Molting Mask": {
+    why: "Molting Mask: wisselt jouw Den-kleur (kan Den-check ontwijken).",
+    how: "Strategie: speel dit als jouw Den-kleur waarschijnlijk ‘in de problemen’ komt, of als je targeting wilt breken.",
+  },
+  "Pack Tinker": {
+    why: "Track manipulation: beïnvloedt toekomstige events.",
+    how: "Strategie: gebruik SCOUT-info om een dreiging naar achter te schuiven of een bonus gunstig te timen (werkt niet bij lock).",
+  },
+  "Burrow Beacon": {
+    why: "Burrow Beacon: lockt de Event Track (geen SHIFT/track-manip deze ronde).",
+    how: "Strategie: speel dit nadat jij de track gunstig hebt gezet (Scout/Pack Tinker), of als je chaos wilt stoppen.",
+  },
+  "Hold Still": {
+    why: "Hold Still: OPS lock (na deze kaart mag alleen PASS).",
+    how: "Strategie: speel dit als jij klaar bent met je sleutelzet en je geen tegenreacties meer wilt toestaan.",
+  },
+  "Den Signal": {
+    why: "Den Signal: jouw gekozen Den-kleur wordt immuun tegen track-catch (deze ronde).",
+    how: "Strategie: speel dit als charges/Den-checks waarschijnlijk zijn, of als veel spelers in dezelfde kleur zitten.",
+  },
+  "Kick Up Dust": {
+    why: "Kick Up Dust: veroorzaakt chaos in toekomstige events (als de track niet gelocked is).",
+    how: "Strategie: speel als iemand anders voordeel lijkt te hebben van SCOUT/track-planning, of om dreiging weg te spoelen.",
+  },
+  "Scatter!": {
+    why: "Scatter!: niemand mag SCOUTen deze ronde (info-denial).",
+    how: "Strategie: speel als jij al info hebt (of als je wil dat anderen jouw plan niet kunnen lezen).",
+  },
+  "No-Go Zone": {
+    why: "No-Go Zone: blokkeert SCOUT op 1 gekozen positie.",
+    how: "Strategie: zet op een cruciale positie die jij wil afschermen (bijv. de volgende kaart of een sleutelpositie).",
+  },
+  "Scent Check": {
+    why: "Scent Check: je ziet (straks opnieuw) de DECISION van 1 speler.",
+    how: "Strategie: target een sleutelspeler (Lead/high score) om DASH-timing of Hidden Nest beter te spelen.",
+  },
+  "Follow the Tail": {
+    why: "Follow the Tail: jouw DECISION wordt gekopieerd van een andere vos (later).",
+    how: "Strategie: kies iemand met betrouwbare timing, of gebruik als ‘verzekering’ als jij onzeker bent.",
+  },
+  "Alpha Call": {
+    why: "Alpha Call: verplaatst de Lead-rol (en dus Lead-risico).",
+    how: "Strategie: zet Lead weg bij jezelf als lead-events dreigen, of zet Lead op iemand die kwetsbaar is.",
+  },
+  "Mask Swap": {
+    why: "Mask Swap: husselt Den-kleuren van vossen in de Yard opnieuw.",
+    how: "Strategie: sterk als Den-targeting/Den-synergy gevaarlijk wordt of als jij uit de spotlight wil.",
+  },
+  "Nose for Trouble": {
+    why: "Nose for Trouble: je voorspelt de volgende Event kaart (kan beloning geven in huisregels).",
+    how: "Strategie: alleen doen als je (via SCOUT) echt hoge zekerheid hebt; anders is het tempoverlies.",
+  },
+};
+
+function addFlavorBulletsForPick(best, phase, style) {
+  const x = best || {};
+  const out = [];
+
+  if (phase === "OPS") {
+    if (x.play === "PASS") return x;
+
+    const name =
+      x.cardName || x.cardId || x.name || (typeof x.play === "string" ? x.play : null);
+
+    const def = name ? getActionDefByName(name) : null;
+    const display = def?.name || name || null;
+    const tips = display ? ACTION_TIPS[display] : null;
+
+    if (tips?.why) out.push(tips.why);
+    if (tips?.how) out.push(tips.how);
+
+    // fallback uit cards.js
+    if (!tips && def?.description) {
+      out.push(`${def.name}: ${def.description}`);
+      out.push("Strategie: speel dit op een moment dat het maximale voordeel geeft en tegenreacties beperkt.");
+    }
+
+    return { ...x, bullets: dedupeLines([...out, ...safeArr(x.bullets)]) };
+  }
+
+  if (phase === "DECISION") {
+    const d = String(x.decision || "").toUpperCase();
+    if (d === "LURK") {
+      out.push("LURK: veilig blijven en opties openhouden.");
+      out.push(style === "DEFENSIVE"
+        ? "Strategie: kies LURK als je risico wilt minimaliseren of als je info/controle wil afwachten."
+        : "Strategie: kies LURK als je nog niet wil ‘cashen’, maar wel tempo wil bewaren.");
+    } else if (d === "BURROW") {
+      out.push("BURROW: noodrem tegen vang-events (maar schaars).");
+      out.push("Strategie: alleen gebruiken als het risico echt hoog is of als je anders grote buit verliest.");
+    } else if (d === "DASH") {
+      out.push("DASH: cash out — je scoret nu, maar je verlaat de Yard.");
+      out.push("Strategie: kies DASH als timing perfect is (bonus, veel loot, of dreiging die je niet kunt pareren).");
+    }
+    return { ...x, bullets: dedupeLines([...out, ...safeArr(x.bullets)]) };
+  }
+
+  // MOVE: behoud scoring-bullets, geen extra needed
+  return x;
+}
+
+// ------------------------------
+// OPS: tactische override (met scout intel + effective flags)
+// (geen “cheat”: next-id specifieke adviezen alleen als nextKnown=true)
+// ------------------------------
+function pickOpsTacticalAdvice({ view, handNames, riskMeta, scoutIntel, effectiveFlags }) {
   const lines = [];
   const has = (name) => handNames.includes(name);
 
-  const myColor = riskMeta.ctx.myColor || "?";
-  const flags = view?.game?.flagsRound || view?.flags || {};
-  const denSignalActiveForMe = myColor ? isDenImmuneForColor(flags, myColor) : false;
+  const flags = effectiveFlags || view?.game?.flagsRound || view?.flags || {};
 
-  // SCOUT advantage messaging (persoonlijk)
-  const intel = riskMeta.personalIntel;
-  if (intel?.known && intel?.indexNow != null) {
-    if (riskMeta.nextKnown) {
-      lines.push("Strategie: je hebt de volgende kaart via SCOUT gezien → je kunt nu met 100% zekerheid plannen.");
-    } else {
-      lines.push(`Strategie: jij hebt via SCOUT een kaart verderop gezien (positie ${intel.indexNow + 1}). Houd de track stabiel voor voordeel.`);
+  const trackLocked = !!flags.lockEvents;
+  const opsLocked = !!flags.opsLocked;
+
+  // 1) Info-voordeel vasthouden (SCOUT)
+  if (scoutIntel?.peek) {
+    if (!trackLocked && has("Burrow Beacon")) {
+      lines.push("OPS tip: je hebt SCOUT-info → **Burrow Beacon** kan de Event Track deze ronde vastzetten (niemand kan SHIFT/Pack Tinker/Kick Up Dust).");
     }
-    // (jij wilde dit specifiek)
-    if (has("Hold Still")) {
-      lines.push("OPS tip: bewaar **Hold Still** voor het moment dat jouw SCOUT-info echt waardevol is (dan wil je voorkomen dat anderen de track veranderen).");
+    if (!opsLocked && has("Hold Still")) {
+      lines.push("OPS tip: je hebt SCOUT-info → bewaar of speel **Hold Still** op het juiste moment om tegenreacties (track-manip) te stoppen.");
     }
-  }
-
-  if (riskMeta.nextIsDanger) {
-    if (has("Den Signal") && !denSignalActiveForMe) {
-      lines.push("OPS tip: speel **Den Signal** op je eigen Den-kleur om jezelf veilig te zetten tegen charges en jouw Den-event.");
-    }
-
-    if (riskMeta.pMyDen >= 0.1) {
-      if (has("Molting Mask")) lines.push("OPS tip: bij Den-gevaar is **Molting Mask** heel sterk (willekeurige nieuwe Den-kleur).");
-      if (has("Mask Swap")) lines.push("OPS tip: **Mask Swap** is een alternatief als er andere actieve spelers in de Yard zijn.");
-    }
-
-    if (has("Pack Tinker")) lines.push("OPS tip: overweeg **Pack Tinker** om gevaar verder naar achter te schuiven.");
-    if (has("Kick Up Dust")) lines.push("OPS tip: **Kick Up Dust** kan toekomstige events herschudden (als de track niet gelocked is).");
-  }
-
-  if (riskMeta.nextId === "PAINT_BOMB_NEST") {
-    if ((riskMeta.ctx.sackCount ?? 0) > 0) {
-      lines.push("Let op: volgende kaart is een **sack-reset event** → huidige Sack verdwijnt terug de Loot Deck in (minder eindbonus voor dashers).");
-      if (has("Pack Tinker")) lines.push("OPS tip: **Pack Tinker** is hier sterk om dit event naar achteren te schuiven.");
-      if (has("Kick Up Dust")) lines.push("OPS tip: **Kick Up Dust** kan toekomstige events herschudden (als de track niet gelocked is).");
-    } else {
-      lines.push("Volgende kaart is een **sack-reset event**, maar de Sack is nu klein → impact is beperkt.");
+    if (has("Scatter!")) {
+      lines.push("OPS tip: jij hebt info → **Scatter!** voorkomt dat anderen ook SCOUTen deze ronde.");
     }
   }
 
-  if (riskMeta.nextId === "HIDDEN_NEST") {
-    lines.push("Let op: volgende kaart is een **DASH-bonus event**. Bonus werkt alleen als 1–3 spelers DASH kiezen (3/2/1 loot).");
-    lines.push("Strategie: vaak beter om dit bonus-event later te zetten (Pack Tinker / SHIFT), zodat je niet direct uit de Yard vertrekt.");
+  // 2) Als volgende kaart bekend is: 100% tactiek
+  if (riskMeta.nextKnown && riskMeta.nextKnownId) {
+    const id = riskMeta.nextKnownId;
+
+    if (riskMeta.nextKnownIsDanger) {
+      if (has("Den Signal") && !riskMeta.ctx.denSignalActive) {
+        lines.push("OPS tip: volgende kaart is gevaarlijk → **Den Signal** kan jou (en je Den-kleur) beschermen tegen track-catch.");
+      }
+
+      if (has("Molting Mask") && riskMeta.pMyDen >= 0.1) {
+        lines.push("OPS tip: bij Den-gevaar is **Molting Mask** sterk (kleur-escape).");
+      }
+
+      if (!trackLocked && has("Pack Tinker")) {
+        lines.push("OPS tip: volgende kaart is gevaarlijk → overweeg **Pack Tinker** om het gevaar naar achter te schuiven.");
+      }
+
+      if (!trackLocked && has("Kick Up Dust")) {
+        lines.push("OPS tip: als je geen nette swap hebt: **Kick Up Dust** kan de toekomst opschudden (alleen als track niet gelocked is).");
+      }
+    }
+
+    // bekende nadelige events
+    if (id === "PAINT_BOMB_NEST" && (riskMeta.ctx.sackCount ?? 0) > 0) {
+      if (!trackLocked && has("Pack Tinker")) lines.push("Let op: er komt een **sack-reset event** → **Pack Tinker** is hier sterk om dit event te verschuiven.");
+      if (!trackLocked && has("Kick Up Dust")) lines.push("OPS tip: **Kick Up Dust** kan ook helpen om een sack-reset te vermijden (als track niet gelocked is).");
+    }
+
+    if (id === "HIDDEN_NEST") {
+      lines.push("Let op: er komt een **DASH-bonus event** → vaak beter om die later te zetten (SHIFT / Pack Tinker), zodat je niet te vroeg uit de Yard vertrekt.");
+    }
+
+    if (id === "ROOSTER_CROW") {
+      if ((view?.game?.roosterSeen || 0) >= 2) {
+        lines.push("Alarm: een **3e rooster-event** is gevaarlijk (raid eindigt). Probeer dit naar achteren te schuiven (Pack Tinker / SHIFT).");
+      } else {
+        lines.push("Strategie: rooster-events zijn vaak beter later in de track (meer rondes om loot te pakken).");
+      }
+    }
+  } else {
+    // 3) Onbekend: alleen kans-based guidance (geen kaart-knowledge)
+    if (riskMeta.probNextDanger >= 0.35) {
+      if (!trackLocked && has("Pack Tinker")) lines.push("Strategie: kans op gevaar is vrij hoog → bewaar **Pack Tinker** om straks een dreiging te verplaatsen.");
+      if (has("Den Signal") && !riskMeta.ctx.denSignalActive) lines.push("Strategie: bij hoge dreiging kan **Den Signal** vaak een veilige default zijn.");
+    }
   }
 
-  if (riskMeta.nextId === "ROOSTER_CROW") {
-    if ((view?.game?.roosterSeen || 0) >= 2) {
-      lines.push("Alarm: een **3e rooster-event** is gevaarlijk (raid eindigt). Probeer dit naar achteren te schuiven (Pack Tinker / SHIFT).");
-    } else {
-      lines.push("Strategie: rooster-events zijn vaak beter later in de track (meer rondes om loot te pakken).");
-    }
+  // 4) Als OPS al gelocked is: reminder
+  if (opsLocked) {
+    lines.push("Let op: **Hold Still** is actief → er mogen geen nieuwe Action Cards meer gespeeld worden (alleen PASS).");
   }
 
   return lines.map(sanitizeTextNoEventNames);
 }
 
 // ------------------------------
-// DECISION: tactische guidance (Den Signal + Hold Still + Hidden Nest + SCOUT)
+// DECISION: tactische guidance (Den Signal + scout-known next)
+// (geen “cheat”: next-id specifieke adviezen alleen als nextKnown=true)
 // ------------------------------
-function decisionTacticalAdvice({ view, riskMeta }) {
+function decisionTacticalAdvice({ view, riskMeta, effectiveFlags }) {
   const lines = [];
   const g = view?.game || {};
   const myColor = riskMeta.ctx.myColor || "";
-  const flags = g.flagsRound || view?.flags || {};
+  const flags = effectiveFlags || g.flagsRound || view?.flags || {};
 
   const denSignalActiveForMe = myColor ? isDenImmuneForColor(flags, myColor) : false;
 
-  const holdStill = flags?.holdStill || {};
-  if (view?.me?.id && holdStill[view.me.id]) {
-    lines.push("Let op: **Hold Still** is op jou gespeeld → DASH werkt niet (je blijft LURK).");
-  }
-
-  // SCOUT zekerheid op de volgende kaart (persoonlijk)
-  if (riskMeta.nextKnown) {
-    lines.push(`SCOUT zekerheid: volgende kaart is ${riskMeta.nextIsDanger ? "GEVAARLIJK" : (riskMeta.nextIsHarmful ? "VEILIG maar NADELIG" : "VEILIG")} → je decision kan 100% hierop leunen.`);
-  }
-
   if (denSignalActiveForMe) {
-    lines.push("Den Signal actief voor jouw kleur → **kies LURK** (dus niet BURROW/DASH).");
+    lines.push("Den Signal actief voor jouw kleur → **kies LURK** (dus niet BURROW/DASH) tenzij je bewust ‘cash out’ wilt.");
   }
 
-  if (riskMeta.nextId === "HIDDEN_NEST") {
-    const dashSoFar = view?.roundState?.decisionCounts?.DASH ?? 0;
+  // Alleen als volgende kaart bekend is (SCOUT)
+  if (riskMeta.nextKnown && riskMeta.nextKnownId) {
+    const id = riskMeta.nextKnownId;
 
-    lines.push("Aggressief: **DASH** kan hier extra loot opleveren (alleen als 1–3 spelers DASH kiezen: 3/2/1).");
-
-    if (dashSoFar >= 3) {
-      lines.push("Waarschuwing: er zijn al veel DASH-keuzes → bonus wordt snel 0.");
-    } else {
-      lines.push("Check: als jij DASH kiest, probeer te mikken op totaal 1–3 dashers voor maximale bonus.");
+    if (id === "HIDDEN_NEST") {
+      const dashSoFar = view?.roundState?.decisionCounts?.DASH ?? 0;
+      lines.push("Aggressief: **DASH** kan hier extra loot opleveren (alleen als 1–3 spelers DASH kiezen: 3/2/1).");
+      if (dashSoFar >= 3) lines.push("Waarschuwing: er zijn al veel DASH-keuzes → bonus wordt snel 0.");
+      else lines.push("Check: mik op totaal 1–3 dashers voor maximale bonus.");
+      lines.push("Strategie: meestal is het beter om dit bonus-event later te zetten (Pack Tinker / SHIFT), zodat je niet te vroeg uit de Yard vertrekt.");
     }
 
-    lines.push("Strategie: meestal is het beter om dit bonus-event later te zetten (Pack Tinker / SHIFT), zodat je niet te vroeg uit de Yard vertrekt.");
-  }
+    if (id === "SHEEPDOG_PATROL") {
+      lines.push("Let op: volgende kaart straft **DASH** → kies liever LURK/BURROW.");
+    }
 
-  if (riskMeta.nextId === "ROOSTER_CROW" && (g.roosterSeen || 0) >= 2) {
-    lines.push("3e rooster-event is gevaarlijk (raid eindigt). Defensief: voorkom paniek-dash; liever de track fixen (Pack Tinker / SHIFT).");
+    if (id === "ROOSTER_CROW" && (g.roosterSeen || 0) >= 2) {
+      lines.push("3e rooster-event is gevaarlijk (raid eindigt). Defensief: voorkom paniek-dash; liever de track fixen (Pack Tinker / SHIFT).");
+    }
+
+    if (id === "MAGPIE_SNITCH" && riskMeta.ctx.isLead) {
+      lines.push("Let op: Lead-risico is hoog → BURROW kan nodig zijn om niet gepakt te worden.");
+    }
   }
 
   return lines.map(sanitizeTextNoEventNames);
@@ -963,14 +1155,16 @@ function buildOverlayHint({ phase, title, risk, confidence, commonBullets, defOb
       bullets: sanitizeBullets(aggObj.bullets || []),
     },
 
-    // legacy compat
+    // legacy compat (oude UI kan dit nog gebruiken)
     bullets: sanitizeBullets([
       ...(commonBullets || []),
       `DEFENSIEF: ${defObj.pick} (${defObj.riskLabel ?? "?"})`,
       ...(defObj.bullets || []),
       `AANVALLEND: ${aggObj.pick} (${aggObj.riskLabel ?? "?"})`,
       ...(aggObj.bullets || []),
-    ]).filter(Boolean).slice(0, 14),
+    ])
+      .filter(Boolean)
+      .slice(0, 14),
 
     alternatives: Array.isArray(alternatives) ? alternatives : [],
     debug: debug || {},
@@ -995,14 +1189,14 @@ export function getAdvisorHint({
   // Normaliseer actions/logs naar log-rows
   const logs = Array.isArray(actions) ? actions.map(normalizeLogRow) : [];
 
-  // 1) raw view
+  // 1) raw view (tolerant)
   const rawView = buildPlayerView({ game, me, players, actions: logs });
 
   // 2) adapter
   const view = adaptAdvisorView(rawView, { game, me, players });
   const phase = normalizePhase(view.phase || view.game?.phase);
 
-  // RoundState uit logs (alleen huidige ronde)
+  // RoundState uit logs
   const round = Number(view.round ?? view.game?.round ?? 0) || 0;
   const roundState = buildRoundStateFromLog(logs, round);
   view.roundState = roundState;
@@ -1012,7 +1206,7 @@ export function getAdvisorHint({
   view.game.flagsRound = effectiveFlags;
   view.flags = effectiveFlags;
 
-  // upcoming peek (intern)
+  // upcoming peek (intern, voor scoring) — we laten dit staan (bestaande functionaliteit)
   const upcomingPeek = getUpcomingEvents(view, 2) || [];
 
   // hand normaliseren
@@ -1024,7 +1218,11 @@ export function getAdvisorHint({
     view.me.hand = handMeta.names.map((n) => ({ id: n, name: n }));
   }
 
-  // risk meta (incl. scout intel + pack tinker swaps)
+  // scout intel (per speler)
+  const scoutIntel = buildPlayerScoutIntel({ view, me: view.me || me || {}, roundState });
+  view.intel = { scout: scoutIntel };
+
+  // risk meta (nu mét “bekend 100%”)
   const riskMeta = buildRiskMeta({
     view,
     game: view.game || game,
@@ -1032,17 +1230,14 @@ export function getAdvisorHint({
     players: view.players || players,
     upcomingPeek,
     effectiveFlags,
-    logs,
+    scoutIntel,
   });
 
   const riskBullets = [
     `Jouw Den-kleur: ${riskMeta.ctx.myColor || "—"}`,
     `Kans: Den-event van jouw kleur: ${pct(riskMeta.pMyDen)} • Charges: ${pct(riskMeta.pCharges)} • 3e rooster: ${pct(riskMeta.pThirdRooster)}`,
     riskMeta.ctx.denSignalActive ? "Den Signal actief: je bent veilig tegen charges + jouw Den-event." : null,
-    riskMeta.nextKnown ? "SCOUT: volgende kaart is bij jou bekend → 100% zekerheid." : null,
-    (riskMeta.personalIntel && riskMeta.personalIntel.known === false && riskMeta.personalIntel.reason === "KICK_UP_DUST")
-      ? "SCOUT info ongeldig: Kick Up Dust heeft de track veranderd."
-      : null,
+    scoutIntel?.nextKnown ? "Scout-info: jij kent de volgende kaart (100% zekerheid)." : null,
   ].filter(Boolean);
 
   // =======================
@@ -1055,14 +1250,15 @@ export function getAdvisorHint({
     const rankedDef = postRankByStyle(rankedDef0, "DEFENSIVE");
     const rankedAgg = postRankByStyle(rankedAgg0, "AGGRESSIVE");
 
-    const bestDef = safeBest(rankedDef, { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" });
-    const bestAgg = safeBest(rankedAgg, { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" });
+    const bestDef0 = safeBest(rankedDef, { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" });
+    const bestAgg0 = safeBest(rankedAgg, { move: "—", bullets: [], confidence: 0.6, riskLabel: "MED" });
+
+    const bestDef = addFlavorBulletsForPick(bestDef0, "MOVE", "DEFENSIVE");
+    const bestAgg = addFlavorBulletsForPick(bestAgg0, "MOVE", "AGGRESSIVE");
 
     const strat = [];
     if (riskMeta.probNextDanger >= 0.35) strat.push("Strategie: kans op gevaar is vrij hoog → overweeg **SHIFT** (MOVE) om gevaar naar achter te duwen.");
-    if (riskMeta.nextId === "HIDDEN_NEST") strat.push("Strategie: er komt een DASH-bonus event aan → vaak slim om die later te zetten (SHIFT / Pack Tinker).");
-    if (riskMeta.nextId === "ROOSTER_CROW") strat.push("Strategie: rooster-events liever later (meer rondes om loot te pakken).");
-    if (riskMeta.nextId === "PAINT_BOMB_NEST" && (riskMeta.ctx.sackCount ?? 0) > 0) strat.push("Strategie: er komt een sack-reset event aan en de Sack is gevuld → overweeg **SHIFT**.");
+    if (scoutIntel?.peek && !effectiveFlags.lockEvents) strat.push("Strategie: jij hebt SCOUT-info → probeer die info-voorsprong vast te houden (ops lock / track lock).");
 
     const commonBullets = [
       ...headerLinesCompact(view, riskMeta),
@@ -1073,7 +1269,7 @@ export function getAdvisorHint({
     return buildOverlayHint({
       phase,
       title: `MOVE advies • Def: ${labelMove(bestDef)} • Agg: ${labelMove(bestAgg)}`,
-      risk: riskMeta.nextIsDanger ? "HIGH" : "MIX",
+      risk: riskMeta.nextKnown && riskMeta.nextKnownIsDanger ? "HIGH" : "MIX",
       confidence: Math.max(bestDef.confidence ?? 0.65, bestAgg.confidence ?? 0.65),
       commonBullets,
       defObj: {
@@ -1099,11 +1295,13 @@ export function getAdvisorHint({
         roundState: {
           decisionCounts: view.roundState?.decisionCounts || null,
           flags: view.roundState?.flags || null,
+          trackOps: view.roundState?.trackOps || null,
+          scout: view.roundState?.intel?.scout || null,
         },
+        intel: { scout: scoutIntel },
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           nextKnown: !!riskMeta.nextKnown,
-          personalIntel: riskMeta.personalIntel || null,
           probNextDanger: riskMeta.probNextDanger,
           probNextHarmful: riskMeta.probNextHarmful,
           pMyDen: riskMeta.pMyDen,
@@ -1122,16 +1320,25 @@ export function getAdvisorHint({
     const def0 = scoreOpsPlays({ view, upcoming: upcomingPeek, profile: profileDef, style: "DEFENSIVE" }) || [];
     const agg0 = scoreOpsPlays({ view, upcoming: upcomingPeek, profile: profileAgg, style: "AGGRESSIVE" }) || [];
 
-    const defRanked = postRankByStyle(def0, "DEFENSIVE");
-    const aggRanked = postRankByStyle(agg0, "AGGRESSIVE");
+    const defRanked0 = postRankByStyle(def0, "DEFENSIVE");
+    const aggRanked0 = postRankByStyle(agg0, "AGGRESSIVE");
 
-    const bestDef = safeBest(defRanked, { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" });
-    const bestAgg = safeBest(aggRanked, { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" });
+    const bestDef0 = safeBest(defRanked0, { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" });
+    const bestAgg0 = safeBest(aggRanked0, { play: "PASS", bullets: ["PASS: bewaar je kaarten."], confidence: 0.6, riskLabel: "LOW" });
+
+    const bestDef = addFlavorBulletsForPick(bestDef0, "OPS", "DEFENSIVE");
+    const bestAgg = addFlavorBulletsForPick(bestAgg0, "OPS", "AGGRESSIVE");
 
     const labelDef = labelPlay(bestDef);
     const labelAgg = labelPlay(bestAgg);
 
-    const tactical = pickOpsTacticalAdvice({ view, handNames: handMeta.names, riskMeta });
+    const tactical = pickOpsTacticalAdvice({
+      view,
+      handNames: handMeta.names,
+      riskMeta,
+      scoutIntel,
+      effectiveFlags,
+    });
 
     const commonBullets = [
       ...headerLinesCompact(view, riskMeta),
@@ -1145,7 +1352,7 @@ export function getAdvisorHint({
     return buildOverlayHint({
       phase,
       title: `OPS advies • Def: ${labelDef} • Agg: ${labelAgg}`,
-      risk: riskMeta.nextIsDanger ? "HIGH" : "MIX",
+      risk: riskMeta.nextKnown && riskMeta.nextKnownIsDanger ? "HIGH" : "MIX",
       confidence: Math.max(bestDef.confidence ?? 0.65, bestAgg.confidence ?? 0.65),
       commonBullets,
       defObj: {
@@ -1161,21 +1368,37 @@ export function getAdvisorHint({
         bullets: bestAgg.bullets || [],
       },
       alternatives: [
-        { mode: "DEF alt", pick: defRanked[1]?.play === "PASS" ? "PASS" : (defRanked[1]?.cardId || defRanked[1]?.cardName || defRanked[1]?.name) },
-        { mode: "AGG alt", pick: aggRanked[1]?.play === "PASS" ? "PASS" : (aggRanked[1]?.cardId || aggRanked[1]?.cardName || aggRanked[1]?.name) },
+        {
+          mode: "DEF alt",
+          pick: defRanked0[1]
+            ? defRanked0[1].play === "PASS"
+              ? "PASS"
+              : defRanked0[1].cardId || defRanked0[1].cardName || defRanked0[1].name
+            : null,
+        },
+        {
+          mode: "AGG alt",
+          pick: aggRanked0[1]
+            ? aggRanked0[1].play === "PASS"
+              ? "PASS"
+              : aggRanked0[1].cardId || aggRanked0[1].cardName || aggRanked0[1].name
+            : null,
+        },
       ].filter((x) => x.pick),
       debug: {
         version: VERSION,
         phase: view.phase,
         hand: handMeta,
-        roundState: { flags: view.roundState?.flags || null },
+        roundState: { flags: view.roundState?.flags || null, trackOps: view.roundState?.trackOps || null },
+        intel: { scout: scoutIntel },
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           nextKnown: !!riskMeta.nextKnown,
-          personalIntel: riskMeta.personalIntel || null,
           probNextDanger: riskMeta.probNextDanger,
           probNextHarmful: riskMeta.probNextHarmful,
           denSignalActive: !!riskMeta.ctx.denSignalActive,
+          trackLocked: !!effectiveFlags.lockEvents,
+          opsLocked: !!effectiveFlags.opsLocked,
         },
       },
     });
@@ -1191,10 +1414,13 @@ export function getAdvisorHint({
     const rankedDef = postRankByStyle(rankedDef0, "DEFENSIVE");
     const rankedAgg = postRankByStyle(rankedAgg0, "AGGRESSIVE");
 
-    const bestDef = safeBest(rankedDef, { decision: "—", riskLabel: "MED", confidence: 0.65, bullets: [] });
-    const bestAgg = safeBest(rankedAgg, { decision: "—", riskLabel: "MED", confidence: 0.65, bullets: [] });
+    const bestDef0 = safeBest(rankedDef, { decision: "—", riskLabel: "MED", confidence: 0.65, bullets: [] });
+    const bestAgg0 = safeBest(rankedAgg, { decision: "—", riskLabel: "MED", confidence: 0.65, bullets: [] });
 
-    const tactical = decisionTacticalAdvice({ view, riskMeta });
+    const bestDef = addFlavorBulletsForPick(bestDef0, "DECISION", "DEFENSIVE");
+    const bestAgg = addFlavorBulletsForPick(bestAgg0, "DECISION", "AGGRESSIVE");
+
+    const tactical = decisionTacticalAdvice({ view, riskMeta, effectiveFlags });
 
     const extraBurrowWarn =
       bestDef.decision === "BURROW" && (view.me?.burrowRemaining ?? 1) === 1
@@ -1211,7 +1437,7 @@ export function getAdvisorHint({
     return buildOverlayHint({
       phase,
       title: `Decision advies • Def: ${labelDecision(bestDef)} • Agg: ${labelDecision(bestAgg)}`,
-      risk: riskMeta.nextIsDanger ? "HIGH" : "MIX",
+      risk: riskMeta.nextKnown && riskMeta.nextKnownIsDanger ? "HIGH" : "MIX",
       confidence: Math.max(bestDef.confidence ?? 0.7, bestAgg.confidence ?? 0.7),
       commonBullets,
       defObj: {
@@ -1237,11 +1463,12 @@ export function getAdvisorHint({
         roundState: {
           decisionCounts: view.roundState?.decisionCounts || null,
           flags: view.roundState?.flags || null,
+          trackOps: view.roundState?.trackOps || null,
         },
+        intel: { scout: scoutIntel },
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           nextKnown: !!riskMeta.nextKnown,
-          personalIntel: riskMeta.personalIntel || null,
           probNextDanger: riskMeta.probNextDanger,
           probNextHarmful: riskMeta.probNextHarmful,
           denSignalActive: !!riskMeta.ctx.denSignalActive,
