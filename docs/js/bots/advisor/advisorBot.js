@@ -5,7 +5,11 @@
 // - Voorkomt “Defensief vs Aanvallend is hetzelfde” via lichte style tie-break
 // - Leakt geen event IDs/titels naar UI (sanitizers)
 // - NEW output shape: { version, phase, commonBullets, def, agg, ... } voor de nieuwe overlay
-// - UPGRADE: SCOUT-intel -> “Volgende kaart” kan 100% zeker zijn (en werkt ook voor +2).
+//
+// UPDATE (SCOUT INTEL):
+// - Als speler SCOUT heeft gedaan: advisor weet welke kaart “bekend” is
+// - Als daarna Pack Tinker swaps doet: die persoonlijke kennis schuift mee (indexA<->indexB)
+// - Als “next card” bekend is: 100% zekerheid voor gevaar/veilig/nadelig status
 
 import { ADVISOR_PROFILES } from "../core/botConfig.js";
 import { buildPlayerView } from "../core/stateView.js";
@@ -15,7 +19,7 @@ import { scoreMoveMoves, scoreOpsPlays, scoreDecisions } from "../core/scoring.j
 // Action defs + info (1 bron: cards.js)
 import { getActionDefByName, getActionInfoByName } from "../../cards.js";
 
-const VERSION = "ADVISOR_V2026-01-09_SCOUT_1";
+const VERSION = "ADVISOR_V2026-01-09_SCOUTINTEL_1";
 
 // ------------------------------
 // Phase normalisatie
@@ -229,14 +233,13 @@ function getLootCount(p) {
 // /log adapter (accept /log or legacy /actions)
 // ------------------------------
 function normalizeLogRow(raw) {
-  const x = raw && typeof raw?.data === "function" ? raw.data() : raw || {};
+  const x = raw && typeof raw?.data === "function" ? raw.data() : (raw || {});
 
   const round = Number.isFinite(Number(x.round)) ? Number(x.round) : 0;
   const phaseNorm = normalizePhase(x.phase);
   const playerId = x.playerId || x.actorId || null;
 
-  const choice = typeof x.choice === "string" ? x.choice : x.choice == null ? "" : String(x.choice);
-
+  const choice = typeof x.choice === "string" ? x.choice : (x.choice == null ? "" : String(x.choice));
   const payload = x.payload && typeof x.payload === "object" ? x.payload : null;
 
   const createdAt = x.createdAt || null;
@@ -255,20 +258,16 @@ function normalizeLogRow(raw) {
   };
 }
 
-function tsToMs(t) {
+function logMs(d) {
+  if (!d) return 0;
+  if (Number.isFinite(Number(d.clientAt)) && Number(d.clientAt) > 0) return Number(d.clientAt);
+  const t = d.createdAt;
   try {
     if (!t) return 0;
     if (typeof t.toMillis === "function") return t.toMillis();
     if (typeof t.seconds === "number") return t.seconds * 1000;
-    return 0;
-  } catch {
-    return 0;
-  }
-}
-function logAtMs(d) {
-  const c = Number.isFinite(Number(d?.clientAt)) ? Number(d.clientAt) : 0;
-  if (c > 0) return c;
-  return tsToMs(d?.createdAt);
+  } catch {}
+  return 0;
 }
 
 function parseActionNameFromChoice(choice, payload) {
@@ -301,17 +300,16 @@ function buildRoundStateFromLog(logs, round) {
     flags: {
       scatter: false,
       lockEvents: false,
-      opsLocked: false,   // NEW: Hold Still kan OPS locken (geen nieuwe actions)
-      denImmune: {},      // {RED:true}
-      noPeek: [],         // [pos]
-      holdStill: {},      // {playerId:true}  (decision effect)
-      followTail: {},     // {followerId: targetId}
+      denImmune: {},     // {RED:true}
+      noPeek: [],        // [pos]
+      holdStill: {},     // {playerId:true}
+      followTail: {},    // {followerId: targetId}
     },
   };
 
   const arr = Array.isArray(logs) ? logs : [];
   for (const raw of arr) {
-    const d = raw?.phase ? raw : normalizeLogRow(raw);
+    const d = normalizeLogRow(raw);
     if ((d.round || 0) !== round) continue;
     if (!d.playerId || !d.phase) continue;
     if (!d.choice) continue;
@@ -342,12 +340,8 @@ function buildRoundStateFromLog(logs, round) {
       }
 
       if (actionName === "Hold Still") {
-        // (A) decision effect target
         const tid = d.payload?.targetId || d.payload?.targetPlayerId;
         if (tid) state.flags.holdStill[tid] = true;
-
-        // (B) ops lock effect (jouw UI gebruikt flags.opsLocked)
-        state.flags.opsLocked = true;
       }
 
       if (actionName === "Follow the Tail") {
@@ -380,11 +374,7 @@ function mergeEffectiveFlags(gameFlags, logFlags) {
   const g = gameFlags || {};
   const l = logFlags || {};
 
-  const denImmune = {
-    ...(g.denImmune || {}),
-    ...(l.denImmune || {}),
-  };
-
+  const denImmune = { ...(g.denImmune || {}), ...(l.denImmune || {}) };
   const noPeek = [...new Set([...(g.noPeek || []), ...(l.noPeek || [])])];
 
   return {
@@ -394,6 +384,147 @@ function mergeEffectiveFlags(gameFlags, logFlags) {
     noPeek,
     followTail: { ...(g.followTail || {}), ...(l.followTail || {}) },
     holdStill: { ...(g.holdStill || {}), ...(l.holdStill || {}) },
+  };
+}
+
+// ------------------------------
+// SCOUT intel + track mutations (Pack Tinker)
+// ------------------------------
+function readScoutPeek(me) {
+  const sp = me?.scoutPeek || null;
+  const index = Number(sp?.index);
+  const eventId = sp?.eventId ? String(sp.eventId) : "";
+  if (!Number.isFinite(index) || index < 0) return null;
+  if (!eventId) return null;
+  return { index, eventId, round: Number(sp?.round ?? 0) || 0 };
+}
+
+function findLatestScoutMs(logs, playerId) {
+  const arr = Array.isArray(logs) ? logs : [];
+  let best = 0;
+
+  for (const raw of arr) {
+    const d = normalizeLogRow(raw);
+    if (!d.playerId || d.playerId !== playerId) continue;
+    if (d.phase !== "MOVE") continue;
+
+    const c = String(d.choice || "");
+    // jouw logMoveAction: `MOVE_SCOUT_${pos}`
+    if (!/^MOVE_SCOUT_\d+$/i.test(c)) continue;
+
+    const ms = logMs(d);
+    if (ms > best) best = ms;
+  }
+
+  return best;
+}
+
+function extractPackTinkerSwaps(logs) {
+  const arr = Array.isArray(logs) ? logs : [];
+  const out = [];
+
+  for (const raw of arr) {
+    const d = normalizeLogRow(raw);
+    const c = String(d.choice || "").trim();
+
+    // vanuit engine.js: choice: "EFFECT_PACK_TINKER"
+    if (c !== "EFFECT_PACK_TINKER") continue;
+
+    const p = d.payload || {};
+    let a = Number(p.indexA);
+    let b = Number(p.indexB);
+
+    // fallback: pos1/pos2 (1-based)
+    if (!Number.isFinite(a) || !Number.isFinite(b)) {
+      const pos1 = Number(p.pos1);
+      const pos2 = Number(p.pos2);
+      if (Number.isFinite(pos1) && Number.isFinite(pos2)) {
+        a = pos1 - 1;
+        b = pos2 - 1;
+      }
+    }
+
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+
+    out.push({
+      ms: logMs(d),
+      indexA: a,
+      indexB: b,
+      kind: "SWAP",
+      source: "PACK_TINKER",
+    });
+  }
+
+  // sort chronologisch (oud -> nieuw)
+  out.sort((x, y) => (x.ms || 0) - (y.ms || 0));
+  return out;
+}
+
+function didKickUpDustHappenAfter(logs, afterMs) {
+  const arr = Array.isArray(logs) ? logs : [];
+  for (const raw of arr) {
+    const d = normalizeLogRow(raw);
+    const ms = logMs(d);
+    if (afterMs && ms && ms <= afterMs) continue;
+
+    const actionName = parseActionNameFromChoice(d.choice, d.payload);
+    const c = String(d.choice || "");
+
+    // accepteer zowel actie-log als effect-log (als je die hebt)
+    if (actionName === "Kick Up Dust") return true;
+    if (c.includes("EFFECT_KICK_UP_DUST")) return true;
+  }
+  return false;
+}
+
+function computePersonalScoutIntel({ view, me, logs }) {
+  const pid = me?.id || me?.playerId || null;
+  const sp = readScoutPeek(me);
+  if (!pid || !sp) return null;
+
+  const eventIndex = Number(view?.game?.eventIndex ?? 0) || 0;
+
+  // Als de gescoute index al onthuld is, is het info “stale”
+  if (sp.index < eventIndex) return null;
+
+  const scoutMs = findLatestScoutMs(logs, pid) || 0;
+
+  // Als na scout een shuffle gebeurde -> info ongeldig
+  if (didKickUpDustHappenAfter(logs, scoutMs)) {
+    return {
+      known: false,
+      reason: "KICK_UP_DUST",
+      source: "SCOUT",
+      scoutIndex: sp.index,
+      eventId: sp.eventId,
+    };
+  }
+
+  // swaps na scout: schuif jouw “bekende kaart” mee
+  const swaps = extractPackTinkerSwaps(logs).filter((x) => !scoutMs || (x.ms || 0) >= scoutMs);
+
+  let idx = sp.index;
+  for (const sw of swaps) {
+    const a = sw.indexA;
+    const b = sw.indexB;
+    if (idx === a) idx = b;
+    else if (idx === b) idx = a;
+  }
+
+  // Als ondertussen eventIndex voorbij jouw idx is geschoven (zou normaal niet gebeuren binnen zelfde ronde, maar safe)
+  if (idx < eventIndex) return null;
+
+  const nextKnown = idx === eventIndex;
+
+  return {
+    known: true,
+    source: "SCOUT",
+    scoutIndex: sp.index,
+    indexNow: idx,
+    eventId: sp.eventId,
+    nextKnown,
+    nextEventId: nextKnown ? sp.eventId : null,
+    swapsApplied: swaps.length,
   };
 }
 
@@ -519,6 +650,16 @@ function sanitizeBullets(bullets) {
 }
 
 // ------------------------------
+// Headerregels
+// ------------------------------
+function headerLinesCompact(view, riskMeta) {
+  return [
+    `Ronde: ${view.round ?? 0} • Fase: ${view.phase ?? "?"}`,
+    `Volgende kaart: ${riskMeta.nextLabel} • Kans gevaar (deck): ${pct(riskMeta.probNextDanger)} • Kans nadelig (deck): ${pct(riskMeta.probNextHarmful)}`,
+  ];
+}
+
+// ------------------------------
 // Spelerslijst helpers
 // ------------------------------
 function getPlayersList(view, players) {
@@ -542,177 +683,9 @@ function resolveMyDenColor(view, me, players) {
 }
 
 // ------------------------------
-// Track-mutation detectie (voor SCOUT validity)
+// Risk meta (met effective flags + personal scout intel)
 // ------------------------------
-function extractSwapPositions(payload) {
-  const p = payload || {};
-  const pos1 = Number(p.pos1 ?? p.a ?? p.from ?? p.first ?? p.position1);
-  const pos2 = Number(p.pos2 ?? p.b ?? p.to ?? p.second ?? p.position2);
-  const ok1 = Number.isFinite(pos1) && pos1 >= 1;
-  const ok2 = Number.isFinite(pos2) && pos2 >= 1;
-  if (!ok1 || !ok2) return null;
-  return { pos1, pos2, idx1: pos1 - 1, idx2: pos2 - 1 };
-}
-
-function detectTrackMutations(logs, round) {
-  const mutations = [];
-  const arr = Array.isArray(logs) ? logs : [];
-
-  for (const d0 of arr) {
-    const d = d0?.phase ? d0 : normalizeLogRow(d0);
-    if ((d.round || 0) !== round) continue;
-
-    const at = logAtMs(d);
-    if (!at) continue;
-
-    // MOVE: SHIFT
-    if (d.phase === "MOVE") {
-      const ch = String(d.choice || "").toUpperCase();
-      if (ch.includes("SHIFT")) {
-        const swap = extractSwapPositions(d.payload);
-        mutations.push({
-          at,
-          kind: "SHIFT",
-          affectsAll: false,
-          idxs: swap ? [swap.idx1, swap.idx2] : null, // als onbekend: conservatief later
-        });
-      }
-      continue;
-    }
-
-    // OPS: Pack Tinker / Kick Up Dust (track)
-    if (d.phase === "OPS") {
-      const name = parseActionNameFromChoice(d.choice, d.payload);
-      if (!name) continue;
-
-      if (name === "Kick Up Dust") {
-        mutations.push({ at, kind: "KICK_UP_DUST", affectsAll: true, idxs: null });
-      }
-      if (name === "Pack Tinker") {
-        const swap = extractSwapPositions(d.payload);
-        mutations.push({
-          at,
-          kind: "PACK_TINKER",
-          affectsAll: false,
-          idxs: swap ? [swap.idx1, swap.idx2] : null,
-        });
-      }
-    }
-  }
-
-  mutations.sort((a, b) => (a.at || 0) - (b.at || 0));
-  return mutations;
-}
-
-function peekIsStaleByMutations({ peekAt, peekIndex, mutations }) {
-  if (!peekAt || !Number.isFinite(Number(peekIndex))) return true;
-  const muts = Array.isArray(mutations) ? mutations : [];
-
-  for (const m of muts) {
-    if (!m?.at) continue;
-    if (m.at <= peekAt) continue; // alleen mutations NA jouw scout
-
-    // shuffle -> altijd stale
-    if (m.affectsAll) return true;
-
-    // swap onbekend -> conservatief stale
-    if (!Array.isArray(m.idxs) || m.idxs.length < 2) return true;
-
-    // stale als jouw gescoute index geraakt wordt
-    if (m.idxs.includes(peekIndex)) return true;
-  }
-
-  return false;
-}
-
-// ------------------------------
-// SCOUT intel uit logs + player doc
-// ------------------------------
-function parseScoutFromChoice(choice) {
-  const c = String(choice || "").trim();
-  // MOVE_SCOUT_<pos>
-  const m = c.match(/^MOVE_SCOUT_(\d+)$/i);
-  if (m && m[1]) {
-    const pos = Number(m[1]);
-    if (Number.isFinite(pos) && pos >= 1) return { pos, index: pos - 1 };
-  }
-  return null;
-}
-
-function buildScoutIntel({ view, logs, round, me }) {
-  const pid = me?.id || view?.me?.id || null;
-  const mutations = detectTrackMutations(logs, round);
-
-  const byIndex = {}; // { [idx]: { eventId, at, pos, source } }
-  const arr = Array.isArray(logs) ? logs : [];
-
-  // 1) uit logs (sterkst: heeft timestamps)
-  for (const d0 of arr) {
-    const d = d0?.phase ? d0 : normalizeLogRow(d0);
-    if ((d.round || 0) !== round) continue;
-    if (d.phase !== "MOVE") continue;
-    if (!pid || d.playerId !== pid) continue;
-
-    const info = parseScoutFromChoice(d.choice);
-    if (!info) continue;
-
-    const at = logAtMs(d);
-    const pos = Number(d.payload?.pos ?? info.pos);
-    const idx = Number(d.payload?.index ?? info.index);
-
-    const eventId = d.payload?.eventId || d.payload?.id || d.payload?.event || null;
-    if (!Number.isFinite(idx) || idx < 0) continue;
-    if (!eventId) continue;
-
-    // validity check t.o.v. track mutations
-    if (peekIsStaleByMutations({ peekAt: at, peekIndex: idx, mutations })) continue;
-
-    // keep latest per index
-    const prev = byIndex[idx];
-    if (!prev || (prev.at || 0) <= (at || 0)) {
-      byIndex[idx] = { eventId: String(eventId), at: at || 0, pos: pos || idx + 1, source: "LOG" };
-    }
-  }
-
-  // 2) fallback: player doc scoutPeek (geen timestamp) -> alleen gebruiken als er nog niks is
-  const sp = me?.scoutPeek || view?.me?.scoutPeek || null;
-  if (sp && (Number(sp.round) === Number(round))) {
-    const idx = Number(sp.index);
-    const eventId = sp.eventId;
-    if (Number.isFinite(idx) && idx >= 0 && eventId && !byIndex[idx]) {
-      // geen timestamp -> alleen accepteren als er géén mutations in deze ronde zijn
-      const hasMut = (mutations || []).length > 0;
-      if (!hasMut) {
-        byIndex[idx] = { eventId: String(eventId), at: 0, pos: idx + 1, source: "PLAYERDOC" };
-      }
-    }
-  }
-
-  return {
-    byIndex,
-    mutations,
-  };
-}
-
-function applyScoutIntelToUpcoming({ upcomingPeek, game, scoutIntel }) {
-  const up = Array.isArray(upcomingPeek) ? upcomingPeek.slice() : [];
-  const idx0 = Number(game?.eventIndex ?? 0) || 0;
-  const map = scoutIntel?.byIndex || {};
-
-  return up.map((x, i) => {
-    const idx = idx0 + i;
-    const peek = map[idx];
-    if (peek?.eventId) {
-      return { ...(x || {}), id: peek.eventId, known: true, knownSource: peek.source, index: idx };
-    }
-    return { ...(x || {}), known: false, index: idx };
-  });
-}
-
-// ------------------------------
-// Risk meta (met effective flags + scout override)
-// ------------------------------
-function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags, scoutIntel }) {
+function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags, logs }) {
   const myColor = resolveMyDenColor(view, me, players);
   const roosterSeen = Number(game?.roosterSeen || 0);
 
@@ -729,8 +702,6 @@ function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags, 
   const ctx = { myColor, roosterSeen, lootCount, lootPts, isLead, sackCount, denSignalActive };
 
   const remaining = getRemainingEventIds(game);
-
-  // deck probabilities (los van peek)
   const probNextDanger = calcDangerProbFromRemaining(remaining, ctx);
 
   const total = remaining.length || 1;
@@ -746,24 +717,24 @@ function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags, 
   const pThirdRooster =
     roosterSeen >= 2 ? countRemainingOf(remaining, (id) => id === "ROOSTER_CROW") / total : 0;
 
-  // next card (zeker als gescout & valide)
-  const eventIndex = Number(game?.eventIndex ?? view?.eventCursor ?? 0) || 0;
-  const peekByIndex = scoutIntel?.byIndex || {};
-  const knownPeek = peekByIndex[eventIndex] || null;
+  // PERSONAL intel (SCOUT + swaps)
+  const personalIntel = computePersonalScoutIntel({ view, me, logs });
 
-  const nextId = knownPeek?.eventId || upcomingPeek?.[0]?.id || null;
-  const nextKnown = !!knownPeek?.eventId;
+  // upcoming peek (intern) -> default next
+  let nextId = upcomingPeek?.[0]?.id || null;
+
+  // override: als de volgende kaart bij jou bekend is door SCOUT
+  const nextKnown = !!personalIntel?.known && !!personalIntel?.nextKnown && !!personalIntel?.nextEventId;
+  if (nextKnown) nextId = personalIntel.nextEventId;
 
   const nextIsDanger = nextId ? isDangerousEventForMe(nextId, ctx) : false;
   const nextIsHarmful = nextId ? isHarmfulEventForMe(nextId, ctx) : false;
 
-  const nextLabel = nextId
-    ? nextIsDanger
-      ? "GEVAARLIJK"
-      : nextIsHarmful
-      ? "VEILIG maar NADELIG"
-      : "VEILIG"
+  const baseLabel = nextId
+    ? (nextIsDanger ? "GEVAARLIJK" : (nextIsHarmful ? "VEILIG maar NADELIG" : "VEILIG"))
     : "—";
+
+  const nextLabel = nextKnown ? `${baseLabel} (BEKEND)` : baseLabel;
 
   return {
     ctx,
@@ -774,30 +745,18 @@ function buildRiskMeta({ view, game, me, players, upcomingPeek, effectiveFlags, 
     pCharges,
     pThirdRooster,
 
-    // intern (niet tonen als ID)
+    // intern
     nextId,
     nextIsDanger,
     nextIsHarmful,
-    nextKnown,
-    nextKnownSource: knownPeek?.source || null,
-    nextKnownPos: Number.isFinite(Number(knownPeek?.pos)) ? Number(knownPeek.pos) : null,
 
     // toonbaar
     nextLabel,
-  };
-}
 
-// ------------------------------
-// Headerregels (compact)
-// ------------------------------
-function headerLinesCompact(view, riskMeta) {
-  const knownTag = riskMeta.nextKnown ? " (100%)" : "";
-  return [
-    `Ronde: ${view.round ?? 0} • Fase: ${view.phase ?? "?"}`,
-    `Volgende kaart: ${riskMeta.nextLabel}${knownTag} • Kans gevaar (deck): ${pct(riskMeta.probNextDanger)} • Kans nadelig (deck): ${pct(
-      riskMeta.probNextHarmful
-    )} • Kans 3e rooster (deck): ${pct(riskMeta.pThirdRooster)}`,
-  ];
+    // nieuw
+    nextKnown,
+    personalIntel,
+  };
 }
 
 // ------------------------------
@@ -868,28 +827,29 @@ function postRankByStyle(ranked, style) {
 }
 
 // ------------------------------
-// OPS: tactische override (met effective flags + scout)
+// OPS: tactische override (met effective flags + scout intel)
 // ------------------------------
 function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
   const lines = [];
   const has = (name) => handNames.includes(name);
 
+  const myColor = riskMeta.ctx.myColor || "?";
   const flags = view?.game?.flagsRound || view?.flags || {};
-  const trackLocked = !!flags.lockEvents;
-  const opsLocked = !!flags.opsLocked;
+  const denSignalActiveForMe = myColor ? isDenImmuneForColor(flags, myColor) : false;
 
-  if (riskMeta.nextKnown) {
-    lines.push(`Strategie: je hebt de volgende kaart via SCOUT → status is ${riskMeta.nextLabel} (100%).`);
-    if (!trackLocked && has("Burrow Beacon")) {
-      lines.push("OPS tip: speel **Burrow Beacon** om de track te locken zodat niemand nog kan schuiven/ruilen/shufflen.");
+  // SCOUT advantage messaging (persoonlijk)
+  const intel = riskMeta.personalIntel;
+  if (intel?.known && intel?.indexNow != null) {
+    if (riskMeta.nextKnown) {
+      lines.push("Strategie: je hebt de volgende kaart via SCOUT gezien → je kunt nu met 100% zekerheid plannen.");
+    } else {
+      lines.push(`Strategie: jij hebt via SCOUT een kaart verderop gezien (positie ${intel.indexNow + 1}). Houd de track stabiel voor voordeel.`);
     }
-    if (!opsLocked && has("Hold Still")) {
-      lines.push("OPS tip: als je je SCOUT-voordeel wil vasthouden, speel/bewaar **Hold Still** om verdere Action Cards te blokkeren (geen Pack Tinker/Kick Up Dust).");
+    // (jij wilde dit specifiek)
+    if (has("Hold Still")) {
+      lines.push("OPS tip: bewaar **Hold Still** voor het moment dat jouw SCOUT-info echt waardevol is (dan wil je voorkomen dat anderen de track veranderen).");
     }
   }
-
-  const myColor = riskMeta.ctx.myColor || "?";
-  const denSignalActiveForMe = myColor ? isDenImmuneForColor(flags, myColor) : false;
 
   if (riskMeta.nextIsDanger) {
     if (has("Den Signal") && !denSignalActiveForMe) {
@@ -932,23 +892,24 @@ function pickOpsTacticalAdvice({ view, handNames, riskMeta }) {
 }
 
 // ------------------------------
-// DECISION: tactische guidance (Den Signal + Hold Still + Hidden Nest + scout)
+// DECISION: tactische guidance (Den Signal + Hold Still + Hidden Nest + SCOUT)
 // ------------------------------
 function decisionTacticalAdvice({ view, riskMeta }) {
   const lines = [];
   const g = view?.game || {};
+  const myColor = riskMeta.ctx.myColor || "";
   const flags = g.flagsRound || view?.flags || {};
 
-  if (riskMeta.nextKnown) {
-    lines.push(`Strategie: volgende kaart is bekend via SCOUT → ${riskMeta.nextLabel} (100%).`);
-  }
-
-  const myColor = riskMeta.ctx.myColor || "";
   const denSignalActiveForMe = myColor ? isDenImmuneForColor(flags, myColor) : false;
 
   const holdStill = flags?.holdStill || {};
   if (view?.me?.id && holdStill[view.me.id]) {
     lines.push("Let op: **Hold Still** is op jou gespeeld → DASH werkt niet (je blijft LURK).");
+  }
+
+  // SCOUT zekerheid op de volgende kaart (persoonlijk)
+  if (riskMeta.nextKnown) {
+    lines.push(`SCOUT zekerheid: volgende kaart is ${riskMeta.nextIsDanger ? "GEVAARLIJK" : (riskMeta.nextIsHarmful ? "VEILIG maar NADELIG" : "VEILIG")} → je decision kan 100% hierop leunen.`);
   }
 
   if (denSignalActiveForMe) {
@@ -1002,16 +963,14 @@ function buildOverlayHint({ phase, title, risk, confidence, commonBullets, defOb
       bullets: sanitizeBullets(aggObj.bullets || []),
     },
 
-    // legacy compat (oude UI kan dit nog gebruiken)
+    // legacy compat
     bullets: sanitizeBullets([
       ...(commonBullets || []),
       `DEFENSIEF: ${defObj.pick} (${defObj.riskLabel ?? "?"})`,
       ...(defObj.bullets || []),
       `AANVALLEND: ${aggObj.pick} (${aggObj.riskLabel ?? "?"})`,
       ...(aggObj.bullets || []),
-    ])
-      .filter(Boolean)
-      .slice(0, 14),
+    ]).filter(Boolean).slice(0, 14),
 
     alternatives: Array.isArray(alternatives) ? alternatives : [],
     debug: debug || {},
@@ -1036,14 +995,14 @@ export function getAdvisorHint({
   // Normaliseer actions/logs naar log-rows
   const logs = Array.isArray(actions) ? actions.map(normalizeLogRow) : [];
 
-  // 1) raw view (tolerant)
+  // 1) raw view
   const rawView = buildPlayerView({ game, me, players, actions: logs });
 
   // 2) adapter
   const view = adaptAdvisorView(rawView, { game, me, players });
   const phase = normalizePhase(view.phase || view.game?.phase);
 
-  // RoundState uit logs
+  // RoundState uit logs (alleen huidige ronde)
   const round = Number(view.round ?? view.game?.round ?? 0) || 0;
   const roundState = buildRoundStateFromLog(logs, round);
   view.roundState = roundState;
@@ -1052,6 +1011,9 @@ export function getAdvisorHint({
   const effectiveFlags = mergeEffectiveFlags(view.game?.flagsRound || {}, roundState.flags || {});
   view.game.flagsRound = effectiveFlags;
   view.flags = effectiveFlags;
+
+  // upcoming peek (intern)
+  const upcomingPeek = getUpcomingEvents(view, 2) || [];
 
   // hand normaliseren
   const handMeta = summarizeHandRecognition(view.me || me || {});
@@ -1062,18 +1024,7 @@ export function getAdvisorHint({
     view.me.hand = handMeta.names.map((n) => ({ id: n, name: n }));
   }
 
-  // SCOUT intel (per index, valide t.o.v. mutations)
-  const scoutIntel = buildScoutIntel({ view, logs, round, me: view.me || me || {} });
-
-  // upcoming peek (intern) + scout override
-  const upcomingPeek0 = getUpcomingEvents(view, 2) || [];
-  const upcomingPeek = applyScoutIntelToUpcoming({
-    upcomingPeek: upcomingPeek0,
-    game: view.game || game,
-    scoutIntel,
-  });
-
-  // risk meta (met scout override)
+  // risk meta (incl. scout intel + pack tinker swaps)
   const riskMeta = buildRiskMeta({
     view,
     game: view.game || game,
@@ -1081,16 +1032,17 @@ export function getAdvisorHint({
     players: view.players || players,
     upcomingPeek,
     effectiveFlags,
-    scoutIntel,
+    logs,
   });
 
   const riskBullets = [
     `Jouw Den-kleur: ${riskMeta.ctx.myColor || "—"}`,
-    `Kans: Den-event van jouw kleur: ${pct(riskMeta.pMyDen)} • Charges: ${pct(riskMeta.pCharges)} • 3e rooster: ${pct(
-      riskMeta.pThirdRooster
-    )}`,
+    `Kans: Den-event van jouw kleur: ${pct(riskMeta.pMyDen)} • Charges: ${pct(riskMeta.pCharges)} • 3e rooster: ${pct(riskMeta.pThirdRooster)}`,
     riskMeta.ctx.denSignalActive ? "Den Signal actief: je bent veilig tegen charges + jouw Den-event." : null,
-    riskMeta.nextKnown ? `SCOUT: volgende kaart is bekend → ${riskMeta.nextLabel} (100%).` : null,
+    riskMeta.nextKnown ? "SCOUT: volgende kaart is bij jou bekend → 100% zekerheid." : null,
+    (riskMeta.personalIntel && riskMeta.personalIntel.known === false && riskMeta.personalIntel.reason === "KICK_UP_DUST")
+      ? "SCOUT info ongeldig: Kick Up Dust heeft de track veranderd."
+      : null,
   ].filter(Boolean);
 
   // =======================
@@ -1121,7 +1073,7 @@ export function getAdvisorHint({
     return buildOverlayHint({
       phase,
       title: `MOVE advies • Def: ${labelMove(bestDef)} • Agg: ${labelMove(bestAgg)}`,
-      risk: riskMeta.nextIsDanger ? "HIGH" : riskMeta.nextIsHarmful ? "MED" : "MIX",
+      risk: riskMeta.nextIsDanger ? "HIGH" : "MIX",
       confidence: Math.max(bestDef.confidence ?? 0.65, bestAgg.confidence ?? 0.65),
       commonBullets,
       defObj: {
@@ -1144,10 +1096,6 @@ export function getAdvisorHint({
         version: VERSION,
         phase: view.phase,
         hand: handMeta,
-        scoutIntel: {
-          knownIndexes: Object.keys(scoutIntel.byIndex || {}).map((k) => Number(k)),
-          mutations: scoutIntel.mutations || [],
-        },
         roundState: {
           decisionCounts: view.roundState?.decisionCounts || null,
           flags: view.roundState?.flags || null,
@@ -1155,8 +1103,7 @@ export function getAdvisorHint({
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           nextKnown: !!riskMeta.nextKnown,
-          nextKnownSource: riskMeta.nextKnownSource,
-          nextKnownPos: riskMeta.nextKnownPos,
+          personalIntel: riskMeta.personalIntel || null,
           probNextDanger: riskMeta.probNextDanger,
           probNextHarmful: riskMeta.probNextHarmful,
           pMyDen: riskMeta.pMyDen,
@@ -1198,7 +1145,7 @@ export function getAdvisorHint({
     return buildOverlayHint({
       phase,
       title: `OPS advies • Def: ${labelDef} • Agg: ${labelAgg}`,
-      risk: riskMeta.nextIsDanger ? "HIGH" : riskMeta.nextIsHarmful ? "MED" : "MIX",
+      risk: riskMeta.nextIsDanger ? "HIGH" : "MIX",
       confidence: Math.max(bestDef.confidence ?? 0.65, bestAgg.confidence ?? 0.65),
       commonBullets,
       defObj: {
@@ -1214,37 +1161,18 @@ export function getAdvisorHint({
         bullets: bestAgg.bullets || [],
       },
       alternatives: [
-        {
-          mode: "DEF alt",
-          pick: defRanked[1]
-            ? defRanked[1].play === "PASS"
-              ? "PASS"
-              : defRanked[1].cardId || defRanked[1].cardName || defRanked[1].name
-            : null,
-        },
-        {
-          mode: "AGG alt",
-          pick: aggRanked[1]
-            ? aggRanked[1].play === "PASS"
-              ? "PASS"
-              : aggRanked[1].cardId || aggRanked[1].cardName || aggRanked[1].name
-            : null,
-        },
+        { mode: "DEF alt", pick: defRanked[1]?.play === "PASS" ? "PASS" : (defRanked[1]?.cardId || defRanked[1]?.cardName || defRanked[1]?.name) },
+        { mode: "AGG alt", pick: aggRanked[1]?.play === "PASS" ? "PASS" : (aggRanked[1]?.cardId || aggRanked[1]?.cardName || aggRanked[1]?.name) },
       ].filter((x) => x.pick),
       debug: {
         version: VERSION,
         phase: view.phase,
         hand: handMeta,
-        scoutIntel: {
-          knownIndexes: Object.keys(scoutIntel.byIndex || {}).map((k) => Number(k)),
-          mutations: scoutIntel.mutations || [],
-        },
         roundState: { flags: view.roundState?.flags || null },
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           nextKnown: !!riskMeta.nextKnown,
-          nextKnownSource: riskMeta.nextKnownSource,
-          nextKnownPos: riskMeta.nextKnownPos,
+          personalIntel: riskMeta.personalIntel || null,
           probNextDanger: riskMeta.probNextDanger,
           probNextHarmful: riskMeta.probNextHarmful,
           denSignalActive: !!riskMeta.ctx.denSignalActive,
@@ -1283,7 +1211,7 @@ export function getAdvisorHint({
     return buildOverlayHint({
       phase,
       title: `Decision advies • Def: ${labelDecision(bestDef)} • Agg: ${labelDecision(bestAgg)}`,
-      risk: riskMeta.nextIsDanger ? "HIGH" : riskMeta.nextIsHarmful ? "MED" : "MIX",
+      risk: riskMeta.nextIsDanger ? "HIGH" : "MIX",
       confidence: Math.max(bestDef.confidence ?? 0.7, bestAgg.confidence ?? 0.7),
       commonBullets,
       defObj: {
@@ -1306,10 +1234,6 @@ export function getAdvisorHint({
         version: VERSION,
         phase: view.phase,
         hand: handMeta,
-        scoutIntel: {
-          knownIndexes: Object.keys(scoutIntel.byIndex || {}).map((k) => Number(k)),
-          mutations: scoutIntel.mutations || [],
-        },
         roundState: {
           decisionCounts: view.roundState?.decisionCounts || null,
           flags: view.roundState?.flags || null,
@@ -1317,8 +1241,7 @@ export function getAdvisorHint({
         riskMeta: {
           nextLabel: riskMeta.nextLabel,
           nextKnown: !!riskMeta.nextKnown,
-          nextKnownSource: riskMeta.nextKnownSource,
-          nextKnownPos: riskMeta.nextKnownPos,
+          personalIntel: riskMeta.personalIntel || null,
           probNextDanger: riskMeta.probNextDanger,
           probNextHarmful: riskMeta.probNextHarmful,
           denSignalActive: !!riskMeta.ctx.denSignalActive,
@@ -1328,7 +1251,11 @@ export function getAdvisorHint({
   }
 
   // fallback
-  const commonBullets = [`Ronde: ${view.round ?? 0} • Fase: ${view.phase ?? "?"}`, handMeta.lineHand, "Geen fase herkend."].filter(Boolean);
+  const commonBullets = [
+    `Ronde: ${view.round ?? 0} • Fase: ${view.phase ?? "?"}`,
+    handMeta.lineHand,
+    "Geen fase herkend.",
+  ].filter(Boolean);
 
   return buildOverlayHint({
     phase: phase || "UNKNOWN",
@@ -1339,15 +1266,6 @@ export function getAdvisorHint({
     defObj: { pick: "—", confidence: 0.6, riskLabel: "—", bullets: [] },
     aggObj: { pick: "—", confidence: 0.6, riskLabel: "—", bullets: [] },
     alternatives: [],
-    debug: {
-      version: VERSION,
-      phase: view.phase,
-      hand: handMeta,
-      scoutIntel: {
-        knownIndexes: Object.keys(scoutIntel.byIndex || {}).map((k) => Number(k)),
-        mutations: scoutIntel.mutations || [],
-      },
-      roundState: view.roundState || null,
-    },
+    debug: { version: VERSION, phase: view.phase, hand: handMeta, roundState: view.roundState || null },
   });
 }
