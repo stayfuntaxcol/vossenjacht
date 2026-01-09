@@ -2550,46 +2550,6 @@ async function playActionCard(index) {
   }
 }
 
-// ===== PASS ACTION =====
-// Returns boolean (true = pass done)
-async function passAction() {
-  if (__opsActionInFlight) return false;
-  __opsActionInFlight = true;
-
-  try {
-    if (!gameRef || !playerRef) return false;
-
-    const [gameSnap, playerSnap] = await Promise.all([getDoc(gameRef), getDoc(playerRef)]);
-    if (!gameSnap.exists() || !playerSnap.exists()) return false;
-
-    const game = gameSnap.data();
-    const player = playerSnap.data();
-
-    if (!canPlayActionNow(game, player)) {
-      alert("Je kunt nu geen PASS doen in deze fase.");
-      return false;
-    }
-    if (!isMyOpsTurn(game)) {
-      alert("Je bent niet aan de beurt in de OPS-fase.");
-      return false;
-    }
-
-    const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
-    const newPasses = (game.opsConsecutivePasses || 0) + 1;
-
-    await updateDoc(gameRef, {
-      opsTurnIndex: nextIndex,
-      opsConsecutivePasses: newPasses,
-    });
-
-    await logMoveAction(game, player, "ACTION_PASS", "ACTIONS");
-    setHost?.("pass", "PASS – je slaat deze beurt over.");
-    return true;
-  } finally {
-    __opsActionInFlight = false;
-  }
-}
-
 // ===== PASS =====
 async function passAction() {
   if (!beginOpsAction()) return;
@@ -2625,7 +2585,7 @@ async function passAction() {
 
     setHost(
       "pass",
-      "PASS – je slaat deze beurt over. Als de ronde omgaat en iemand weer een kaart speelt, kun je later opnieuw meedoen."
+      "PASS – je laat deze beurt voorbij gaan."
     );
   } finally {
     endOpsAction();
