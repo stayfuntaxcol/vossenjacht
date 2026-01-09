@@ -1305,8 +1305,10 @@ function updateDecisionButtonsState() {
     ? "Kies jouw DECISION: LURK, HIDE (Burrow) of DASH."
     : "Je kunt nu geen DECISION kiezen.";
 }
+// ===== HAND UI (ACTIONS) — REWRITE (drop-in replacement) =====
 
-// ===== HAND UI (ACTIONS) =====
+// globale (module) guard tegen dubbel klikken / dubbel submit
+window.__VJ_ACTION_PLAY_IN_FLIGHT__ = window.__VJ_ACTION_PLAY_IN_FLIGHT__ || false;
 
 function renderHand() {
   if (!actionsStateText) return;
@@ -1322,19 +1324,21 @@ function renderHand() {
   const p = currentPlayer;
   const hand = Array.isArray(p.hand) ? p.hand : [];
 
-  const canPlayOverall = canPlayActionNow(g, p);
-  const myTurnOverall = isMyOpsTurn(g);
+  const canPlayOverall = typeof canPlayActionNow === "function" ? canPlayActionNow(g, p) : false;
+  const myTurnOverall = typeof isMyOpsTurn === "function" ? isMyOpsTurn(g) : false;
 
   if (!hand.length) {
     actionsStateText.textContent =
       g.status === "finished" || g.phase === "END"
         ? "Het spel is afgelopen – je kunt geen Action Cards meer spelen."
         : "Je hebt geen Action Cards in je hand.";
+
     if (btnHand) btnHand.disabled = true;
     if (btnPass) btnPass.disabled = !(canPlayOverall && myTurnOverall);
     return;
   }
 
+  // HAND knop: alleen “openen” als je überhaupt action mag spelen
   if (btnHand) btnHand.disabled = !canPlayOverall;
 
   if (g.phase !== "ACTIONS") {
@@ -1368,6 +1372,7 @@ function renderHandGrid() {
 
   const g = currentGame;
   const p = currentPlayer;
+
   if (!g || !p) {
     const msg = document.createElement("p");
     msg.textContent = "Game of speler niet geladen.";
@@ -1394,11 +1399,19 @@ function renderHandGrid() {
 
     const cardName = typeof card === "string" ? card : (card?.name || card?.id || "");
 
-    const cardEl = renderActionCard(cardName || card, {
-      size: "medium",
-      noOverlay: true,
-      footer: "",
-    });
+    // renderActionCard verwacht naam; fallback naar object indien nodig
+    let cardEl = null;
+    try {
+      if (typeof renderActionCard === "function") {
+        cardEl = renderActionCard(cardName || card, {
+          size: "medium",
+          noOverlay: true,
+          footer: "",
+        });
+      }
+    } catch (e) {
+      console.warn("[HAND] renderActionCard failed:", e);
+    }
 
     if (cardEl) {
       cardEl.classList.add("hand-card");
@@ -1423,6 +1436,7 @@ function renderHandGrid() {
 function getActionCardInfo(cardOrName) {
   const name = typeof cardOrName === "string" ? cardOrName : (cardOrName?.name || cardOrName?.id || "");
   if (!name) return null;
+  if (typeof getActionInfoByName !== "function") return null;
   return getActionInfoByName(name) || null;
 }
 
@@ -1432,6 +1446,7 @@ function openHandCardDetail(index) {
 
   const g = currentGame;
   const p = currentPlayer;
+
   const hand = Array.isArray(p.hand) ? p.hand : [];
   if (index < 0 || index >= hand.length) return;
 
@@ -1446,7 +1461,7 @@ function openHandCardDetail(index) {
   const bigCard = document.createElement("div");
   bigCard.className = "vj-card hand-card hand-card-large";
 
-  const def = cardName ? getActionDefByName(cardName) : null;
+  const def = (cardName && typeof getActionDefByName === "function") ? getActionDefByName(cardName) : null;
   if (def?.imageFront) bigCard.style.backgroundImage = `url('${def.imageFront}')`;
 
   const label = document.createElement("div");
@@ -1505,17 +1520,52 @@ function openHandCardDetail(index) {
   playBtn.className = "phase-btn phase-btn-primary";
   playBtn.textContent = "Speel deze kaart";
 
-  const canPlayNow = canPlayActionNow(g, p) && isMyOpsTurn(g);
+  const canPlayNow =
+    (typeof canPlayActionNow === "function" ? canPlayActionNow(g, p) : false) &&
+    (typeof isMyOpsTurn === "function" ? isMyOpsTurn(g) : false);
+
   const opsLocked = !!(g?.flagsRound?.opsLocked);
-  playBtn.disabled = !canPlayNow || opsLocked;
+
+  // ook blokkeren als er al een submit “in flight” is
+  playBtn.disabled = !canPlayNow || opsLocked || window.__VJ_ACTION_PLAY_IN_FLIGHT__ === true;
 
   playBtn.addEventListener("click", async () => {
-    if (typeof playActionCard !== "function") {
-      alert("playActionCard() staat later in player.js — niet gevonden.");
-      return;
+    // hard guard tegen dubbel klikken
+    if (window.__VJ_ACTION_PLAY_IN_FLIGHT__ === true) return;
+    window.__VJ_ACTION_PLAY_IN_FLIGHT__ = true;
+
+    // direct UI lock zodat de gebruiker feedback heeft
+    playBtn.disabled = true;
+
+    try {
+      if (typeof playActionCard !== "function") {
+        alert("playActionCard() staat later in player.js — niet gevonden.");
+        return;
+      }
+
+      // speel kaart (playActionCard doet zelf validatie/alerts)
+      await playActionCard(index);
+
+      // altijd detail overlay sluiten na poging
+      // (voorkomt dubbel klikken en voelt als “actie bevestigd”)
+      closeHandModal();
+    } catch (err) {
+      console.error("[HAND] playActionCard error:", err);
+      // overlay blijft (of sluit toch) — hier houden we het simpel:
+      alert("Er ging iets mis bij het spelen van de kaart. Probeer opnieuw.");
+    } finally {
+      // unlock na een korte tick zodat Firestore updates kunnen binnenkomen
+      setTimeout(() => {
+        window.__VJ_ACTION_PLAY_IN_FLIGHT__ = false;
+        // als overlay nog open is, knoppen opnieuw syncen via render
+        if (handModalOverlay && !handModalOverlay.classList.contains("hidden")) {
+          // opnieuw render detail of grid op basis van actuele state
+          // beste UX: terug naar grid
+          renderHandGrid();
+        }
+        renderHand(); // update buttons + state text
+      }, 200);
     }
-    await playActionCard(index);
-    closeHandModal();
   });
 
   const backBtn = document.createElement("button");
