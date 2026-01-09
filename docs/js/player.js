@@ -1434,7 +1434,10 @@ function renderHandGrid() {
 // ===== ACTION CARD INFO =====
 
 function getActionCardInfo(cardOrName) {
-  const name = typeof cardOrName === "string" ? cardOrName : (cardOrName?.name || cardOrName?.id || "");
+  const name =
+    typeof cardOrName === "string"
+      ? cardOrName
+      : (cardOrName?.name || cardOrName?.id || "");
   if (!name) return null;
   if (typeof getActionInfoByName !== "function") return null;
   return getActionInfoByName(name) || null;
@@ -1461,7 +1464,10 @@ function openHandCardDetail(index) {
   const bigCard = document.createElement("div");
   bigCard.className = "vj-card hand-card hand-card-large";
 
-  const def = (cardName && typeof getActionDefByName === "function") ? getActionDefByName(cardName) : null;
+  const def =
+    cardName && typeof getActionDefByName === "function"
+      ? getActionDefByName(cardName)
+      : null;
   if (def?.imageFront) bigCard.style.backgroundImage = `url('${def.imageFront}')`;
 
   const label = document.createElement("div");
@@ -1543,27 +1549,41 @@ function openHandCardDetail(index) {
         return;
       }
 
-      // speel kaart (playActionCard doet zelf validatie/alerts)
-      await playActionCard(index);
+      // ✅ wijziging: alleen sluiten als kaart ECHT gespeeld is
+      // (playActionCard moet boolean returnen: true=gespeeld, false=niet gespeeld)
+      const ok = await playActionCard(index);
 
-      // altijd detail overlay sluiten na poging
-      // (voorkomt dubbel klikken en voelt als “actie bevestigd”)
-      closeHandModal();
+      if (ok === true) {
+        closeHandModal();
+        return;
+      }
+
+      // niet gespeeld → overlay open houden en opnieuw syncen
+      if (handModalOverlay && !handModalOverlay.classList.contains("hidden")) {
+        // terug naar grid is meestal de prettigste UX
+        renderHandGrid();
+      }
     } catch (err) {
       console.error("[HAND] playActionCard error:", err);
-      // overlay blijft (of sluit toch) — hier houden we het simpel:
       alert("Er ging iets mis bij het spelen van de kaart. Probeer opnieuw.");
+      // overlay blijft open zodat speler opnieuw kan proberen
     } finally {
       // unlock na een korte tick zodat Firestore updates kunnen binnenkomen
       setTimeout(() => {
         window.__VJ_ACTION_PLAY_IN_FLIGHT__ = false;
-        // als overlay nog open is, knoppen opnieuw syncen via render
+
+        // als overlay nog open is: knopstatus opnieuw bepalen
         if (handModalOverlay && !handModalOverlay.classList.contains("hidden")) {
-          // opnieuw render detail of grid op basis van actuele state
-          // beste UX: terug naar grid
-          renderHandGrid();
+          const g2 = currentGame;
+          const p2 = currentPlayer;
+          const canPlayNow2 =
+            (typeof canPlayActionNow === "function" ? canPlayActionNow(g2, p2) : false) &&
+            (typeof isMyOpsTurn === "function" ? isMyOpsTurn(g2) : false);
+          const opsLocked2 = !!(g2?.flagsRound?.opsLocked);
+          playBtn.disabled = !canPlayNow2 || opsLocked2;
         }
-        renderHand(); // update buttons + state text
+
+        renderHand?.(); // update buttons + state text
       }, 200);
     }
   });
@@ -2400,9 +2420,58 @@ async function selectDecision(kind) {
   await logMoveAction(game, player, `DECISION_${kind}`, "DECISION");
 }
 
-// ===== ACTION TURN HELPERS + ACTION PLAY/PASS (SAFE + NO-STUCK-LOCKS) =====
+// ===== ACTION TURN HELPERS + ACTION PLAY/PASS (CLEAN + NO REFRESH NEEDED) =====
 
-// 1) Next OPS index (prefers game.opsTurnOrder length)
+// --- 0) Ensure logMoveAction exists (single source of truth) ---
+// Safe: if this block accidentally exists twice, it won't crash.
+var logMoveAction = globalThis.logMoveAction;
+if (typeof logMoveAction !== "function") {
+  logMoveAction = async function logMoveAction(game, player, choice, phase, payload = {}) {
+    try {
+      if (!db || !gameId) return;
+
+      const round = Number(game?.round ?? 0);
+      const pid = player?.id || (typeof playerId !== "undefined" ? playerId : null);
+      const pname = player?.name || "Fox";
+
+      const base = {
+        createdAt: serverTimestamp(),
+        round,
+        phase: String(phase || game?.phase || ""),
+        choice: String(choice || ""),
+        playerId: pid,
+        playerName: pname,
+        payload: payload && typeof payload === "object" ? payload : { value: payload },
+      };
+
+      // 1) actions (voor roundInfo monitor)
+      try {
+        const actionsCol = collection(db, "games", gameId, "actions");
+        await addDoc(actionsCol, base);
+      } catch (e) {
+        console.warn("[logMoveAction] actions write failed", e);
+      }
+
+      // 2) log (voor host log panel)
+      try {
+        const logCol = collection(db, "games", gameId, "log");
+        await addDoc(logCol, {
+          ...base,
+          kind: "ACTION",
+          message: `${pname}: ${base.choice}`,
+        });
+      } catch (e) {
+        console.warn("[logMoveAction] log write failed", e);
+      }
+    } catch (err) {
+      console.warn("[logMoveAction] failed hard", err);
+    }
+  };
+
+  globalThis.logMoveAction = logMoveAction;
+}
+
+// --- 1) Next OPS index (prefers game.opsTurnOrder) ---
 globalThis.computeNextOpsIndex =
   globalThis.computeNextOpsIndex ||
   function computeNextOpsIndex(game, players) {
@@ -2435,16 +2504,23 @@ globalThis.computeNextOpsIndex =
     return (cur + 1) % n;
   };
 
-// 2) Single in-flight guard (prevents double click + prevents "stuck until refresh")
+// --- 2) Single in-flight guard (prevents double click + prevents stuck state) ---
 let __opsActionInFlight = false;
 
-// 3) Helper: normalize card name
+// --- 3) Helpers ---
 function getActionCardName(card) {
   if (typeof card === "string") return card.trim();
   return String(card?.name || card?.id || "").trim();
 }
 
-// 4) Friendly error handling (so you actually SEE what failed)
+function getOpsParticipantCount(game, players) {
+  const order = Array.isArray(game?.opsTurnOrder) ? game.opsTurnOrder : null;
+  if (order && order.length) return order.length;
+
+  const list = Array.isArray(players) ? players : [];
+  return list.filter((p) => p && p.inYard !== false && !p.dashed).length;
+}
+
 function showActionError(cardName, err) {
   const msg = err?.message || String(err || "Onbekende fout");
   console.error("[OPS] playActionCard failed:", cardName, err);
@@ -2452,8 +2528,11 @@ function showActionError(cardName, err) {
   alert(`Er ging iets mis bij het spelen van "${cardName}".\n\n${msg}`);
 }
 
+// Kaarten die NIET kunnen als je alleen bent
+const NEEDS_OTHER_FOX = new Set(["Mask Swap", "Scent Check", "Follow the Tail"]);
+
 // ===== PLAY ACTION CARD =====
-// Returns boolean: true = played, false = not played (UI can decide to close modal or not)
+// Returns boolean: true = played, false = not played
 async function playActionCard(index) {
   if (__opsActionInFlight) return false;
   __opsActionInFlight = true;
@@ -2481,7 +2560,6 @@ async function playActionCard(index) {
 
     const card = hand[index];
     const cardName = getActionCardName(card);
-
     if (!cardName) {
       alert("Onbekende Action Card in je hand (geen name/id).");
       return false;
@@ -2494,24 +2572,34 @@ async function playActionCard(index) {
       return false;
     }
 
+    // ✅ 1-speler precheck (scheelt refresh/verwarring)
+    if (NEEDS_OTHER_FOX.has(cardName)) {
+      const n = getOpsParticipantCount(game, lastPlayers || []);
+      if (n < 2) {
+        const m = `"${cardName}" kan nu niet: er is geen andere vos in de Yard.`;
+        setActionFeedback?.(m);
+        alert(m);
+        return false;
+      }
+    }
+
     // ---- execute effect ----
     let executed = false;
-
     try {
       switch (cardName) {
-        case "Scatter!":         executed = await playScatter(game, player); break;
-        case "Den Signal":       executed = await playDenSignal(game, player); break;
-        case "No-Go Zone":       executed = await playNoGoZone(game, player); break;
-        case "Kick Up Dust":     executed = await playKickUpDust(game, player); break;
-        case "Burrow Beacon":    executed = await playBurrowBeacon(game, player); break;
-        case "Molting Mask":     executed = await playMoltingMask(game, player); break;
-        case "Hold Still":       executed = await playHoldStill(game, player); break;
-        case "Nose for Trouble": executed = await playNoseForTrouble(game, player); break;
-        case "Scent Check":      executed = await playScentCheck(game, player); break;
-        case "Follow the Tail":  executed = await playFollowTail(game, player); break;
-        case "Alpha Call":       executed = await playAlphaCall(game, player); break;
-        case "Pack Tinker":      executed = await playPackTinker(game, player); break;
-        case "Mask Swap":        executed = await playMaskSwap(game, player); break;
+        case "Scatter!":          executed = await playScatter(game, player); break;
+        case "Den Signal":        executed = await playDenSignal(game, player); break;
+        case "No-Go Zone":        executed = await playNoGoZone(game, player); break;
+        case "Kick Up Dust":      executed = await playKickUpDust(game, player); break;
+        case "Burrow Beacon":     executed = await playBurrowBeacon(game, player); break;
+        case "Molting Mask":      executed = await playMoltingMask(game, player); break;
+        case "Hold Still":        executed = await playHoldStill(game, player); break;
+        case "Nose for Trouble":  executed = await playNoseForTrouble(game, player); break;
+        case "Scent Check":       executed = await playScentCheck(game, player); break;
+        case "Follow the Tail":   executed = await playFollowTail(game, player); break;
+        case "Alpha Call":        executed = await playAlphaCall(game, player); break;
+        case "Pack Tinker":       executed = await playPackTinker(game, player); break;
+        case "Mask Swap":         executed = await playMaskSwap(game, player); break;
         default:
           alert("Deze kaart is nog niet volledig geïmplementeerd in de online versie.");
           return false;
@@ -2522,28 +2610,40 @@ async function playActionCard(index) {
     }
 
     if (!executed) {
-      // Dit is "legaal mislukt": effectregels zeggen "mag nu niet"
-      // Belangrijk: lock wordt alsnog vrijgegeven door finally.
+      // “legaal mislukt”: effectregels zeggen "mag nu niet"
       setActionFeedback?.(`De kaart "${cardName}" kon nu niet worden gespeeld. Hij blijft in je hand.`);
       return false;
     }
 
-    // ---- consume card + log ----
+    // ---- consume card ----
     hand.splice(index, 1);
     await updateDoc(playerRef, { hand });
 
+    // ---- log ----
     await logMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
-    setHost?.("success", `Kaart gespeeld: ${cardName}`);
-    hostSay?.("action_success");
 
-    // ---- advance OPS turn ----
+    // ---- advance OPS turn + reset passes ----
     const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
-    await updateDoc(gameRef, {
+    const gUpdate = {
       opsTurnIndex: nextIndex,
       opsConsecutivePasses: 0,
-    });
+    };
 
+    // optional: discard pile (zelfde write)
+    if (typeof arrayUnion === "function") {
+      gUpdate.actionDiscard = arrayUnion({
+        name: cardName,
+        by: (typeof playerId !== "undefined" ? playerId : null),
+        round: Number(game?.round ?? 0),
+      });
+    }
+
+    await updateDoc(gameRef, gUpdate);
+
+    setHost?.("success", `Kaart gespeeld: ${cardName}`);
+    hostSay?.("action_success");
     setActionFeedback?.(`✅ Je speelde "${cardName}".`);
+
     return true;
   } finally {
     __opsActionInFlight = false;
@@ -2552,13 +2652,13 @@ async function playActionCard(index) {
 
 // ===== PASS =====
 async function passAction() {
-  if (!beginOpsAction()) return;
+  if (__opsActionInFlight) return;
+  __opsActionInFlight = true;
 
   try {
     if (!gameRef || !playerRef) return;
 
-    const gameSnap = await getDoc(gameRef);
-    const playerSnap = await getDoc(playerRef);
+    const [gameSnap, playerSnap] = await Promise.all([getDoc(gameRef), getDoc(playerRef)]);
     if (!gameSnap.exists() || !playerSnap.exists()) return;
 
     const game = gameSnap.data();
@@ -2574,7 +2674,7 @@ async function passAction() {
     }
 
     const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
-    const newPasses = (game.opsConsecutivePasses || 0) + 1;
+    const newPasses = Number(game.opsConsecutivePasses || 0) + 1;
 
     await updateDoc(gameRef, {
       opsTurnIndex: nextIndex,
@@ -2583,12 +2683,10 @@ async function passAction() {
 
     await logMoveAction(game, player, "ACTION_PASS", "ACTIONS");
 
-    setHost(
-      "pass",
-      "PASS – je laat deze beurt voorbij gaan."
-    );
+    setHost?.("pass", "PASS – je laat deze beurt voorbij gaan.");
+    setActionFeedback?.("PASS geregistreerd.");
   } finally {
-    endOpsAction();
+    __opsActionInFlight = false;
   }
 }
 
