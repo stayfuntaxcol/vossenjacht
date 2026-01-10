@@ -396,7 +396,6 @@ function applyNextPhaseUi(gate, game) {
 }
 
 async function maybeScheduleAutoAdvance(game, gate) {
-  // Auto-flow master switch
   if (!AUTO_FLOW) {
     clearAutoAdvance();
     return;
@@ -409,12 +408,6 @@ async function maybeScheduleAutoAdvance(game, gate) {
     return;
   }
 
-  // Alleen auto-door als de fase echt “READY” is
-  if (!gate?.ready) {
-    clearAutoAdvance();
-    return;
-  }
-
   const phase = game?.phase || "MOVE";
 
   // REVEAL/END nooit auto door (REVEAL = einde ronde)
@@ -423,26 +416,35 @@ async function maybeScheduleAutoAdvance(game, gate) {
     return;
   }
 
-  // ✅ 5s adempauze alleen op de twee overgangen die jij wil
-  const delayMs = (phase === "MOVE" || phase === "ACTIONS") ? AUTO_PAUSE_MS : 200;
+  // als nog niet ready: geen timer
+  if (!gate?.ready) {
+    clearAutoAdvance();
+    return;
+  }
 
-  // Extra state in key, zodat timers niet blijven “hangen” bij mini-updates
-  const active = (Array.isArray(latestPlayers) ? latestPlayers : []).filter(isInYardForEvents);
-  const movedLen = Array.isArray(game?.movedPlayerIds) ? game.movedPlayerIds.length : 0;
-  const decidedLen = active.filter((p) => !!p.decision).length;
+  // ✅ als er een BREATHER phaseWait staat voor deze fase: plan exact op executeAtMs
+  let delayMs = AUTO_ADVANCE_MS; // fallback
+  const w = game?.phaseWait;
 
-  const pr = game?.pendingReveal;
+  if (w && w.kind === "BREATHER" && w.from === phase) {
+    const left = Number(w.executeAtMs || 0) - Date.now();
+    delayMs = Math.max(0, left) + 30; // +30ms marge tegen “net te vroeg”
+  } else {
+    // geen wait? dan triggert handleNextPhase zelf het plannen van de wait
+    delayMs = 30;
+  }
+
+  // unieke key om dubbele timers te voorkomen
   const key = [
     game?.status || "",
     game?.round || 0,
     phase,
-    game?.eventIndex || 0,
-    game?.currentEventId || "",
-    pr?.revealed ? 1 : 0,
-    pr?.revealAtMs || 0,
     game?.opsConsecutivePasses || 0,
-    movedLen,
-    decidedLen,
+    game?.eventIndex || 0,
+    w?.kind || "",
+    w?.from || "",
+    w?.to || "",
+    w?.executeAtMs || 0,
   ].join("|");
 
   if (autoAdvanceTimer && autoAdvanceKey === key) return;
@@ -457,39 +459,15 @@ async function maybeScheduleAutoAdvance(game, gate) {
       if (!snap.exists()) return;
       const g = snap.data();
 
-      // pause kan intussen aangezet zijn
       if (g?.raidPaused) return;
 
       const phase2 = g?.phase || "MOVE";
-      if (phase2 === "REVEAL" || phase2 === "END") {
-        clearAutoAdvance();
-        return;
-      }
+      if (phase2 === "REVEAL" || phase2 === "END") return;
 
-      const active2 = (Array.isArray(latestPlayers) ? latestPlayers : []).filter(isInYardForEvents);
-      const movedLen2 = Array.isArray(g?.movedPlayerIds) ? g.movedPlayerIds.length : 0;
-      const decidedLen2 = active2.filter((p) => !!p.decision).length;
+      const gate2 = computePhaseGate(g, Array.isArray(latestPlayers) ? latestPlayers : []);
+      if (!gate2.ready) return;
 
-      const pr2 = g?.pendingReveal;
-      const key2 = [
-        g?.status || "",
-        g?.round || 0,
-        phase2,
-        g?.eventIndex || 0,
-        g?.currentEventId || "",
-        pr2?.revealed ? 1 : 0,
-        pr2?.revealAtMs || 0,
-        g?.opsConsecutivePasses || 0,
-        movedLen2,
-        decidedLen2,
-      ].join("|");
-
-      if (key2 !== autoAdvanceKey) return;
-
-      const gate2 = computePhaseGate(g, active2);
-      if (!gate2?.ready) return;
-
-      // auto-advance gebruikt dezelfde handler als button
+      // ✅ dit is de “tweede tik” na de BREATHER
       await handleNextPhase({ silent: true, force: false });
     } catch (err) {
       console.error("Auto-advance fout:", err);
