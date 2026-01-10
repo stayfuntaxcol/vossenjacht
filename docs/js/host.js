@@ -571,7 +571,6 @@ function decisionMeta(decision) {
   if (d === "LURK") return { label: "LURK", cls: "decision-lurk" };
   return { label: "HELLO", cls: "decision-unknown" };
 }
-
 function renderDecisionWallReveal(game, players) {
   const wall = ensureDecisionWall();
   if (!wall) return;
@@ -596,8 +595,14 @@ function renderDecisionWallReveal(game, players) {
   grid.className = "decision-wall-grid decision-wall-grid--reveal";
   wall.appendChild(grid);
 
-  ordered.forEach((p) => {
-    // Grote kaart (als je renderer geen "large" kent: gebruik "medium")
+  let baseSizeSet = false;
+
+  ordered.forEach((p, idx) => {
+    // ✅ SLOT: reserveert ruimte zodat scale nooit overlap geeft
+    const slot = document.createElement("div");
+    slot.className = "decision-reveal-slot";
+
+    // Kaart maken (ONGESCALED eerst)
     let card = null;
     try {
       card = renderPlayerSlotCard(p, { size: "medium", footer: "", isLead: false });
@@ -611,9 +616,30 @@ function renderDecisionWallReveal(game, players) {
       card.textContent = p.name || "Vos";
     }
 
-    card.classList.add("decision-reveal-card");
+    // badge heeft absolute positie → card moet relative zijn
     card.style.position = "relative";
 
+    // eerst in DOM zetten zodat we base size kunnen meten
+    slot.appendChild(card);
+    grid.appendChild(slot);
+
+    // ✅ 1x base afmeting zetten (alleen als we echte layout-size hebben)
+    // offsetWidth/offsetHeight negeren transforms → perfect hiervoor
+    if (!baseSizeSet) {
+      const w = card.offsetWidth;
+      const h = card.offsetHeight;
+      if (w > 0 && h > 0) {
+        grid.style.setProperty("--base-w", `${w}px`);
+        grid.style.setProperty("--base-h", `${h}px`);
+        grid.style.setProperty("--scale", "2");
+        baseSizeSet = true;
+      }
+    }
+
+    // NU pas de reveal-scale class toevoegen
+    card.classList.add("decision-reveal-card");
+
+    // Decision badge
     const d = normalizeDecision(p.decision);
     const meta = decisionMeta(d);
 
@@ -622,8 +648,14 @@ function renderDecisionWallReveal(game, players) {
     badge.textContent = meta.label;
 
     card.appendChild(badge);
-    grid.appendChild(card);
   });
+
+  // fallback als meten niet lukte (bijv. overlay nog display:none)
+  if (!baseSizeSet) {
+    grid.style.setProperty("--base-w", "180px");
+    grid.style.setProperty("--base-h", "240px");
+    grid.style.setProperty("--scale", "2");
+  }
 }
 
 function renderRevealCountdownUi(pr) {
