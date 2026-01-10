@@ -1494,129 +1494,7 @@ if (newRaidBtn) newRaidBtn.addEventListener("click", startNewRaidFromBoard);
 if (!gameId && gameInfo) {
   gameInfo.textContent = "Geen gameId in de URL";
 }
-
-initAuth(async (authUser) => {
-  hostUid = authUser?.uid || null;
-
-  if (!gameId || !gameRef || !playersColRef) return;
-
-  // ✅ start bots (botRunner doet zelf: boardOnly guard + locks)
-  if (typeof stopBots === "function") {
-    stopBots();
-    stopBots = null;
-  }
-  stopBots = startBotRunner({ db, gameId, addLog, isBoardOnly, hostUid });
-
-  // ✅ BOT toevoegen knop blijft in host.js (alleen create bot-player)
-  if (addBotBtn) {
-    addBotBtn.addEventListener("click", async () => {
-      try {
-        await addBotToCurrentGame({ db, gameId, denColors: DEN_COLORS });
-      } catch (err) {
-        console.error("BOT toevoegen mislukt:", err);
-        alert("BOT toevoegen mislukt.");
-      }
-    });
-  }
-
-  // ✅ Raid pauzeren / hervatten
-  if (pauseRaidBtn) {
-    pauseRaidBtn.addEventListener("click", async () => {
-      try {
-        const snap = await getDoc(gameRef);
-        if (!snap.exists()) return;
-        const g = snap.data();
-        const next = !g.raidPaused;
-
-        await updateDoc(gameRef, { raidPaused: next });
-
-        await addLog(gameId, {
-          round: g.round || 0,
-          phase: g.phase || "MOVE",
-          kind: "SYSTEM",
-          message: next ? "Raid pauze-modus AAN (auto-next na 5s wanneer fase klaar is)." : "Raid pauze-modus UIT.",
-        });
-      } catch (err) {
-        console.error("Raid pauze toggle fout:", err);
-      }
-    });
-  }
-
-  // ==== START ROUND ====
-  if (startBtn) {
-    startBtn.addEventListener("click", async () => {
-      const game = await initRaidIfNeeded(gameRef);
-      if (!game) return;
-
-      if (game.status === "finished") {
-        alert("Dit spel is al afgelopen. Start een nieuwe game als je opnieuw wilt spelen.");
-        return;
-      }
-      if (game.raidEndedByRooster) {
-        alert("De raid is geëindigd door de Rooster-limiet. Er kunnen geen nieuwe rondes meer gestart worden.");
-        return;
-      }
-
-      const previousRound = game.round || 0;
-      const newRound = previousRound + 1;
-
-      const ordered = [...latestPlayers].sort((a, b) => {
-        const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
-        const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
-        return ao - bo;
-      });
-
-      const activeOrdered = ordered.filter(isInYardLocal);
-      const baseList = activeOrdered.length ? activeOrdered : [];
-
-      let leadIndex = typeof game.leadIndex === "number" ? game.leadIndex : 0;
-
-      if (baseList.length) {
-        leadIndex = ((leadIndex % baseList.length) + baseList.length) % baseList.length;
-        if (previousRound >= 1) leadIndex = (leadIndex + 1) % baseList.length;
-      } else {
-        leadIndex = 0;
-      }
-
-      let leadName = "";
-      if (baseList.length) {
-        const lf = baseList[leadIndex];
-        if (lf) leadName = lf.name || "";
-      }
-
-      await updateDoc(gameRef, {
-        status: "round",
-        round: newRound,
-        phase: "MOVE",
-        currentEventId: null,
-        movedPlayerIds: [],
-        opsTurnOrder: [],
-        opsTurnIndex: 0,
-        opsConsecutivePasses: 0,
-        flagsRound: {
-          lockEvents: false,
-          scatter: false,
-          denImmune: {},
-          noPeek: [],
-          predictions: [],
-          opsLocked: false,
-          followTail: {},
-          scentChecks: [],
-          holdStill: {},
-        },
-        leadIndex,
-        pendingReveal: null, // ✅ nieuw: reset
-      });
-
-      await addLog(gameId, {
-        round: newRound,
-        phase: "MOVE",
-        kind: "SYSTEM",
-        message: leadName ? `Ronde ${newRound} gestart. Lead Fox: ${leadName}.` : `Ronde ${newRound} gestart.`,
-      });
-    });
-  }
-// ==== PHASE SWITCHER ====
+// ==== PHASE SWITCHER (TOP-LEVEL, zodat auto-advance 'm kan zien) ====
 const PHASE_BREATHER_MS = 5000;
 
 // ✅ aparte naam (niet botsen met andere phaseWait helpers in je bestand)
@@ -1654,7 +1532,6 @@ function getBreatherWaitState(game, from, to) {
 }
 
 async function handleNextPhase({ silent = false, force = false } = {}) {
-
   const snap = await getDoc(gameRef);
   if (!snap.exists()) return;
   const game = snap.data();
@@ -1846,72 +1723,137 @@ async function handleNextPhase({ silent = false, force = false } = {}) {
       message: ev ? ev.title : eventId,
     });
 
-    if (eventId === "ROOSTER_CROW") {
-      await addLog(gameId, {
-        round: roundNumber,
-        phase: "REVEAL",
-        kind: "EVENT",
-        cardId: eventId,
-        message: `Rooster Crow (${newRoosterSeen}/3).`,
-      });
-      if (raidEndedByRooster) {
-        await addLog(gameId, {
-          round: roundNumber,
-          phase: "REVEAL",
-          kind: "SYSTEM",
-          message: "Derde Rooster Crow: dashers verdelen de Sack en daarna eindigt de raid.",
-        });
-      }
-    }
     return;
   }
 
-  // REVEAL -> MOVE / END
+  // REVEAL = einde ronde
   if (current === "REVEAL") {
-  const pr = game.pendingReveal;
-  if (pr && pr.eventId === game.currentEventId && pr.revealed !== true) {
-    if (!silent) alert("Event wordt nog onthuld… wacht even of klik ‘Onthul nu’.");
+    if (!silent) alert("REVEAL is het einde van de ronde. Klik ‘Nieuwe ronde’ om verder te gaan.");
     return;
   }
-
-  if (!silent) alert("REVEAL is het einde van de ronde. Klik ‘Nieuwe ronde’ om verder te gaan.");
-  return;
 }
-    const latestSnap = await getDoc(gameRef);
-    if (!latestSnap.exists()) return;
-    const latest = latestSnap.data();
 
-    if (latest && isGameFinished(latest)) return;
+initAuth(async (authUser) => {
+  hostUid = authUser?.uid || null;
 
-    const activeAfterReveal = latestPlayers.filter(isInYardLocal);
-    if (activeAfterReveal.length === 0) {
-      await updateDoc(gameRef, { status: "finished", phase: "END", phaseWait: null });
-      await addLog(gameId, {
-        round: roundNumber,
-        phase: "END",
-        kind: "SYSTEM",
-        message: "Geen vossen meer in de Yard na REVEAL – de raid is afgelopen.",
-      });
-      return;
-    }
+  if (!gameId || !gameRef || !playersColRef) return;
 
-    await updateDoc(gameRef, { phase: "MOVE", pendingReveal: null, phaseWait: null });
-    await addLog(gameId, {
-      round: roundNumber,
-      phase: "MOVE",
-      kind: "SYSTEM",
-      message: "REVEAL afgerond. Terug naar MOVE-fase voor de volgende ronde.",
+  // ✅ start bots (botRunner doet zelf: boardOnly guard + locks)
+  if (typeof stopBots === "function") {
+    stopBots();
+    stopBots = null;
+  }
+  stopBots = startBotRunner({ db, gameId, addLog, isBoardOnly, hostUid });
+
+  // ✅ BOT toevoegen knop blijft in host.js (alleen create bot-player)
+  if (addBotBtn) {
+    addBotBtn.addEventListener("click", async () => {
+      try {
+        await addBotToCurrentGame({ db, gameId, denColors: DEN_COLORS });
+      } catch (err) {
+        console.error("BOT toevoegen mislukt:", err);
+        alert("BOT toevoegen mislukt.");
+      }
     });
-    return;
-   }
-  
-// ✅ button-binding één keer, BUITEN handleNextPhase
-if (nextPhaseBtn) {
-  nextPhaseBtn.addEventListener("click", async () => {
-    clearAutoAdvance(); // optioneel: voorkomt dubbele triggers
-    await handleNextPhase({ silent: false, force: true });
-  });
- }
+  }
+
+  // ✅ Raid pauzeren / hervatten
+  if (pauseRaidBtn) {
+    pauseRaidBtn.addEventListener("click", async () => {
+      try {
+        const snap = await getDoc(gameRef);
+        if (!snap.exists()) return;
+        const g = snap.data();
+        const next = !g.raidPaused;
+
+        await updateDoc(gameRef, { raidPaused: next });
+
+        await addLog(gameId, {
+          round: g.round || 0,
+          phase: g.phase || "MOVE",
+          kind: "SYSTEM",
+          message: next ? "Raid pauze-modus AAN (auto-next na 5s wanneer fase klaar is)." : "Raid pauze-modus UIT.",
+        });
+      } catch (err) {
+        console.error("Raid pauze toggle fout:", err);
+      }
+    });
+  }
+
+  // ==== START ROUND ====
+  if (startBtn) {
+    startBtn.addEventListener("click", async () => {
+      const game = await initRaidIfNeeded(gameRef);
+      if (!game) return;
+
+      if (game.status === "finished") {
+        alert("Dit spel is al afgelopen. Start een nieuwe game als je opnieuw wilt spelen.");
+        return;
+      }
+      if (game.raidEndedByRooster) {
+        alert("De raid is geëindigd door de Rooster-limiet. Er kunnen geen nieuwe rondes meer gestart worden.");
+        return;
+      }
+
+      const previousRound = game.round || 0;
+      const newRound = previousRound + 1;
+
+      const ordered = [...latestPlayers].sort((a, b) => {
+        const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+        const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
+        return ao - bo;
+      });
+
+      const activeOrdered = ordered.filter(isInYardLocal);
+      const baseList = activeOrdered.length ? activeOrdered : [];
+
+      let leadIndex = typeof game.leadIndex === "number" ? game.leadIndex : 0;
+
+      if (baseList.length) {
+        leadIndex = ((leadIndex % baseList.length) + baseList.length) % baseList.length;
+        if (previousRound >= 1) leadIndex = (leadIndex + 1) % baseList.length;
+      } else {
+        leadIndex = 0;
+      }
+
+      let leadName = "";
+      if (baseList.length) {
+        const lf = baseList[leadIndex];
+        if (lf) leadName = lf.name || "";
+      }
+
+      await updateDoc(gameRef, {
+        status: "round",
+        round: newRound,
+        phase: "MOVE",
+        currentEventId: null,
+        movedPlayerIds: [],
+        opsTurnOrder: [],
+        opsTurnIndex: 0,
+        opsConsecutivePasses: 0,
+        flagsRound: {
+          lockEvents: false,
+          scatter: false,
+          denImmune: {},
+          noPeek: [],
+          predictions: [],
+          opsLocked: false,
+          followTail: {},
+          scentChecks: [],
+          holdStill: {},
+        },
+        leadIndex,
+        pendingReveal: null, // ✅ nieuw: reset
+      });
+
+      await addLog(gameId, {
+        round: newRound,
+        phase: "MOVE",
+        kind: "SYSTEM",
+        message: leadName ? `Ronde ${newRound} gestart. Lead Fox: ${leadName}.` : `Ronde ${newRound} gestart.`,
+      });
+    });
+  }
 
   // ===============================
   // GAME SNAPSHOT
