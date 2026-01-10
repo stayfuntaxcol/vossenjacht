@@ -13,12 +13,12 @@
       </div>
 
       <div class="host-controls">
+        <!-- Start volgende ronde (handmatig). Fases gaan automatisch. -->
         <button id="startRoundBtn" class="btn btn-primary">
-          Nieuwe ronde
+          Start volgende ronde
         </button>
-        <button id="nextPhaseBtn" class="btn btn-secondary">
-          Volgende fase
-        </button>
+
+        <!-- nextPhaseBtn verwijderd: fases lopen automatisch -->
         <button id="endRoundBtn" class="btn btn-ghost">
           Test: ronde afsluiten
         </button>
@@ -90,29 +90,16 @@
 
               <div class="players-yard-area">
                 <div class="players-yard-label">PLAYERS YARD</div>
-                <div
-                  id="yardZone"
-                  class="player-zone player-zone-yard"
-                ></div>
+                <div id="yardZone" class="player-zone player-zone-yard"></div>
               </div>
             </div>
 
             <!-- Verborgen container voor ronde-info / scoreboard-generation -->
-            <div
-              id="roundInfo"
-              class="round-info"
-              style="display: none;"
-            ></div>
+            <div id="roundInfo" class="round-info" style="display: none;"></div>
 
             <!-- Verborgen statuskaarten, alleen gebruikt door host.js -->
-            <div
-              id="phaseCard"
-              class="board-card card-status hidden"
-            ></div>
-            <div
-              id="leadFoxCard"
-              class="board-card card-status hidden"
-            ></div>
+            <div id="phaseCard" class="board-card card-status hidden"></div>
+            <div id="leadFoxCard" class="board-card card-status hidden"></div>
           </div>
         </div>
       </div>
@@ -151,9 +138,22 @@
             Sluiten
           </button>
         </div>
+
         <div class="overlay-content">
+          <!-- Countdown / aankondiging (REVEAL PENDING) -->
+          <div id="eventPosterCountdown" class="event-poster-countdown"></div>
+
           <img id="eventPosterImage" alt="" class="event-poster-img" />
           <p id="eventPosterText"></p>
+
+          <!-- Direct onthullen knop (REVEAL PENDING) -->
+          <button
+            id="eventPosterRevealNowBtn"
+            class="btn btn-primary event-poster-reveal-now"
+            type="button"
+          >
+            Onthul nu
+          </button>
         </div>
       </div>
     </div>
