@@ -2121,4 +2121,3 @@ onSnapshot(playersColRef, (snapshot) => {
       logPanel.appendChild(inner);
     });
   }
-});
