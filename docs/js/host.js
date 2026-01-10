@@ -397,6 +397,7 @@ function applyNextPhaseUi(gate, game) {
 }
 
 async function maybeScheduleAutoAdvance(game, gate) {
+  // Auto-flow master switch
   if (!AUTO_FLOW) {
     clearAutoAdvance();
     return;
@@ -409,6 +410,7 @@ async function maybeScheduleAutoAdvance(game, gate) {
     return;
   }
 
+  // Alleen auto-door als de fase echt “READY” is
   if (!gate?.ready) {
     clearAutoAdvance();
     return;
@@ -422,33 +424,26 @@ async function maybeScheduleAutoAdvance(game, gate) {
     return;
   }
 
-  // jouw adempauzes:
-  // MOVE -> ACTIONS : 5s
-  // ACTIONS -> DECISION : 5s
-  // DECISION -> REVEAL : kort (geen adempauze nodig)
-  const delayMs =
-    phase === "MOVE" ? AUTO_PAUSE_MS :
-    phase === "ACTIONS" ? AUTO_PAUSE_MS :
-    200;
+  // ✅ 5s adempauze alleen op de twee overgangen die jij wil
+  const delayMs = (phase === "MOVE" || phase === "ACTIONS") ? AUTO_PAUSE_MS : 200;
 
-  // key voorkomt dubbele timers
-  const active = getActiveYardPlayers(latestPlayers);
-  const decidedCount = active.filter(p => !!p.decision).length;
-  const movedCount = Array.isArray(game?.movedPlayerIds) ? game.movedPlayerIds.length : 0;
-  const passes = Number(game?.opsConsecutivePasses || 0);
+  // Extra state in key, zodat timers niet blijven “hangen” bij mini-updates
+  const active = (Array.isArray(latestPlayers) ? latestPlayers : []).filter(isInYardForEvents);
+  const movedLen = Array.isArray(game?.movedPlayerIds) ? game.movedPlayerIds.length : 0;
+  const decidedLen = active.filter((p) => !!p.decision).length;
 
   const pr = game?.pendingReveal;
   const key = [
     game?.status || "",
     game?.round || 0,
     phase,
-    movedCount,
-    passes,
-    decidedCount,
+    game?.eventIndex || 0,
     game?.currentEventId || "",
     pr?.revealed ? 1 : 0,
     pr?.revealAtMs || 0,
-    game?.eventIndex || 0,
+    game?.opsConsecutivePasses || 0,
+    movedLen,
+    decidedLen,
   ].join("|");
 
   if (autoAdvanceTimer && autoAdvanceKey === key) return;
@@ -458,16 +453,44 @@ async function maybeScheduleAutoAdvance(game, gate) {
 
   autoAdvanceTimer = setTimeout(async () => {
     try {
+      // recheck actuele game
       const snap = await getDoc(gameRef);
       if (!snap.exists()) return;
       const g = snap.data();
 
+      // pause kan intussen aangezet zijn
       if (g?.raidPaused) return;
-      if (g?.phase === "REVEAL" || g?.phase === "END") return;
 
-      const gate2 = computePhaseGate(g, latestPlayers);
-      if (!gate2.ready) return;
+      const phase2 = g?.phase || "MOVE";
+      if (phase2 === "REVEAL" || phase2 === "END") {
+        clearAutoAdvance();
+        return;
+      }
 
+      const active2 = (Array.isArray(latestPlayers) ? latestPlayers : []).filter(isInYardForEvents);
+      const movedLen2 = Array.isArray(g?.movedPlayerIds) ? g.movedPlayerIds.length : 0;
+      const decidedLen2 = active2.filter((p) => !!p.decision).length;
+
+      const pr2 = g?.pendingReveal;
+      const key2 = [
+        g?.status || "",
+        g?.round || 0,
+        phase2,
+        g?.eventIndex || 0,
+        g?.currentEventId || "",
+        pr2?.revealed ? 1 : 0,
+        pr2?.revealAtMs || 0,
+        g?.opsConsecutivePasses || 0,
+        movedLen2,
+        decidedLen2,
+      ].join("|");
+
+      if (key2 !== autoAdvanceKey) return;
+
+      const gate2 = computePhaseGate(g, active2);
+      if (!gate2?.ready) return;
+
+      // auto-advance gebruikt dezelfde handler als button
       await handleNextPhase({ silent: true, force: false });
     } catch (err) {
       console.error("Auto-advance fout:", err);
