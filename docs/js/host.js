@@ -1880,15 +1880,15 @@ async function handleNextPhase({ silent = false, force = false } = {}) {
     });
     return;
   }
-}
-
+  
 // ✅ button-binding één keer, BUITEN handleNextPhase
 if (nextPhaseBtn) {
   nextPhaseBtn.addEventListener("click", async () => {
     clearAutoAdvance(); // optioneel: voorkomt dubbele triggers
     await handleNextPhase({ silent: false, force: true });
   });
-}
+ }
+});
 
   // ===============================
   // GAME SNAPSHOT
