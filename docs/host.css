@@ -660,6 +660,16 @@ REVEAL POSTER - DECISION WALL - COUNT DOWN
 .decision-lurk   { outline: 2px solid rgba(160, 255, 180, 0.85); }
 .decision-unknown{ outline: 2px solid rgba(255, 255, 255, 0.35); }
 
+/* 2x zo groot op de Decision Wall */
+.decision-wall-grid--reveal .decision-reveal-card {
+  transform: scale(2);
+  transform-origin: center;
+}
+.decision-wall-grid--reveal {
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 32px;
+  padding: 24px 0;
+}
 
 /* ==========================================
    CARD BACK: card_vossenjacht.png
