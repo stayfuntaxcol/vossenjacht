@@ -527,6 +527,7 @@ function stopRevealCountdown() {
 // ===============================
 // REVEAL: Decision Wall (nieuw)
 // ===============================
+
 let lastDecisionWallKey = null;
 
 function ensureDecisionWall() {
@@ -539,14 +540,21 @@ function ensureDecisionWall() {
 
   wall = document.createElement("div");
   wall.id = "decisionWall";
-  wall.className = "decision-wall";
+  wall.className = "decision-wall decision-wall--reveal";
 
-  // liefst onder de tekst, in overlay-content
   const content = box.querySelector(".overlay-content");
   if (content) content.appendChild(wall);
   else box.appendChild(wall);
 
   return wall;
+}
+
+function hideDecisionWall() {
+  const wall = ensureDecisionWall();
+  if (!wall) return;
+  wall.style.display = "none";
+  wall.innerHTML = "";
+  lastDecisionWallKey = null;
 }
 
 function normalizeDecision(raw) {
@@ -564,86 +572,56 @@ function decisionMeta(decision) {
   return { label: "HELLO", cls: "decision-unknown" };
 }
 
-function renderDecisionWall(game, players) {
+function renderDecisionWallReveal(game, players) {
   const wall = ensureDecisionWall();
   if (!wall) return;
 
-  const g = game || {};
   const list = Array.isArray(players) ? players : [];
-
   const active = list.filter(isInYardForEvents);
 
-  // Sorteer consistent (joinOrder)
   const ordered = [...active].sort((a, b) => {
     const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
     const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
     return ao - bo;
   });
 
-  // Key: alleen rebuild als iets verandert
-  const key = ordered
-    .map((p) => `${p.id}:${normalizeDecision(p.decision) || ""}:${p.name || ""}`)
-    .join("|");
-
+  const key = ordered.map((p) => `${p.id}:${normalizeDecision(p.decision) || ""}`).join("|");
   if (key === lastDecisionWallKey) return;
   lastDecisionWallKey = key;
 
-  wall.innerHTML = "";
   wall.style.display = "";
-
-  // (optioneel leuk) quick counts
-  const counts = { DASH: 0, BURROW: 0, LURK: 0, UNKNOWN: 0 };
-  ordered.forEach((p) => {
-    const d = normalizeDecision(p.decision);
-    if (d && counts[d.toUpperCase()] != null) counts[d.toUpperCase()]++;
-    else counts.UNKNOWN++;
-  });
-
-  const header = document.createElement("div");
-  header.className = "decision-wall-header";
-  header.textContent =
-    `Keuzes: •  ${counts.DASH}  •  ${counts.BURROW}  •  ${counts.LURK}` +
-    (counts.UNKNOWN ? `  •   ${counts.UNKNOWN}` : "");
-  wall.appendChild(header);
+  wall.innerHTML = "";
 
   const grid = document.createElement("div");
-  grid.className = "decision-wall-grid";
+  grid.className = "decision-wall-grid decision-wall-grid--reveal";
   wall.appendChild(grid);
 
   ordered.forEach((p) => {
-    // kaartje (hergebruik bestaande renderer)
+    // Grote kaart (als je renderer geen "large" kent: gebruik "medium")
     let card = null;
     try {
-      card = renderPlayerSlotCard(p, { size: "small", footer: "", isLead: false });
+      card = renderPlayerSlotCard(p, { size: "medium", footer: "", isLead: false });
     } catch (e) {
       card = null;
     }
 
-    // fallback als renderer geen small kent
     if (!card) {
       card = document.createElement("div");
       card.className = "decision-mini-fallback";
       card.textContent = p.name || "Vos";
     }
 
-    card.classList.add("decision-mini-card");
+    card.classList.add("decision-reveal-card");
+    card.style.position = "relative";
 
-    // decision badge
     const d = normalizeDecision(p.decision);
     const meta = decisionMeta(d);
 
     const badge = document.createElement("div");
-    badge.className = `decision-badge ${meta.cls}`;
+    badge.className = `decision-badge decision-badge--reveal ${meta.cls}`;
     badge.textContent = meta.label;
 
-    // subtiele den rand (als je dit wil)
-    const den = (p.den || p.color || "").toUpperCase();
-    if (den) card.classList.add(`den-${den.toLowerCase()}`);
-
-    // badge bovenop kaart
-    card.style.position = "relative";
     card.appendChild(badge);
-
     grid.appendChild(card);
   });
 }
@@ -664,30 +642,33 @@ function renderRevealCountdownUi(pr) {
   const leftMs = Math.max(0, revealAt - now);
   const leftSec = Math.ceil(leftMs / 1000);
 
-  // ✅ geen spoiler: geen echte titel
-  eventPosterTitle.textContent = "Event onthulling";
-  eventPosterText.textContent = `De volgende Event Kaart wordt onthuld in ${leftSec} seconden.`;
+  // Titel + tekst
+  eventPosterTitle.textContent = "DECISION WALL";
+  eventPosterText.textContent = `Onthulling over ${leftSec} seconden…`;
 
+  // ✅ Poster/kaart weg tijdens countdown
   if (eventPosterImage) {
-    eventPosterImage.src = CARD_BACK;
-    eventPosterImage.style.display = ""; // toon achterkant is ok
+    eventPosterImage.style.display = "none";
+    eventPosterImage.src = ""; // optioneel
   }
 
-  // zorg dat "Onthul nu" knop bestaat & zichtbaar is
+  // ✅ grote spelerskaarten met keuze
+  renderDecisionWallReveal(latestGame, latestPlayers);
+
+  // “Onthul nu” knop blijft
   const btn = ensureRevealNowButton();
   if (btn) btn.style.display = "";
-
-  // ✅ nieuw: laat keuzes zien tijdens countdown
-  renderDecisionWall(latestGame, latestPlayers);
 }
 
 function renderRevealedEventUi(eventId) {
-
-  // ✅ nieuw: na onthulling weg (of laat evt 2 sec staan)
-hideDecisionWall();
-// of: setTimeout(hideDecisionWall, 2000);
-
   if (!eventPosterOverlay || !eventId) return;
+
+  // ✅ decision wall weg zodra event echt onthuld is
+  hideDecisionWall();
+
+  // ✅ poster terug
+  if (eventPosterImage) eventPosterImage.style.display = "";
+
   const ev = getEventById(eventId);
   if (!ev) return;
 
@@ -699,7 +680,6 @@ hideDecisionWall();
     eventPosterImage.style.display = "";
   }
 
-  // verberg "Onthul nu" knop zodra onthuld
   const box = eventPosterOverlay.querySelector(".overlay-box");
   const btn = box ? box.querySelector("#eventRevealNowBtn") : null;
   if (btn) btn.style.display = "none";
