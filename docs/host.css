@@ -600,9 +600,9 @@
   color: #9ca3af;
 }
 
-
 /* ==========================================
 REVEAL POSTER - DECISION WALL - COUNT DOWN
+(фикс: geen overlap + 4 per rij + 2x groot)
 ========================================== */
 
 .decision-wall {
@@ -619,6 +619,7 @@ REVEAL POSTER - DECISION WALL - COUNT DOWN
   margin-bottom: 10px;
 }
 
+/* default (klein) wall: flex blijft ok */
 .decision-wall-grid {
   display: flex;
   flex-wrap: wrap;
@@ -655,20 +656,62 @@ REVEAL POSTER - DECISION WALL - COUNT DOWN
   background: rgba(0,0,0,0.55);
 }
 
-.decision-dash   { outline: 2px solid rgba(255, 220, 120, 0.85); }
-.decision-burrow { outline: 2px solid rgba(160, 220, 255, 0.85); }
-.decision-lurk   { outline: 2px solid rgba(160, 255, 180, 0.85); }
-.decision-unknown{ outline: 2px solid rgba(255, 255, 255, 0.35); }
+.decision-dash    { outline: 2px solid rgba(255, 220, 120, 0.85); }
+.decision-burrow  { outline: 2px solid rgba(160, 220, 255, 0.85); }
+.decision-lurk    { outline: 2px solid rgba(160, 255, 180, 0.85); }
+.decision-unknown { outline: 2px solid rgba(255, 255, 255, 0.35); }
 
-/* 2x zo groot op de Decision Wall */
+/* =========================================================
+REVEAL MODE (grote kaarten):
+Gebruik GRID + slot wrapper zodat scale nooit overlap geeft.
+========================================================= */
+
+/* zet je decision wall container op deze class in REVEAL */
+.decision-wall-grid--reveal {
+  /* pas deze 2 aan aan jouw echte kaartmaat (zonder scale) */
+  --base-w: 180px;
+  --base-h: 240px;
+  --scale: 2;
+
+  display: grid;
+  grid-template-columns: repeat(4, calc(var(--base-w) * var(--scale)));
+  grid-auto-rows: calc(var(--base-h) * var(--scale));
+  gap: 28px;
+  justify-content: center;
+  align-content: start;
+  padding: 24px 0;
+
+  /* override flex van .decision-wall-grid als je beide classes gebruikt */
+  flex-wrap: initial;
+}
+
+/* dit is de wrapper/slot die ruimte reserveert */
+.decision-wall-grid--reveal .decision-reveal-slot {
+  width: calc(var(--base-w) * var(--scale));
+  height: calc(var(--base-h) * var(--scale));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* alleen de inhoud schalen */
 .decision-wall-grid--reveal .decision-reveal-card {
-  transform: scale(2);
+  transform: scale(var(--scale));
   transform-origin: center;
 }
-.decision-wall-grid--reveal {
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-  gap: 32px;
-  padding: 24px 0;
+
+/* responsive: op small screens 2 per rij */
+@media (max-width: 980px) {
+  .decision-wall-grid--reveal {
+    grid-template-columns: repeat(2, calc(var(--base-w) * var(--scale)));
+  }
+}
+
+/* responsive: op heel smal 1 per rij */
+@media (max-width: 520px) {
+  .decision-wall-grid--reveal {
+    grid-template-columns: repeat(1, calc(var(--base-w) * var(--scale)));
+  }
 }
 
 /* ==========================================
