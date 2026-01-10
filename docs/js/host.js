@@ -1,4 +1,7 @@
 // host.js — VOSSENJACHT (clean host + bots in botRunner.js)
+// + PhaseGate (NextPhase READY/NOT READY)
+// + Raid Pause/Resume + auto-advance after 5s when paused
+// + REVEAL suspense: 10s countdown + "Onthul nu" + reveal triggers resolveAfterReveal
 
 import { initAuth } from "./firebase.js";
 import { getEventById, CARD_BACK } from "./cards.js";
@@ -21,6 +24,7 @@ import {
   limit,
   addDoc,
   serverTimestamp,
+  runTransaction, // ✅ nieuw: nodig om pendingReveal veilig te finaliseren
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const db = getFirestore();
@@ -100,11 +104,69 @@ const eventPosterImage = document.getElementById("eventPosterImage");
 const eventPosterText = document.getElementById("eventPosterText");
 const eventPosterCloseBtn = document.getElementById("eventPosterCloseBtn");
 
-// Laatste event dat we fullscreen hebben getoond
-let lastRevealedEventId = null;
+// Laatste event dat we fullscreen hebben getoond (UI-key incl. revealed state)
+let lastPosterUiKey = null;
 
 // Verberg oude test-knop (endBtn)
 if (endBtn) endBtn.style.display = "none";
+
+// ===============================
+// NEW: PhaseGate + Pause/AutoAdvance + RevealCountdown config
+// ===============================
+const REVEAL_COUNTDOWN_MS = 10_000; // 10 sec
+const AUTO_ADVANCE_MS = 5_000; // 5 sec
+
+let autoAdvanceTimer = null;
+let autoAdvanceKey = null;
+let revealCountdownTimer = null;
+let revealCountdownEventId = null;
+
+// UI elements that may not exist in HTML -> we inject safely
+function ensureAfter(el, newEl) {
+  if (!el || !el.parentElement) return null;
+  const parent = el.parentElement;
+  if (el.nextSibling) parent.insertBefore(newEl, el.nextSibling);
+  else parent.appendChild(newEl);
+  return newEl;
+}
+
+function ensurePauseButton() {
+  let btn = document.getElementById("pauseRaidBtn");
+  if (btn) return btn;
+  if (!nextPhaseBtn) return null;
+
+  btn = document.createElement("button");
+  btn.id = "pauseRaidBtn";
+  btn.className = "btn btn-ghost";
+  btn.textContent = "Raid pauzeren";
+
+  return ensureAfter(nextPhaseBtn, btn);
+}
+
+function ensurePhaseGateHint() {
+  let el = document.getElementById("phaseGateHint");
+  if (el) return el;
+  if (!nextPhaseBtn) return null;
+
+  el = document.createElement("div");
+  el.id = "phaseGateHint";
+  el.style.marginTop = "6px";
+  el.style.fontSize = "12px";
+  el.style.opacity = "0.85";
+  el.style.maxWidth = "520px";
+  el.textContent = "";
+
+  // probeer onder de knoppen te zetten (zelfde parent)
+  const parent = nextPhaseBtn.parentElement;
+  if (parent) {
+    parent.appendChild(el);
+    return el;
+  }
+  return null;
+}
+
+const pauseRaidBtn = ensurePauseButton();
+const phaseGateHint = ensurePhaseGateHint();
 
 // ===============================
 // State
@@ -155,9 +217,259 @@ function shuffleArray(array) {
 }
 
 // ===============================
+// NEW: PhaseGate logic (READY/NOT READY) + UI helpers
+// ===============================
+function getActiveYardPlayers(players) {
+  return (players || []).filter(isInYardForEvents);
+}
+
+function computePhaseGate(game, players) {
+  const g = game || {};
+  const phase = g.phase || "MOVE";
+
+  if (isGameFinished(g)) {
+    return { ready: false, reason: "Spel is afgelopen.", missing: [] };
+  }
+  if (!isActiveRaidStatus(g.status)) {
+    return { ready: false, reason: "Nog geen actieve ronde.", missing: [] };
+  }
+
+  const active = getActiveYardPlayers(players);
+  const activeCount = active.length;
+
+  // MOVE -> ACTIONS
+  if (phase === "MOVE") {
+    const moved = Array.isArray(g.movedPlayerIds) ? g.movedPlayerIds : [];
+    const mustMoveCount = activeCount;
+
+    if (mustMoveCount === 0) {
+      return { ready: true, reason: "Geen actieve vossen in de Yard — OPS wordt overgeslagen.", missing: [] };
+    }
+    if (moved.length >= mustMoveCount) {
+      return { ready: true, reason: `Iedereen heeft MOVE gedaan (${moved.length}/${mustMoveCount}).`, missing: [] };
+    }
+    return {
+      ready: false,
+      reason: `Wacht op MOVE: ${moved.length}/${mustMoveCount}.`,
+      missing: [],
+    };
+  }
+
+  // ACTIONS -> DECISION
+  if (phase === "ACTIONS") {
+    const passes = Number(g.opsConsecutivePasses || 0);
+    const opsLocked = !!g.flagsRound?.opsLocked;
+
+    if (opsLocked) {
+      return { ready: true, reason: "OPS is gelocked — door naar DECISION.", missing: [] };
+    }
+    if (activeCount === 0) {
+      return { ready: true, reason: "Geen actieve vossen — OPS klaar.", missing: [] };
+    }
+    if (passes >= activeCount) {
+      return { ready: true, reason: `Iedereen heeft na elkaar gepast (${passes}/${activeCount}).`, missing: [] };
+    }
+    return {
+      ready: false,
+      reason: `OPS bezig: opeenvolgende PASSes ${passes}/${activeCount}.`,
+      missing: [],
+    };
+  }
+
+  // DECISION -> REVEAL
+  if (phase === "DECISION") {
+    if (activeCount === 0) {
+      return { ready: true, reason: "Geen actieve vossen — door naar REVEAL.", missing: [] };
+    }
+    const decided = active.filter((p) => !!p.decision).length;
+    if (decided >= activeCount) {
+      return { ready: true, reason: `Iedereen heeft DECISION gekozen (${decided}/${activeCount}).`, missing: [] };
+    }
+    return { ready: false, reason: `Wacht op DECISION: ${decided}/${activeCount}.`, missing: [] };
+  }
+
+  // REVEAL -> MOVE/END
+  if (phase === "REVEAL") {
+    const pr = g.pendingReveal;
+    if (pr && pr.eventId === g.currentEventId && pr.revealed !== true) {
+      const now = Date.now();
+      const revealAt = Number(pr.revealAtMs || 0);
+      const leftMs = Math.max(0, revealAt - now);
+      const leftSec = Math.ceil(leftMs / 1000);
+      return {
+        ready: false,
+        reason: `Event onthulling bezig… (${leftSec}s)`,
+        missing: [],
+      };
+    }
+    return { ready: true, reason: "REVEAL klaar — door naar MOVE.", missing: [] };
+  }
+
+  return { ready: true, reason: "OK.", missing: [] };
+}
+
+function clearAutoAdvance() {
+  if (autoAdvanceTimer) clearTimeout(autoAdvanceTimer);
+  autoAdvanceTimer = null;
+  autoAdvanceKey = null;
+}
+
+function applyNextPhaseUi(gate, game) {
+  if (!nextPhaseBtn) return;
+
+  // ✅ alleen “indicator”: we laten de bestaande alerts/guards intact
+  nextPhaseBtn.classList.remove("btn-ready", "btn-notready");
+  nextPhaseBtn.classList.add(gate?.ready ? "btn-ready" : "btn-notready");
+
+  // tooltip voor snel inzicht
+  nextPhaseBtn.title = gate?.reason || "";
+
+  if (phaseGateHint) {
+    phaseGateHint.textContent = gate?.reason || "";
+  }
+
+  // Pause button label (als aanwezig)
+  if (pauseRaidBtn) {
+    const paused = !!game?.raidPaused;
+    pauseRaidBtn.textContent = paused ? "Raid hervatten" : "Raid pauzeren";
+    pauseRaidBtn.classList.toggle("btn-paused", paused);
+  }
+}
+
+async function maybeScheduleAutoAdvance(game, gate) {
+  if (!gameRef) return;
+
+  const paused = !!game?.raidPaused;
+  if (!paused) {
+    clearAutoAdvance();
+    return;
+  }
+  if (!gate?.ready) {
+    clearAutoAdvance();
+    return;
+  }
+
+  // unieke key om dubbele timers te voorkomen
+  const pr = game?.pendingReveal;
+  const key = [
+    game?.status || "",
+    game?.round || 0,
+    game?.phase || "",
+    game?.currentEventId || "",
+    pr?.revealed ? 1 : 0,
+    pr?.revealAtMs || 0,
+    game?.eventIndex || 0,
+  ].join("|");
+
+  if (autoAdvanceTimer && autoAdvanceKey === key) return;
+
+  clearAutoAdvance();
+  autoAdvanceKey = key;
+
+  autoAdvanceTimer = setTimeout(async () => {
+    try {
+      // recheck actuele game
+      const snap = await getDoc(gameRef);
+      if (!snap.exists()) return;
+      const g = snap.data();
+
+      const pr2 = g?.pendingReveal;
+      const key2 = [
+        g?.status || "",
+        g?.round || 0,
+        g?.phase || "",
+        g?.currentEventId || "",
+        pr2?.revealed ? 1 : 0,
+        pr2?.revealAtMs || 0,
+        g?.eventIndex || 0,
+      ].join("|");
+
+      if (key2 !== autoAdvanceKey) return;
+
+      const gate2 = computePhaseGate(g, latestPlayers);
+      if (!gate2.ready) return;
+
+      // auto-advance gebruikt dezelfde handler als button
+      await handleNextPhase({ silent: true });
+    } catch (err) {
+      console.error("Auto-advance fout:", err);
+    }
+  }, AUTO_ADVANCE_MS);
+}
+
+// ===============================
 // Event poster
 // ===============================
-function openEventPoster(eventId) {
+function ensureRevealNowButton() {
+  if (!eventPosterOverlay) return null;
+  const box = eventPosterOverlay.querySelector(".overlay-box");
+  if (!box) return null;
+
+  let btn = box.querySelector("#eventRevealNowBtn");
+  if (btn) return btn;
+
+  btn = document.createElement("button");
+  btn.id = "eventRevealNowBtn";
+  btn.className = "btn btn-secondary";
+  btn.textContent = "Onthul nu";
+
+  // probeer in overlay-content te plaatsen
+  const content = box.querySelector(".overlay-content");
+  if (content) {
+    content.appendChild(btn);
+  } else {
+    box.appendChild(btn);
+  }
+
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    await revealNowIfPending();
+  });
+
+  // click op overlay-box = ook onthullen (maar niet op close button)
+  box.addEventListener("click", async (e) => {
+    const t = e.target;
+    if (t && (t.id === "eventPosterCloseBtn" || t.closest("#eventPosterCloseBtn"))) return;
+    // alleen als we in countdown zitten
+    const g = latestGame;
+    const pr = g?.pendingReveal;
+    if (g?.phase === "REVEAL" && pr && pr.eventId === g.currentEventId && pr.revealed !== true) {
+      await revealNowIfPending();
+    }
+  });
+
+  return btn;
+}
+
+function stopRevealCountdown() {
+  if (revealCountdownTimer) clearInterval(revealCountdownTimer);
+  revealCountdownTimer = null;
+  revealCountdownEventId = null;
+}
+
+function renderRevealCountdownUi(pr) {
+  if (!eventPosterOverlay || !eventPosterTitle || !eventPosterText) return;
+
+  const now = Date.now();
+  const revealAt = Number(pr?.revealAtMs || 0);
+  const leftMs = Math.max(0, revealAt - now);
+  const leftSec = Math.ceil(leftMs / 1000);
+
+  // ✅ geen spoiler: geen echte titel
+  eventPosterTitle.textContent = "Event onthulling";
+  eventPosterText.textContent = `De volgende Event Kaart wordt onthuld in ${leftSec} seconden.`;
+
+  if (eventPosterImage) {
+    eventPosterImage.src = CARD_BACK;
+    eventPosterImage.style.display = ""; // toon achterkant is ok
+  }
+
+  // zorg dat "Onthul nu" knop bestaat & zichtbaar is
+  const btn = ensureRevealNowButton();
+  if (btn) btn.style.display = "";
+}
+
+function renderRevealedEventUi(eventId) {
   if (!eventPosterOverlay || !eventId) return;
   const ev = getEventById(eventId);
   if (!ev) return;
@@ -167,8 +479,58 @@ function openEventPoster(eventId) {
   if (eventPosterImage) {
     const src = ev.imagePoster || ev.imageFront || CARD_BACK;
     eventPosterImage.src = src;
+    eventPosterImage.style.display = "";
   }
 
+  // verberg "Onthul nu" knop zodra onthuld
+  const box = eventPosterOverlay.querySelector(".overlay-box");
+  const btn = box ? box.querySelector("#eventRevealNowBtn") : null;
+  if (btn) btn.style.display = "none";
+}
+
+function openEventPoster(eventId) {
+  if (!eventPosterOverlay || !eventId) return;
+
+  // suspense-mode: als pendingReveal matcht en nog niet revealed => countdown UI
+  const g = latestGame;
+  const pr = g?.pendingReveal;
+
+  if (g?.phase === "REVEAL" && pr && pr.eventId === eventId && pr.revealed !== true) {
+    renderRevealCountdownUi(pr);
+
+    eventPosterOverlay.classList.remove("hidden");
+
+    // start/refresh countdown timer
+    if (revealCountdownEventId !== eventId) {
+      stopRevealCountdown();
+      revealCountdownEventId = eventId;
+
+      revealCountdownTimer = setInterval(async () => {
+        const gg = latestGame;
+        const ppr = gg?.pendingReveal;
+        if (!gg || gg.phase !== "REVEAL" || !ppr || ppr.eventId !== eventId) {
+          stopRevealCountdown();
+          return;
+        }
+        if (ppr.revealed === true) {
+          stopRevealCountdown();
+          return;
+        }
+        renderRevealCountdownUi(ppr);
+
+        // auto-onthul als tijd voorbij is (safety)
+        const now = Date.now();
+        if (Number(ppr.revealAtMs || 0) <= now) {
+          await revealNowIfPending();
+        }
+      }, 250);
+    }
+
+    return;
+  }
+
+  // normaal: toon onthulde event
+  renderRevealedEventUi(eventId);
   eventPosterOverlay.classList.remove("hidden");
 }
 
@@ -182,8 +544,65 @@ if (eventPosterCloseBtn && eventPosterOverlay) {
 }
 if (eventPosterOverlay) {
   eventPosterOverlay.addEventListener("click", (e) => {
+    // behoud: click op backdrop sluit
     if (e.target === eventPosterOverlay) closeEventPoster();
   });
+}
+
+// NEW: Finalize pending reveal safely (transaction) + resolve after reveal
+async function finalizePendingRevealIfDue(force = false) {
+  if (!gameRef) return { didReveal: false };
+  const now = Date.now();
+
+  try {
+    const result = await runTransaction(db, async (tx) => {
+      const snap = await tx.get(gameRef);
+      if (!snap.exists()) return { didReveal: false };
+
+      const g = snap.data();
+      if (g.phase !== "REVEAL" || !g.currentEventId) return { didReveal: false };
+
+      const pr = g.pendingReveal;
+      if (!pr || pr.eventId !== g.currentEventId) return { didReveal: false };
+      if (pr.revealed === true) return { didReveal: false };
+
+      const revealAt = Number(pr.revealAtMs || 0);
+      if (!force && revealAt > now) return { didReveal: false };
+
+      const track = g.eventTrack || [];
+      const revealed = Array.isArray(g.eventRevealed)
+        ? [...g.eventRevealed]
+        : track.map(() => false);
+
+      const pos = Number.isFinite(pr.pos) ? pr.pos : null;
+      if (pos != null && pos >= 0 && pos < revealed.length) revealed[pos] = true;
+
+      tx.update(gameRef, {
+        eventRevealed: revealed,
+        pendingReveal: { ...pr, revealed: true, revealedAtMs: now },
+      });
+
+      return { didReveal: true, eventId: pr.eventId };
+    });
+
+    if (result?.didReveal) {
+      // ✅ pas NA echte onthulling: resolve
+      try {
+        await resolveAfterReveal(gameId);
+      } catch (err) {
+        console.error("resolveAfterReveal fout:", err);
+      }
+    }
+
+    return result || { didReveal: false };
+  } catch (err) {
+    console.error("finalizePendingRevealIfDue fout:", err);
+    return { didReveal: false };
+  }
+}
+
+async function revealNowIfPending() {
+  return finalizePendingRevealIfDue(true);
 }
 
 // ===============================
@@ -327,6 +746,7 @@ function renderEventTrack(game) {
   const track = game.eventTrack || [];
   const revealed = game.eventRevealed || [];
   const currentId = game.currentEventId || null;
+  const pending = game.pendingReveal || null;
 
   eventTrackDiv.innerHTML = "";
 
@@ -345,10 +765,21 @@ function renderEventTrack(game) {
     const ev = getEventById(eventId);
     const isRevealed = !!revealed[i];
 
+    // ✅ suspense: pending slot telt als "current", maar blijft BACK tot revealed=true
+    const isPendingHere =
+      game.phase === "REVEAL" &&
+      pending &&
+      pending.eventId === eventId &&
+      Number.isFinite(pending.pos) &&
+      pending.pos === i &&
+      pending.revealed !== true;
+
     let state = "future";
     if (isRevealed) {
       if (currentId && eventId === currentId) state = "current";
       else state = "past";
+    } else if (isPendingHere) {
+      state = "current";
     }
 
     const slot = document.createElement("div");
@@ -453,6 +884,7 @@ function renderStatusCards(game) {
 // ===============================
 // Scoreboard + leaderboards
 // ===============================
+// (ongewijzigd — jouw bestaande code blijft intact)
 function calcLeaderboardScore(data) {
   if (!data) return 0;
   const eggs = Number(data.eggs || 0);
@@ -822,6 +1254,8 @@ async function initRaidIfNeeded(gameRefParam) {
       opsTurnIndex: 0,
       opsConsecutivePasses: 0,
       actionDiscard: [],
+      raidPaused: false,    // ✅ nieuw
+      pendingReveal: null,  // ✅ nieuw
     })
   );
 
@@ -935,6 +1369,8 @@ async function startNewRaidFromBoard() {
       raidEndedByRooster: false,
       roosterSeen: 0,
       botsEnabled: true,
+      raidPaused: false,    // ✅ nieuw
+      pendingReveal: null,  // ✅ nieuw
     });
 
     const newGameId = gameRefLocal.id;
@@ -978,6 +1414,29 @@ initAuth(async (authUser) => {
       } catch (err) {
         console.error("BOT toevoegen mislukt:", err);
         alert("BOT toevoegen mislukt.");
+      }
+    });
+  }
+
+  // ✅ Raid pauzeren / hervatten
+  if (pauseRaidBtn) {
+    pauseRaidBtn.addEventListener("click", async () => {
+      try {
+        const snap = await getDoc(gameRef);
+        if (!snap.exists()) return;
+        const g = snap.data();
+        const next = !g.raidPaused;
+
+        await updateDoc(gameRef, { raidPaused: next });
+
+        await addLog(gameId, {
+          round: g.round || 0,
+          phase: g.phase || "MOVE",
+          kind: "SYSTEM",
+          message: next ? "Raid pauze-modus AAN (auto-next na 5s wanneer fase klaar is)." : "Raid pauze-modus UIT.",
+        });
+      } catch (err) {
+        console.error("Raid pauze toggle fout:", err);
       }
     });
   }
@@ -1045,6 +1504,7 @@ initAuth(async (authUser) => {
           holdStill: {},
         },
         leadIndex,
+        pendingReveal: null, // ✅ nieuw: reset
       });
 
       await addLog(gameId, {
@@ -1057,211 +1517,230 @@ initAuth(async (authUser) => {
   }
 
   // ==== PHASE SWITCHER ====
-  if (nextPhaseBtn) {
-    nextPhaseBtn.addEventListener("click", async () => {
-      const snap = await getDoc(gameRef);
-      if (!snap.exists()) return;
-      const game = snap.data();
+  async function handleNextPhase({ silent = false } = {}) {
+    const snap = await getDoc(gameRef);
+    if (!snap.exists()) return;
+    const game = snap.data();
 
-      const current = game.phase || "MOVE";
-      const roundNumber = game.round || 0;
+    const current = game.phase || "MOVE";
+    const roundNumber = game.round || 0;
 
-      if (game.status === "finished" || current === "END") {
-        alert("Het spel is al afgelopen; er is geen volgende fase meer.");
-        return;
-      }
-      if (!isActiveRaidStatus(game.status)) {
-        alert("Er is geen actieve ronde in de raid.");
-        return;
-      }
+    if (game.status === "finished" || current === "END") {
+      if (!silent) alert("Het spel is al afgelopen; er is geen volgende fase meer.");
+      return;
+    }
+    if (!isActiveRaidStatus(game.status)) {
+      if (!silent) alert("Er is geen actieve ronde in de raid.");
+      return;
+    }
 
-      // MOVE -> ACTIONS
-      if (current === "MOVE") {
-        const active = latestPlayers.filter(isInYardForEvents);
-        const mustMoveCount = active.length;
-        const moved = game.movedPlayerIds || [];
+    // MOVE -> ACTIONS
+    if (current === "MOVE") {
+      const active = latestPlayers.filter(isInYardForEvents);
+      const mustMoveCount = active.length;
+      const moved = game.movedPlayerIds || [];
 
-        if (mustMoveCount > 0 && moved.length < mustMoveCount) {
-          alert(`Niet alle vossen hebben hun MOVE gedaan (${moved.length}/${mustMoveCount}).`);
-          return;
-        }
-
-        if (!active.length) {
-          await updateDoc(gameRef, { phase: "DECISION" });
-          await addLog(gameId, {
-            round: roundNumber,
-            phase: "DECISION",
-            kind: "SYSTEM",
-            message: "Geen actieve vossen in de Yard na MOVE – OPS wordt overgeslagen. Door naar DECISION.",
-          });
-          return;
-        }
-
-        const ordered = [...active].sort((a, b) => {
-          const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
-          const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
-          return ao - bo;
-        });
-
-        const baseOrder = ordered.map((p) => p.id);
-
-        let leadIndex = typeof game.leadIndex === "number" ? game.leadIndex : 0;
-        if (leadIndex < 0 || leadIndex >= baseOrder.length) leadIndex = 0;
-
-        const opsTurnOrder = [];
-        for (let i = 0; i < baseOrder.length; i++) {
-          opsTurnOrder.push(baseOrder[(leadIndex + i) % baseOrder.length]);
-        }
-
-        await updateDoc(gameRef, {
-          phase: "ACTIONS",
-          opsTurnOrder,
-          opsTurnIndex: 0,
-          opsConsecutivePasses: 0,
-        });
-
-        await addLog(gameId, {
-          round: roundNumber,
-          phase: "ACTIONS",
-          kind: "SYSTEM",
-          message: "OPS-fase gestart. Lead Fox begint met het spelen van Action Cards of PASS.",
-        });
+      if (mustMoveCount > 0 && moved.length < mustMoveCount) {
+        if (!silent) alert(`Niet alle vossen hebben hun MOVE gedaan (${moved.length}/${mustMoveCount}).`);
         return;
       }
 
-      // ACTIONS -> DECISION
-      if (current === "ACTIONS") {
-        const active = latestPlayers.filter(isInYardForEvents);
-        const activeCount = active.length;
-        const passes = game.opsConsecutivePasses || 0;
-        const opsLocked = !!game.flagsRound?.opsLocked;
-
-        if (!opsLocked && activeCount > 0 && passes < activeCount) {
-          alert(`OPS-fase is nog bezig: opeenvolgende PASSes: ${passes}/${activeCount}.`);
-          return;
-        }
-
+      if (!active.length) {
         await updateDoc(gameRef, { phase: "DECISION" });
         await addLog(gameId, {
           round: roundNumber,
           phase: "DECISION",
           kind: "SYSTEM",
-          message: "Iedereen heeft na elkaar gepast in OPS – door naar DECISION-fase.",
+          message: "Geen actieve vossen in de Yard na MOVE – OPS wordt overgeslagen. Door naar DECISION.",
         });
         return;
       }
 
-      // DECISION -> REVEAL
-      if (current === "DECISION") {
-        const active = latestPlayers.filter(isInYardForEvents);
-        const decided = active.filter((p) => !!p.decision).length;
+      const ordered = [...active].sort((a, b) => {
+        const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+        const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
+        return ao - bo;
+      });
 
-        if (active.length > 0 && decided < active.length) {
-          alert(`Niet alle vossen hebben een DECISION gekozen (${decided}/${active.length}).`);
-          return;
+      const baseOrder = ordered.map((p) => p.id);
+
+      let leadIndex = typeof game.leadIndex === "number" ? game.leadIndex : 0;
+      if (leadIndex < 0 || leadIndex >= baseOrder.length) leadIndex = 0;
+
+      const opsTurnOrder = [];
+      for (let i = 0; i < baseOrder.length; i++) {
+        opsTurnOrder.push(baseOrder[(leadIndex + i) % baseOrder.length]);
+      }
+
+      await updateDoc(gameRef, {
+        phase: "ACTIONS",
+        opsTurnOrder,
+        opsTurnIndex: 0,
+        opsConsecutivePasses: 0,
+      });
+
+      await addLog(gameId, {
+        round: roundNumber,
+        phase: "ACTIONS",
+        kind: "SYSTEM",
+        message: "OPS-fase gestart. Lead Fox begint met het spelen van Action Cards of PASS.",
+      });
+      return;
+    }
+
+    // ACTIONS -> DECISION
+    if (current === "ACTIONS") {
+      const active = latestPlayers.filter(isInYardForEvents);
+      const activeCount = active.length;
+      const passes = game.opsConsecutivePasses || 0;
+      const opsLocked = !!game.flagsRound?.opsLocked;
+
+      if (!opsLocked && activeCount > 0 && passes < activeCount) {
+        if (!silent) alert(`OPS-fase is nog bezig: opeenvolgende PASSes: ${passes}/${activeCount}.`);
+        return;
+      }
+
+      await updateDoc(gameRef, { phase: "DECISION" });
+      await addLog(gameId, {
+        round: roundNumber,
+        phase: "DECISION",
+        kind: "SYSTEM",
+        message: "Iedereen heeft na elkaar gepast in OPS – door naar DECISION-fase.",
+      });
+      return;
+    }
+
+    // DECISION -> REVEAL (met suspense countdown)
+    if (current === "DECISION") {
+      const active = latestPlayers.filter(isInYardForEvents);
+      const decided = active.filter((p) => !!p.decision).length;
+
+      if (active.length > 0 && decided < active.length) {
+        if (!silent) alert(`Niet alle vossen hebben een DECISION gekozen (${decided}/${active.length}).`);
+        return;
+      }
+
+      const track = game.eventTrack || [];
+      let eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
+
+      if (!track.length || eventIndex >= track.length) {
+        if (!silent) alert("Er zijn geen events meer op de Track om te onthullen.");
+        return;
+      }
+
+      const eventId = track[eventIndex];
+      const ev = getEventById(eventId);
+
+      // ✅ let op: we markeren eventRevealed[pos] NIET meteen true -> geen spoiler op track
+      const nowMs = Date.now();
+      const pendingReveal = {
+        eventId,
+        pos: eventIndex,
+        announcedAtMs: nowMs,
+        revealAtMs: nowMs + REVEAL_COUNTDOWN_MS,
+        revealed: false,
+      };
+
+      let newRoosterSeen = game.roosterSeen || 0;
+      let raidEndedByRooster = game.raidEndedByRooster || false;
+
+      const updatePayload = {
+        phase: "REVEAL",
+        currentEventId: eventId,
+        // eventRevealed blijft nog gelijk totdat onthuld
+        eventIndex: eventIndex + 1,
+        pendingReveal,
+      };
+
+      if (eventId === "ROOSTER_CROW") {
+        newRoosterSeen += 1;
+        updatePayload.roosterSeen = newRoosterSeen;
+        if (newRoosterSeen >= 3) {
+          raidEndedByRooster = true;
+          updatePayload.raidEndedByRooster = true;
         }
+      }
 
-        const track = game.eventTrack || [];
-        let eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
+      await updateDoc(gameRef, updatePayload);
 
-        if (!track.length || eventIndex >= track.length) {
-          alert("Er zijn geen events meer op de Track om te onthullen.");
-          return;
-        }
+      await addLog(gameId, {
+        round: roundNumber,
+        phase: "REVEAL",
+        kind: "EVENT",
+        cardId: eventId,
+        message: ev ? ev.title : eventId,
+      });
 
-        const eventId = track[eventIndex];
-        const ev = getEventById(eventId);
-
-        const revealed = game.eventRevealed ? [...game.eventRevealed] : track.map(() => false);
-        revealed[eventIndex] = true;
-
-        let newRoosterSeen = game.roosterSeen || 0;
-        let raidEndedByRooster = game.raidEndedByRooster || false;
-
-        const updatePayload = {
-          phase: "REVEAL",
-          currentEventId: eventId,
-          eventRevealed: revealed,
-          eventIndex: eventIndex + 1,
-        };
-
-        if (eventId === "ROOSTER_CROW") {
-          newRoosterSeen += 1;
-          updatePayload.roosterSeen = newRoosterSeen;
-          if (newRoosterSeen >= 3) {
-            raidEndedByRooster = true;
-            updatePayload.raidEndedByRooster = true;
-          }
-        }
-
-        await updateDoc(gameRef, updatePayload);
-
+      if (eventId === "ROOSTER_CROW") {
         await addLog(gameId, {
           round: roundNumber,
           phase: "REVEAL",
           kind: "EVENT",
           cardId: eventId,
-          message: ev ? ev.title : eventId,
+          message: `Rooster Crow (${newRoosterSeen}/3).`,
         });
-
-        if (eventId === "ROOSTER_CROW") {
+        if (raidEndedByRooster) {
           await addLog(gameId, {
             round: roundNumber,
             phase: "REVEAL",
-            kind: "EVENT",
-            cardId: eventId,
-            message: `Rooster Crow (${newRoosterSeen}/3).`,
+            kind: "SYSTEM",
+            message: "Derde Rooster Crow: dashers verdelen de Sack en daarna eindigt de raid.",
           });
-          if (raidEndedByRooster) {
-            await addLog(gameId, {
-              round: roundNumber,
-              phase: "REVEAL",
-              kind: "SYSTEM",
-              message: "Derde Rooster Crow: dashers verdelen de Sack en daarna eindigt de raid.",
-            });
-          }
         }
+      }
 
-        await resolveAfterReveal(gameId);
+      // ✅ resolveAfterReveal gebeurt nu pas NA echte onthulling (zie finalizePendingRevealIfDue)
+      return;
+    }
+
+    // REVEAL -> MOVE of EINDE
+    if (current === "REVEAL") {
+      // als reveal nog pending is, blokkeren we (ook voor silent)
+      const pr = game.pendingReveal;
+      if (pr && pr.eventId === game.currentEventId && pr.revealed !== true) {
+        if (!silent) alert("Event wordt nog onthuld… wacht even of klik ‘Onthul nu’.");
         return;
       }
 
-      // REVEAL -> MOVE of EINDE
-      if (current === "REVEAL") {
-        const latestSnap = await getDoc(gameRef);
-        if (!latestSnap.exists()) return;
-        const latest = latestSnap.data();
+      const latestSnap = await getDoc(gameRef);
+      if (!latestSnap.exists()) return;
+      const latest = latestSnap.data();
 
-        if (latest && isGameFinished(latest)) return;
+      if (latest && isGameFinished(latest)) return;
 
-        const activeAfterReveal = latestPlayers.filter(isInYardLocal);
-        if (activeAfterReveal.length === 0) {
-          await updateDoc(gameRef, { status: "finished", phase: "END" });
-          await addLog(gameId, {
-            round: roundNumber,
-            phase: "END",
-            kind: "SYSTEM",
-            message: "Geen vossen meer in de Yard na REVEAL – de raid is afgelopen.",
-          });
-          return;
-        }
-
-        await updateDoc(gameRef, { phase: "MOVE" });
+      const activeAfterReveal = latestPlayers.filter(isInYardLocal);
+      if (activeAfterReveal.length === 0) {
+        await updateDoc(gameRef, { status: "finished", phase: "END" });
         await addLog(gameId, {
           round: roundNumber,
-          phase: "MOVE",
+          phase: "END",
           kind: "SYSTEM",
-          message: "REVEAL afgerond. Terug naar MOVE-fase voor de volgende ronde.",
+          message: "Geen vossen meer in de Yard na REVEAL – de raid is afgelopen.",
         });
         return;
       }
+
+      await updateDoc(gameRef, { phase: "MOVE", pendingReveal: null });
+      await addLog(gameId, {
+        round: roundNumber,
+        phase: "MOVE",
+        kind: "SYSTEM",
+        message: "REVEAL afgerond. Terug naar MOVE-fase voor de volgende ronde.",
+      });
+      return;
+    }
+  }
+
+  if (nextPhaseBtn) {
+    nextPhaseBtn.addEventListener("click", async () => {
+      await handleNextPhase({ silent: false });
     });
   }
 
   // ===============================
   // GAME SNAPSHOT
   // ===============================
-  onSnapshot(gameRef, (snap) => {
+  onSnapshot(gameRef, async (snap) => {
     if (!snap.exists()) {
       if (gameInfo) gameInfo.textContent = "Spel niet gevonden";
       return;
@@ -1279,14 +1758,32 @@ initAuth(async (authUser) => {
       stopBots = null;
     }
 
-    // Event poster flow
+    // ✅ suspense reveal auto-finalize als tijd voorbij is (voorkomt “stuck reveal”)
+    if (
+      game.phase === "REVEAL" &&
+      game.pendingReveal &&
+      game.pendingReveal.eventId === game.currentEventId &&
+      game.pendingReveal.revealed !== true
+    ) {
+      const revealAt = Number(game.pendingReveal.revealAtMs || 0);
+      if (revealAt > 0 && Date.now() >= revealAt) {
+        await finalizePendingRevealIfDue(false);
+      }
+    }
+
+    // Event poster flow (UI-key incl. revealed flag)
     if (game.phase === "REVEAL" && game.currentEventId) {
-      if (game.currentEventId !== lastRevealedEventId) {
-        lastRevealedEventId = game.currentEventId;
+      const pr = game.pendingReveal;
+      const revealedFlag = pr && pr.eventId === game.currentEventId ? (pr.revealed === true ? 1 : 0) : 1;
+      const uiKey = `${game.currentEventId}|${revealedFlag}|${pr?.revealAtMs || 0}`;
+
+      if (uiKey !== lastPosterUiKey) {
+        lastPosterUiKey = uiKey;
         openEventPoster(game.currentEventId);
       }
     } else {
-      lastRevealedEventId = null;
+      lastPosterUiKey = null;
+      stopRevealCountdown();
     }
 
     renderPlayerZones();
@@ -1306,6 +1803,11 @@ initAuth(async (authUser) => {
       gameInfo.textContent =
         `Code: ${game.code} – Status: ${game.status} – Ronde: ${currentRoundNumber} – Fase: ${currentPhase}${extraStatus}`;
     }
+
+    // ✅ PhaseGate UI update + auto-advance (als paused)
+    const gate = computePhaseGate(game, latestPlayers);
+    applyNextPhaseUi(gate, game);
+    await maybeScheduleAutoAdvance(game, gate);
 
     if (isGameFinished(game)) {
       if (unsubActions) {
@@ -1381,6 +1883,14 @@ initAuth(async (authUser) => {
     snapshot.forEach((pDoc) => players.push({ id: pDoc.id, ...pDoc.data() }));
     latestPlayers = players;
     renderPlayerZones();
+
+    // ✅ PhaseGate UI kan wijzigen als players update binnen dezelfde fase
+    if (latestGame) {
+      const gate = computePhaseGate(latestGame, latestPlayers);
+      applyNextPhaseUi(gate, latestGame);
+      // auto-advance check opnieuw (non-blocking)
+      maybeScheduleAutoAdvance(latestGame, gate);
+    }
   });
 
   // ===============================
