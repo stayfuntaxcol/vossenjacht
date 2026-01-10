@@ -167,6 +167,55 @@ async function logBotAction({ db, gameId, addLog, payload }) {
   }
 }
 
+async function applyOpsActionAndAdvanceTurn({ db, gameRef, actorId, isPass }) {
+  const now = Date.now();
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(gameRef);
+    if (!snap.exists()) return;
+
+    const g = snap.data();
+    if (g.phase !== "ACTIONS") return;
+
+    const order = Array.isArray(g.opsTurnOrder) ? g.opsTurnOrder : [];
+    if (!order.length) return;
+
+    const idx = Number.isFinite(g.opsTurnIndex) ? g.opsTurnIndex : 0;
+    const expected = order[idx];
+
+    // ✅ alleen de speler die aan de beurt is mag iets doen
+    if (expected !== actorId) return;
+
+    const opsLocked = !!g.flagsRound?.opsLocked;
+    const target = Number(g.opsActiveCount || order.length);
+    const passesNow = Number(g.opsConsecutivePasses || 0);
+
+    // ✅ als OPS al klaar is: blokkeer alle nieuwe acties
+    if (opsLocked || passesNow >= target) return;
+
+    const nextIdx = (idx + 1) % order.length;
+
+    // ✅ PASS telt op, elke echte action reset de teller
+    let nextPasses = isPass ? passesNow + 1 : 0;
+
+    // ✅ clamp: nooit boven target
+    if (nextPasses > target) nextPasses = target;
+
+    const ended = nextPasses >= target;
+
+    tx.update(gameRef, {
+      opsTurnIndex: nextIdx,
+      opsConsecutivePasses: nextPasses,
+      ...(ended
+        ? {
+            flagsRound: { ...(g.flagsRound || {}), opsLocked: true }, // ✅ hard stop
+            opsEndedAtMs: now,
+          }
+        : {}),
+    });
+  });
+}
+
 /** ===== lock (one bot-runner active per game) ===== */
 async function acquireBotLock({ db, gameId, gameRef, runnerKey }) {
   const now = Date.now();
