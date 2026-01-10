@@ -32,6 +32,7 @@ import {
   where,
   orderBy,
   limit,
+  runTransaction,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 // ===== INIT (dan pas db/params/refs) =====
@@ -240,6 +241,55 @@ function renderLeadCommandCenterUI(round, players, logs) {
     block.appendChild(headerRow);
     block.appendChild(phaseGrid);
     leadCommandContent.appendChild(block);
+  });
+}
+
+async function applyOpsActionAndAdvanceTurn({ db, gameRef, actorId, isPass }) {
+  const now = Date.now();
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(gameRef);
+    if (!snap.exists()) return;
+
+    const g = snap.data();
+    if (g.phase !== "ACTIONS") return;
+
+    const order = Array.isArray(g.opsTurnOrder) ? g.opsTurnOrder : [];
+    if (!order.length) return;
+
+    const idx = Number.isFinite(g.opsTurnIndex) ? g.opsTurnIndex : 0;
+    const expected = order[idx];
+
+    // ✅ alleen de speler die aan de beurt is mag iets doen
+    if (expected !== actorId) return;
+
+    const opsLocked = !!g.flagsRound?.opsLocked;
+    const target = Number(g.opsActiveCount || order.length);
+    const passesNow = Number(g.opsConsecutivePasses || 0);
+
+    // ✅ als OPS al klaar is: blokkeer alle nieuwe acties
+    if (opsLocked || passesNow >= target) return;
+
+    const nextIdx = (idx + 1) % order.length;
+
+    // ✅ PASS telt op, elke echte action reset de teller
+    let nextPasses = isPass ? passesNow + 1 : 0;
+
+    // ✅ clamp: nooit boven target
+    if (nextPasses > target) nextPasses = target;
+
+    const ended = nextPasses >= target;
+
+    tx.update(gameRef, {
+      opsTurnIndex: nextIdx,
+      opsConsecutivePasses: nextPasses,
+      ...(ended
+        ? {
+            flagsRound: { ...(g.flagsRound || {}), opsLocked: true }, // ✅ hard stop
+            opsEndedAtMs: now,
+          }
+        : {}),
+    });
   });
 }
 
@@ -2708,10 +2758,7 @@ async function passAction() {
     const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
     const newPasses = Number(game.opsConsecutivePasses || 0) + 1;
 
-    await updateDoc(gameRef, {
-      opsTurnIndex: nextIndex,
-      opsConsecutivePasses: newPasses,
-    });
+    await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: true });
 
     await safeLogMoveAction(game, player, "ACTION_PASS", "ACTIONS");
 
@@ -2733,6 +2780,7 @@ async function playScatter(game, player) {
   const flags = mergeRoundFlags(game);
   flags.scatter = true;
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -2759,6 +2807,7 @@ async function playDenSignal(game, player) {
   flags.denImmune[color] = true;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -2792,6 +2841,7 @@ async function playNoGoZone(game, player) {
   flags.noPeek = noPeek;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -2819,6 +2869,7 @@ async function playBurrowBeacon(game, player) {
   flags.lockEvents = true;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -2856,6 +2907,7 @@ async function playHoldStill(game, player) {
   flags.opsLocked = true;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -2905,6 +2957,7 @@ async function playNoseForTrouble(game, player) {
   flags.predictions = preds;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -2938,6 +2991,7 @@ async function playScentCheck(game, player) {
   flags.scentChecks = list;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -2959,6 +3013,7 @@ async function playFollowTail(game, player) {
   flags.followTail = ft;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -2990,6 +3045,7 @@ async function playAlphaCall(game, player) {
 
   await updateDoc(gameRef, { leadIndex: idx });
   resetLeadCache();
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
 
   await addLog(gameId, {
     round: game.round || 0,
