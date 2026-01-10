@@ -170,35 +170,35 @@ async function logBotAction({ db, gameId, addLog, payload }) {
 async function applyOpsActionAndAdvanceTurn({ db, gameRef, actorId, isPass }) {
   const now = Date.now();
 
-  await runTransaction(db, async (tx) => {
+  return await runTransaction(db, async (tx) => {
     const snap = await tx.get(gameRef);
-    if (!snap.exists()) return;
+    if (!snap.exists()) return { didApply: false, reason: "no-game" };
 
     const g = snap.data();
-    if (g.phase !== "ACTIONS") return;
+    if (g.phase !== "ACTIONS") return { didApply: false, reason: "not-actions" };
 
     const order = Array.isArray(g.opsTurnOrder) ? g.opsTurnOrder : [];
-    if (!order.length) return;
+    if (!order.length) return { didApply: false, reason: "no-order" };
 
     const idx = Number.isFinite(g.opsTurnIndex) ? g.opsTurnIndex : 0;
     const expected = order[idx];
 
-    // ✅ alleen de speler die aan de beurt is mag iets doen
-    if (expected !== actorId) return;
+    // Alleen wie aan de beurt is
+    if (expected !== actorId) return { didApply: false, reason: "not-your-turn" };
 
     const opsLocked = !!g.flagsRound?.opsLocked;
     const target = Number(g.opsActiveCount || order.length);
     const passesNow = Number(g.opsConsecutivePasses || 0);
 
-    // ✅ als OPS al klaar is: blokkeer alle nieuwe acties
-    if (opsLocked || passesNow >= target) return;
+    // Als OPS klaar is: niets meer accepteren
+    if (opsLocked || passesNow >= target) return { didApply: false, reason: "ops-ended" };
 
     const nextIdx = (idx + 1) % order.length;
 
-    // ✅ PASS telt op, elke echte action reset de teller
+    // PASS telt op, echte action reset
     let nextPasses = isPass ? passesNow + 1 : 0;
 
-    // ✅ clamp: nooit boven target
+    // clamp
     if (nextPasses > target) nextPasses = target;
 
     const ended = nextPasses >= target;
@@ -208,11 +208,19 @@ async function applyOpsActionAndAdvanceTurn({ db, gameRef, actorId, isPass }) {
       opsConsecutivePasses: nextPasses,
       ...(ended
         ? {
-            flagsRound: { ...(g.flagsRound || {}), opsLocked: true }, // ✅ hard stop
+            flagsRound: { ...(g.flagsRound || {}), opsLocked: true },
             opsEndedAtMs: now,
           }
         : {}),
     });
+
+    return {
+      didApply: true,
+      ended,
+      nextPasses,
+      target,
+      nextIdx,
+    };
   });
 }
 
