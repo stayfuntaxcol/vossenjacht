@@ -351,23 +351,20 @@ function computePhaseGate(game, players) {
   }
 
   // REVEAL -> MOVE/END
-  if (phase === "REVEAL") {
-    const pr = g.pendingReveal;
-    if (pr && pr.eventId === g.currentEventId && pr.revealed !== true) {
-      const now = Date.now();
-      const revealAt = Number(pr.revealAtMs || 0);
-      const leftMs = Math.max(0, revealAt - now);
-      const leftSec = Math.ceil(leftMs / 1000);
-      return {
-        ready: false,
-        reason: `Event onthulling bezig… (${leftSec}s)`,
-        missing: [],
-      };
-    }
-    return { ready: true, reason: "REVEAL klaar — door naar MOVE.", missing: [] };
+// REVEAL = einde van de ronde (nooit auto door)
+if (phase === "REVEAL") {
+  const pr = g.pendingReveal;
+
+  // zolang countdown loopt: niet ready
+  if (pr && pr.eventId === g.currentEventId && pr.revealed !== true) {
+    const now = Date.now();
+    const revealAt = Number(pr.revealAtMs || 0);
+    const leftSec = Math.ceil(Math.max(0, revealAt - now) / 1000);
+    return { ready: false, reason: `Event onthulling bezig… (${leftSec}s)`, missing: [] };
   }
 
-  return { ready: true, reason: "OK.", missing: [] };
+  // ook als al onthuld: ronde stopt hier
+  return { ready: false, reason: "REVEAL = einde ronde. Klik ‘Nieuwe ronde’.", missing: [] };
 }
 
 function clearAutoAdvance() {
@@ -399,24 +396,54 @@ function applyNextPhaseUi(gate, game) {
 }
 
 async function maybeScheduleAutoAdvance(game, gate) {
-  if (!gameRef) return;
-
-  const paused = !!game?.raidPaused;
-  if (!paused) {
+  if (!AUTO_FLOW) {
     clearAutoAdvance();
     return;
   }
+  if (!gameRef) return;
+
+  // Pause = freeze autoplay
+  if (game?.raidPaused) {
+    clearAutoAdvance();
+    return;
+  }
+
   if (!gate?.ready) {
     clearAutoAdvance();
     return;
   }
 
-  // unieke key om dubbele timers te voorkomen
+  const phase = game?.phase || "MOVE";
+
+  // REVEAL/END nooit auto door (REVEAL = einde ronde)
+  if (phase === "REVEAL" || phase === "END") {
+    clearAutoAdvance();
+    return;
+  }
+
+  // jouw adempauzes:
+  // MOVE -> ACTIONS : 5s
+  // ACTIONS -> DECISION : 5s
+  // DECISION -> REVEAL : kort (geen adempauze nodig)
+  const delayMs =
+    phase === "MOVE" ? AUTO_PAUSE_MS :
+    phase === "ACTIONS" ? AUTO_PAUSE_MS :
+    200;
+
+  // key voorkomt dubbele timers
+  const active = getActiveYardPlayers(latestPlayers);
+  const decidedCount = active.filter(p => !!p.decision).length;
+  const movedCount = Array.isArray(game?.movedPlayerIds) ? game.movedPlayerIds.length : 0;
+  const passes = Number(game?.opsConsecutivePasses || 0);
+
   const pr = game?.pendingReveal;
   const key = [
     game?.status || "",
     game?.round || 0,
-    game?.phase || "",
+    phase,
+    movedCount,
+    passes,
+    decidedCount,
     game?.currentEventId || "",
     pr?.revealed ? 1 : 0,
     pr?.revealAtMs || 0,
@@ -430,33 +457,21 @@ async function maybeScheduleAutoAdvance(game, gate) {
 
   autoAdvanceTimer = setTimeout(async () => {
     try {
-      // recheck actuele game
       const snap = await getDoc(gameRef);
       if (!snap.exists()) return;
       const g = snap.data();
 
-      const pr2 = g?.pendingReveal;
-      const key2 = [
-        g?.status || "",
-        g?.round || 0,
-        g?.phase || "",
-        g?.currentEventId || "",
-        pr2?.revealed ? 1 : 0,
-        pr2?.revealAtMs || 0,
-        g?.eventIndex || 0,
-      ].join("|");
-
-      if (key2 !== autoAdvanceKey) return;
+      if (g?.raidPaused) return;
+      if (g?.phase === "REVEAL" || g?.phase === "END") return;
 
       const gate2 = computePhaseGate(g, latestPlayers);
       if (!gate2.ready) return;
 
-      // auto-advance gebruikt dezelfde handler als button
-      await handleNextPhase({ silent: true });
+      await handleNextPhase({ silent: true, force: false });
     } catch (err) {
       console.error("Auto-advance fout:", err);
     }
-  }, AUTO_ADVANCE_MS);
+  }, delayMs);
 }
 
 // ===============================
@@ -1615,6 +1630,7 @@ function getBreatherWaitState(game, from, to) {
 }
 
 async function handleNextPhase({ silent = false, force = false } = {}) {
+
   const snap = await getDoc(gameRef);
   if (!snap.exists()) return;
   const game = snap.data();
@@ -1828,12 +1844,15 @@ async function handleNextPhase({ silent = false, force = false } = {}) {
 
   // REVEAL -> MOVE / END
   if (current === "REVEAL") {
-    const pr = game.pendingReveal;
-    if (pr && pr.eventId === game.currentEventId && pr.revealed !== true) {
-      if (!silent) alert("Event wordt nog onthuld… wacht even of klik ‘Onthul nu’.");
-      return;
-    }
+  const pr = game.pendingReveal;
+  if (pr && pr.eventId === game.currentEventId && pr.revealed !== true) {
+    if (!silent) alert("Event wordt nog onthuld… wacht even of klik ‘Onthul nu’.");
+    return;
+  }
 
+  if (!silent) alert("REVEAL is het einde van de ronde. Klik ‘Nieuwe ronde’ om verder te gaan.");
+  return;
+}
     const latestSnap = await getDoc(gameRef);
     if (!latestSnap.exists()) return;
     const latest = latestSnap.data();
@@ -1866,6 +1885,7 @@ async function handleNextPhase({ silent = false, force = false } = {}) {
 // ✅ button-binding één keer, BUITEN handleNextPhase
 if (nextPhaseBtn) {
   nextPhaseBtn.addEventListener("click", async () => {
+    clearAutoAdvance(); // optioneel: voorkomt dubbele triggers
     await handleNextPhase({ silent: false, force: true });
   });
 }
