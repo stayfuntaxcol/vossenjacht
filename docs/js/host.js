@@ -626,14 +626,6 @@ function renderDecisionWallReveal(game, players) {
   });
 }
 
-function hideDecisionWall() {
-  const wall = ensureDecisionWall();
-  if (!wall) return;
-  wall.style.display = "none";
-  wall.innerHTML = "";
-  lastDecisionWallKey = null;
-}
-
 function renderRevealCountdownUi(pr) {
   if (!eventPosterOverlay || !eventPosterTitle || !eventPosterText) return;
 
