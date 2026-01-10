@@ -1881,7 +1881,9 @@ if (nextPhaseBtn) {
     // force=true: host kan pauzes overslaan door te klikken
     await handleNextPhase({ silent: false, force: true });
   });
-}
+ }
+    
+});
 
   // ===============================
   // GAME SNAPSHOT
@@ -2121,3 +2123,5 @@ onSnapshot(playersColRef, (snapshot) => {
       logPanel.appendChild(inner);
     });
   }
+});
+
