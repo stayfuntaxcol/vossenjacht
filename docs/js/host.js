@@ -24,8 +24,7 @@ import {
   limit,
   addDoc,
   serverTimestamp,
-  runTransaction, // ✅ nieuw: nodig om pendingReveal veilig te finaliseren
-} from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
+  runTransaction, } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
 const AUTO_FLOW = true;
 const AUTO_PAUSE_MS = 5000; // jouw “adempauze”
@@ -1605,13 +1604,16 @@ async function handleNextPhase({ silent = false, force = false } = {}) {
       opsTurnOrder.push(baseOrder[(leadIndex + i) % baseOrder.length]);
     }
 
-    await updateDoc(gameRef, {
-      phase: "ACTIONS",
-      opsTurnOrder,
-      opsTurnIndex: 0,
-      opsConsecutivePasses: 0,
-      phaseWait: null,
-    });
+   await updateDoc(gameRef, {
+  phase: "ACTIONS",
+  opsTurnOrder,
+  opsTurnIndex: 0,
+  opsConsecutivePasses: 0,
+  opsActiveCount: opsTurnOrder.length,     // ✅ nieuw: hard target
+  opsEndedAtMs: null,                      // ✅ optioneel
+  flagsRound: { ...(game.flagsRound || {}), opsLocked: false }, // ✅ reset
+  phaseWait: null,
+});
 
     await addLog(gameId, {
       round: roundNumber,
