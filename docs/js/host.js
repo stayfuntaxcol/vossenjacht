@@ -524,6 +524,137 @@ function stopRevealCountdown() {
   revealCountdownTimer = null;
   revealCountdownEventId = null;
 }
+// ===============================
+// REVEAL: Decision Wall (nieuw)
+// ===============================
+let lastDecisionWallKey = null;
+
+function ensureDecisionWall() {
+  if (!eventPosterOverlay) return null;
+  const box = eventPosterOverlay.querySelector(".overlay-box");
+  if (!box) return null;
+
+  let wall = box.querySelector("#decisionWall");
+  if (wall) return wall;
+
+  wall = document.createElement("div");
+  wall.id = "decisionWall";
+  wall.className = "decision-wall";
+
+  // liefst onder de tekst, in overlay-content
+  const content = box.querySelector(".overlay-content");
+  if (content) content.appendChild(wall);
+  else box.appendChild(wall);
+
+  return wall;
+}
+
+function normalizeDecision(raw) {
+  if (!raw) return null;
+  const s = String(raw);
+  if (s.startsWith("DECISION_")) return s.slice("DECISION_".length);
+  return s;
+}
+
+function decisionMeta(decision) {
+  const d = (decision || "").toUpperCase();
+  if (d === "DASH") return { label: "DASH", cls: "decision-dash" };
+  if (d === "BURROW") return { label: "BURROW", cls: "decision-burrow" };
+  if (d === "LURK") return { label: "LURK", cls: "decision-lurk" };
+  return { label: "HELLO", cls: "decision-unknown" };
+}
+
+function renderDecisionWall(game, players) {
+  const wall = ensureDecisionWall();
+  if (!wall) return;
+
+  const g = game || {};
+  const list = Array.isArray(players) ? players : [];
+
+  const active = list.filter(isInYardForEvents);
+
+  // Sorteer consistent (joinOrder)
+  const ordered = [...active].sort((a, b) => {
+    const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+    const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
+    return ao - bo;
+  });
+
+  // Key: alleen rebuild als iets verandert
+  const key = ordered
+    .map((p) => `${p.id}:${normalizeDecision(p.decision) || ""}:${p.name || ""}`)
+    .join("|");
+
+  if (key === lastDecisionWallKey) return;
+  lastDecisionWallKey = key;
+
+  wall.innerHTML = "";
+  wall.style.display = "";
+
+  // (optioneel leuk) quick counts
+  const counts = { DASH: 0, BURROW: 0, LURK: 0, UNKNOWN: 0 };
+  ordered.forEach((p) => {
+    const d = normalizeDecision(p.decision);
+    if (d && counts[d.toUpperCase()] != null) counts[d.toUpperCase()]++;
+    else counts.UNKNOWN++;
+  });
+
+  const header = document.createElement("div");
+  header.className = "decision-wall-header";
+  header.textContent =
+    `Keuzes: •  ${counts.DASH}  •  ${counts.BURROW}  •  ${counts.LURK}` +
+    (counts.UNKNOWN ? `  •   ${counts.UNKNOWN}` : "");
+  wall.appendChild(header);
+
+  const grid = document.createElement("div");
+  grid.className = "decision-wall-grid";
+  wall.appendChild(grid);
+
+  ordered.forEach((p) => {
+    // kaartje (hergebruik bestaande renderer)
+    let card = null;
+    try {
+      card = renderPlayerSlotCard(p, { size: "small", footer: "", isLead: false });
+    } catch (e) {
+      card = null;
+    }
+
+    // fallback als renderer geen small kent
+    if (!card) {
+      card = document.createElement("div");
+      card.className = "decision-mini-fallback";
+      card.textContent = p.name || "Vos";
+    }
+
+    card.classList.add("decision-mini-card");
+
+    // decision badge
+    const d = normalizeDecision(p.decision);
+    const meta = decisionMeta(d);
+
+    const badge = document.createElement("div");
+    badge.className = `decision-badge ${meta.cls}`;
+    badge.textContent = meta.label;
+
+    // subtiele den rand (als je dit wil)
+    const den = (p.den || p.color || "").toUpperCase();
+    if (den) card.classList.add(`den-${den.toLowerCase()}`);
+
+    // badge bovenop kaart
+    card.style.position = "relative";
+    card.appendChild(badge);
+
+    grid.appendChild(card);
+  });
+}
+
+function hideDecisionWall() {
+  const wall = ensureDecisionWall();
+  if (!wall) return;
+  wall.style.display = "none";
+  wall.innerHTML = "";
+  lastDecisionWallKey = null;
+}
 
 function renderRevealCountdownUi(pr) {
   if (!eventPosterOverlay || !eventPosterTitle || !eventPosterText) return;
@@ -545,9 +676,17 @@ function renderRevealCountdownUi(pr) {
   // zorg dat "Onthul nu" knop bestaat & zichtbaar is
   const btn = ensureRevealNowButton();
   if (btn) btn.style.display = "";
+
+  // ✅ nieuw: laat keuzes zien tijdens countdown
+  renderDecisionWall(latestGame, latestPlayers);
 }
 
 function renderRevealedEventUi(eventId) {
+
+  // ✅ nieuw: na onthulling weg (of laat evt 2 sec staan)
+hideDecisionWall();
+// of: setTimeout(hideDecisionWall, 2000);
+
   if (!eventPosterOverlay || !eventId) return;
   const ev = getEventById(eventId);
   if (!ev) return;
