@@ -362,6 +362,7 @@ if (phase === "REVEAL") {
     const leftSec = Math.ceil(Math.max(0, revealAt - now) / 1000);
     return { ready: false, reason: `Event onthulling bezig… (${leftSec}s)`, missing: [] };
   }
+}
 
   // ook als al onthuld: ronde stopt hier
   return { ready: false, reason: "REVEAL = einde ronde. Klik ‘Nieuwe ronde’.", missing: [] };
@@ -1879,7 +1880,7 @@ async function handleNextPhase({ silent = false, force = false } = {}) {
       message: "REVEAL afgerond. Terug naar MOVE-fase voor de volgende ronde.",
     });
     return;
-  }
+   }
   
 // ✅ button-binding één keer, BUITEN handleNextPhase
 if (nextPhaseBtn) {
@@ -1888,7 +1889,6 @@ if (nextPhaseBtn) {
     await handleNextPhase({ silent: false, force: true });
   });
  }
-});
 
   // ===============================
   // GAME SNAPSHOT
