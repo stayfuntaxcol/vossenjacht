@@ -1326,16 +1326,18 @@ export function getAdvisorHint({
     scoutIntel,
   });
 
-  const riskBullets = [
-    `Jouw Den-kleur: ${riskMeta.ctx.myColor || "—"}`,
-    `Kans: Den-event van jouw kleur: ${pct(riskMeta.pMyDen)} • Charges: ${pct(riskMeta.pCharges)} • 3e rooster: ${pct(riskMeta.pThirdRooster)}`,
-     nextEventFacts
-      ? `Volgende kaart-risico (0–10): DASH ${nextEventFacts.dangerDash} • LURK ${nextEventFacts.dangerLurk} • BURROW ${nextEventFacts.dangerBurrow}`
-      : null,
-    top ? `Beste actie (volgens advisor): ${top}` : null
-    riskMeta.ctx.denSignalActive ? "Den Signal actief: je bent veilig tegen charges + jouw Den-event." : null,
-    scoutIntel?.nextKnown ? "Scout-info: jij kent de volgende kaart (100% zekerheid)." : null,
-  ].filter(Boolean);
+const riskBullets = [
+  `Jouw Den-kleur: ${riskMeta.ctx.myColor || "—"}`,
+  `Kans: Den-event van jouw kleur: ${pct(riskMeta.pMyDen)} • Charges: ${pct(riskMeta.pCharges)} • 3e rooster: ${pct(riskMeta.pThirdRooster)}`,
+  nextEventFacts
+    ? `Volgende kaart-risico (0–10): DASH ${nextEventFacts.dangerDash} • LURK ${nextEventFacts.dangerLurk} • BURROW ${nextEventFacts.dangerBurrow}`
+    : null,
+  top ? `Beste actie (volgens advisor): ${top}` : null,
+  riskMeta.ctx.denSignalActive
+    ? "Den Signal actief: je bent veilig tegen charges + jouw Den-event."
+    : null,
+  scoutIntel?.nextKnown ? "Scout-info: jij kent de volgende kaart (100% zekerheid)." : null,
+].filter(Boolean);
 
   // =======================
   // MOVE
