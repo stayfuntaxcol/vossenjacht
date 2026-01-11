@@ -1,7 +1,7 @@
 // js/bots/botRunner.js
 // Autonomous bots for VOSSENJACHT (smart OPS flow + threat-aware decisions)
 
-import { getEventFacts, rankActions } from "./aiKit.js";
+import { getEventFacts, rankActions, scoreActionFacts } from "./aiKit.js";
 import { getActionDefByName } from "../cards.js";
 
 import {
@@ -65,6 +65,53 @@ function isInYard(p) {
 function sumLootPoints(p) {
   const loot = Array.isArray(p?.loot) ? p.loot : [];
   return loot.reduce((s, c) => s + (Number(c?.v) || 0), 0);
+}
+
+function handToActionIds(hand) {
+  const arr = Array.isArray(hand) ? hand : [];
+  const names = arr
+    .map((c) => String(c?.name || c || "").trim())
+    .filter(Boolean);
+
+  // map "Den Signal" -> {id:"DEN_SIGNAL", ...}
+  const ids = [];
+  for (const nm of names) {
+    const def = getActionDefByName(nm);
+    if (def?.id) ids.push(def.id);
+  }
+  return ids;
+}
+
+// 0..100 (grof, maar werkt goed)
+function computeHandStrength({ game, bot }) {
+  const ids = handToActionIds(bot?.hand);
+  if (!ids.length) return { score: 0, ids: [], top: null };
+
+  // basis: top-2 kaarten tellen het zwaarst
+  const ranked = rankActions(ids); // verwacht actionIds
+  const topIds = ranked.slice(0, 2).map((x) => x.id);
+
+  let raw = 0;
+  for (const id of topIds) {
+    const s = scoreActionFacts(id);
+    if (!s) continue;
+    // “total utility”
+    raw += (s.controlScore || 0) + (s.infoScore || 0) + (s.lootScore || 0) + (s.tempoScore || 0) - (s.riskScore || 0);
+  }
+
+  // context: als next event gevaarlijk is, is defense/control meer waard
+  const nextId = getNextEventId(game);
+  const f = nextId ? getEventFacts(nextId) : null;
+  const dangerPeak = f ? Math.max(f.dangerDash ?? 0, f.dangerLurk ?? 0, f.dangerBurrow ?? 0) : 0;
+
+  // schaal en clamp
+  // raw is meestal ~0..20; we schalen naar 0..100
+  let score = Math.round(Math.max(0, Math.min(100, raw * 5)));
+
+  // als danger hoog is, verlaag “comfort”: je wil liever een sterke hand
+  if (dangerPeak >= 7) score = Math.max(0, score - 10);
+
+  return { score, ids, top: topIds[0] || null };
 }
 
 function nextEventId(game, offset = 0) {
