@@ -1237,6 +1237,14 @@ export function getAdvisorHint({
     view.me.handUnknown = handMeta.unknown;
     view.me.hand = handMeta.names.map((n) => ({ id: n, name: n }));
   }
+  
+  // best action in hand (intern)
+  const hand = Array.isArray(view.me?.hand) ? view.me.hand : [];
+  const ranked = rankActions(hand.map((x) => x.id || x.name).filter(Boolean));
+  const top = ranked[0]?.id || null;
+
+  view.handRanked = ranked;   // intern (debug)
+  view.handTopAction = top;   // intern (debug)
 
   // scout intel (per speler)
   const scoutIntel = buildPlayerScoutIntel({ view, me: view.me || me || {}, roundState });
@@ -1259,6 +1267,7 @@ export function getAdvisorHint({
      nextEventFacts
       ? `Volgende kaart-risico (0–10): DASH ${nextEventFacts.dangerDash} • LURK ${nextEventFacts.dangerLurk} • BURROW ${nextEventFacts.dangerBurrow}`
       : null,
+    top ? `Beste actie (volgens advisor): ${top}` : null
     riskMeta.ctx.denSignalActive ? "Den Signal actief: je bent veilig tegen charges + jouw Den-event." : null,
     scoutIntel?.nextKnown ? "Scout-info: jij kent de volgende kaart (100% zekerheid)." : null,
   ].filter(Boolean);
