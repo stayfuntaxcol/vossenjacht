@@ -87,17 +87,36 @@ function computeHandStrength({ game, bot }) {
   const ids = handToActionIds(bot?.hand);
   if (!ids.length) return { score: 0, ids: [], top: null };
 
-  // basis: top-2 kaarten tellen het zwaarst
-  const ranked = rankActions(ids); // verwacht actionIds
+  // top-2 kaarten tellen het zwaarst
+  const ranked = rankActions(ids);
   const topIds = ranked.slice(0, 2).map((x) => x.id);
 
   let raw = 0;
   for (const id of topIds) {
     const s = scoreActionFacts(id);
     if (!s) continue;
-    // “total utility”
-    raw += (s.controlScore || 0) + (s.infoScore || 0) + (s.lootScore || 0) + (s.tempoScore || 0) - (s.riskScore || 0);
+    raw +=
+      (s.controlScore || 0) +
+      (s.infoScore || 0) +
+      (s.lootScore || 0) +
+      (s.tempoScore || 0) -
+      (s.riskScore || 0);
   }
+
+  // context: als next event gevaarlijk is, is defense/control meer waard
+  const nextEvent0 = getNextEventId(game);
+  const f = nextEvent0 ? getEventFacts(nextEvent0) : null;
+  const dangerPeak = f ? Math.max(f.dangerDash ?? 0, f.dangerLurk ?? 0, f.dangerBurrow ?? 0) : 0;
+
+  // schaal en clamp
+  let score = Math.round(Math.max(0, Math.min(100, raw * 5)));
+
+  // als danger hoog is, verlaag “comfort”: je wil liever een sterke hand
+  if (dangerPeak >= 7) score = Math.max(0, score - 10);
+
+  return { score, ids, top: topIds[0] || null };
+}
+
 function avgLootValueFromDeck(lootDeck) {
   const arr = Array.isArray(lootDeck) ? lootDeck : [];
   if (!arr.length) return 1.2; // fallback
@@ -203,30 +222,29 @@ function pickDecisionLootMaximizer({ g, p, latestPlayers }) {
   const flags = fillFlags(g?.flagsRound);
   const immune = !!flags.denImmune?.[myColor];
 
-  const nextId = nextEventId(g, 0);
+  const nextEvent0 = nextEventId(g, 0);
   const lootPts = sumLootPoints(p);
+
   const isLead = (() => {
-    const ordered = [...(latestPlayers || [])].sort((a, b) => (a.joinOrder ?? 9999) - (b.joinOrder ?? 9999));
+    const ordered = [...(latestPlayers || [])].sort(
+      (a, b) => (a.joinOrder ?? 9999) - (b.joinOrder ?? 9999)
+    );
     const idx = Number.isFinite(g?.leadIndex) ? g.leadIndex : 0;
     return ordered[idx]?.id === p.id;
   })();
 
   const avgLoot = avgLootValueFromDeck(g?.lootDeck);
   const roundsLeft = estimateRoundsLeft(g);
-
-  // “stay value”: als je blijft, verwacht je ~1 lootkaart per ronde + waarde van sack groei
   const futureGain = roundsLeft * avgLoot;
 
   const sackShareIfDash = expectedSackShareNow({ game: g, players: latestPlayers || [] });
-
-  // caught in engine = loot weg + out (dus verlies je huidige loot volledig)
   const caughtLoss = lootPts;
 
   const options = ["LURK", "DASH", "BURROW"].filter((d) => d !== "BURROW" || !p.burrowUsed);
 
   const scored = options.map((decision) => {
     const surviveP = survivalProbNextEvent({
-      eventId: nextId,
+      eventId: nextEvent0,
       decision,
       myColor,
       immune,
@@ -234,22 +252,16 @@ function pickDecisionLootMaximizer({ g, p, latestPlayers }) {
       lootPts,
     });
 
-    const alarmPenalty = silentAlarmPenalty({ eventId: nextId, decision, isLead, lootPts });
+    const alarmPenalty = silentAlarmPenalty({ eventId: nextEvent0, decision, isLead, lootPts });
 
-    // Opportunity cost van DASH (je stopt met groeien)
     const dashOpportunityCost = decision === "DASH" ? futureGain * 0.95 : 0;
 
-    // BURROW kost een schaarse resource → early penalty zodat je hem niet verspilt
     const roundNum = Number(g?.round || 0);
     const burrowReservePenalty = decision === "BURROW" ? (roundNum <= 1 ? 1.2 : 0.6) : 0;
 
     const baseNow = lootPts;
 
-    // EV:
-    // - als je DASHt: je houdt loot + krijgt verwachte sack share, maar mist futureGain
-    // - als je blijft: je krijgt futureGain * surviveP, maar als je gepakt wordt verlies je loot
     let ev = 0;
-
     if (decision === "DASH") {
       ev = baseNow + sackShareIfDash - dashOpportunityCost;
     } else {
@@ -261,7 +273,6 @@ function pickDecisionLootMaximizer({ g, p, latestPlayers }) {
         burrowReservePenalty;
     }
 
-    // extra: als loot=0, DASH extra onaantrekkelijk
     if (lootPts <= 0 && decision === "DASH") ev -= 5;
 
     return { decision, ev, surviveP };
@@ -269,24 +280,7 @@ function pickDecisionLootMaximizer({ g, p, latestPlayers }) {
 
   scored.sort((a, b) => b.ev - a.ev);
 
-  // tie-break: liever LURK dan BURROW (resource sparen), liever BURROW dan DASH (niet vroeg uitstappen)
-  const best = scored[0];
-  return best?.decision || "LURK";
-}
-
-  // context: als next event gevaarlijk is, is defense/control meer waard
-  const nextId = getNextEventId(game);
-  const f = nextId ? getEventFacts(nextId) : null;
-  const dangerPeak = f ? Math.max(f.dangerDash ?? 0, f.dangerLurk ?? 0, f.dangerBurrow ?? 0) : 0;
-
-  // schaal en clamp
-  // raw is meestal ~0..20; we schalen naar 0..100
-  let score = Math.round(Math.max(0, Math.min(100, raw * 5)));
-
-  // als danger hoog is, verlaag “comfort”: je wil liever een sterke hand
-  if (dangerPeak >= 7) score = Math.max(0, score - 10);
-
-  return { score, ids, top: topIds[0] || null };
+  return scored[0]?.decision || "LURK";
 }
 
 function nextEventId(game, offset = 0) {
