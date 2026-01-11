@@ -217,6 +217,24 @@ function expectedSackShareNow({ game, players }) {
   return sackValue / divisor;
 }
 
+function countDashDecisions(players) {
+  return (players || []).filter((x) => isInYard(x) && x?.decision === "DASH").length;
+}
+
+function hiddenNestBonusCards(totalDashers) {
+  if (totalDashers <= 1) return 3;
+  if (totalDashers === 2) return 2;
+  if (totalDashers === 3) return 1;
+  return 0; // 4+ => niets
+}
+
+function trackProgress01(game) {
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : 0;
+  const denom = Math.max(1, track.length - 1);
+  return Math.max(0, Math.min(1, idx / denom)); // 0..1
+}
+
 function pickDecisionLootMaximizer({ g, p, latestPlayers }) {
   const myColor = String(p?.color || "").trim().toUpperCase();
   const flags = fillFlags(g?.flagsRound);
@@ -262,6 +280,7 @@ function pickDecisionLootMaximizer({ g, p, latestPlayers }) {
     const baseNow = lootPts;
 
     let ev = 0;
+
     if (decision === "DASH") {
       ev = baseNow + sackShareIfDash - dashOpportunityCost;
     } else {
@@ -273,15 +292,43 @@ function pickDecisionLootMaximizer({ g, p, latestPlayers }) {
         burrowReservePenalty;
     }
 
-    if (lootPts <= 0 && decision === "DASH") ev -= 5;
+    // -------------------------
+    // HIDDEN_NEST exploit: bonus loot bij weinig dashers (later in track = interessanter)
+    // -------------------------
+    if (String(nextEvent0) === "HIDDEN_NEST") {
+      // hoeveel spelers hebben al DASH gekozen deze DECISION-fase?
+      const alreadyDash = (latestPlayers || []).filter((x) => isInYard(x) && x?.decision === "DASH").length;
+
+      const totalDashers = alreadyDash + (decision === "DASH" ? 1 : 0);
+
+      // bonus kaarten per speler op basis van totaal dashers
+      let bonusCards = 0;
+      if (decision === "DASH") {
+        if (totalDashers <= 1) bonusCards = 3;
+        else if (totalDashers === 2) bonusCards = 2;
+        else if (totalDashers === 3) bonusCards = 1;
+        else bonusCards = 0; // 4+ => niets
+      }
+
+      // later in track => bonus waardevoller
+      const track = Array.isArray(g?.eventTrack) ? g.eventTrack : [];
+      const idx = Number.isFinite(g?.eventIndex) ? g.eventIndex : 0;
+      const denom = Math.max(1, track.length - 1);
+      const prog = Math.max(0, Math.min(1, idx / denom));     // 0..1
+      const lateBoost = 0.75 + prog * 0.75;                   // 0.75..1.5
+
+      // bonus in punten ≈ bonusCards * avgLootValue
+      ev += bonusCards * avgLoot * lateBoost;
+
+      // anti-crowding: 4e dasher is meestal dom -> harde straf
+      if (decision === "DASH" && totalDashers >= 4) ev -= 6;
+    }
+
+    // extra: dash met 0 loot is normaal onaantrekkelijk,
+    // maar bij HIDDEN_NEST kan dash juist loot opleveren → geen straf daar
+    if (String(nextEvent0) !== "HIDDEN_NEST" && lootPts <= 0 && decision === "DASH") ev -= 5;
 
     return { decision, ev, surviveP };
-  });
-
-  scored.sort((a, b) => b.ev - a.ev);
-
-  return scored[0]?.decision || "LURK";
-}
 
 function nextEventId(game, offset = 0) {
   const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
