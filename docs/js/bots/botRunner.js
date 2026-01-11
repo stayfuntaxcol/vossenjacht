@@ -21,6 +21,18 @@ const BOT_TICK_MS = 700;
 const BOT_DEBOUNCE_MS = 150;
 const LOCK_MS = 1800;
 
+/** Bot name pool (player cards exist for these) */
+const BOT_NAME_POOL = [
+  "Astronaut",
+  "Starwalker",
+  "Prowler",
+  "Empress",
+  "Kiss",
+  "Max",
+  "Prince",
+  "Monroe",
+];
+
 /** ===== small helpers ===== */
 function normColor(c) {
   return String(c || "").trim().toUpperCase();
@@ -138,7 +150,9 @@ function getRunnerId() {
     const k = "vj_botRunnerId";
     let v = localStorage.getItem(k);
     if (!v) {
-      v = globalThis.crypto?.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2) + "-" + Date.now();
+      v = globalThis.crypto?.randomUUID
+        ? crypto.randomUUID()
+        : String(Math.random()).slice(2) + "-" + Date.now();
       localStorage.setItem(k, v);
     }
     return v;
@@ -285,7 +299,8 @@ async function botDoMove({ db, gameId, botId }) {
     // 1) If Gate Toll soon and no loot: grab loot
     const mustHaveLoot = upcoming.type === "TOLL";
     // 2) If danger soon and no Den Signal in hand: forage to fish for defense
-    const dangerSoon = upcoming.type === "DOG" || (upcoming.type === "DEN" && normColor(upcoming.color) === myColor);
+    const dangerSoon =
+      upcoming.type === "DOG" || (upcoming.type === "DEN" && normColor(upcoming.color) === myColor);
     const needsDefense = dangerSoon && !immune && !hasCard(hand, "Den Signal");
 
     // Choose MOVE
@@ -297,7 +312,7 @@ async function botDoMove({ db, gameId, botId }) {
       loot.push(card);
       did = { kind: "SNATCH", detail: `${card.t || "Loot"} ${card.v ?? ""}` };
     } else if (needsDefense && actionDeck.length) {
-      // draw up to 2 (same as your earlier bot logic)
+      // draw up to 2
       let drawn = 0;
       for (let i = 0; i < 2; i++) {
         if (!actionDeck.length) break;
@@ -348,7 +363,7 @@ function chooseBotOpsPlay({ game, bot, players }) {
   const upcoming = classifyEvent(nextEventId(g, 0));
   const hand = Array.isArray(p.hand) ? p.hand : [];
 
-  // If OPS locked: must pass
+  // If OPS locked: must pass (caller will handle)
   if (flags.opsLocked) return null;
 
   // 1) Survival first: Den Signal if (DOG soon) or (DEN_myColor soon) and not yet immune
@@ -358,7 +373,8 @@ function chooseBotOpsPlay({ game, bot, players }) {
   }
 
   // 2) If danger soon and we are NOT immune: try to push danger away
-  const dangerSoon = upcoming.type === "DOG" || (upcoming.type === "DEN" && normColor(upcoming.color) === myColor);
+  const dangerSoon =
+    upcoming.type === "DOG" || (upcoming.type === "DEN" && normColor(upcoming.color) === myColor);
   if (dangerSoon && !immune && !flags.lockEvents) {
     if (hasCard(hand, "Kick Up Dust")) return { name: "Kick Up Dust" };
     if (hasCard(hand, "Pack Tinker")) return { name: "Pack Tinker" };
@@ -387,7 +403,7 @@ function chooseBotOpsPlay({ game, bot, players }) {
     return { name: "No-Go Zone" };
   }
 
-  // Otherwise: pass (keeps flow moving)
+  // Otherwise: pass
   return null;
 }
 
@@ -410,7 +426,6 @@ function pickPackTinkerSwap(game) {
         break;
       }
     } else {
-      // generic: just pick last future slot
       j = k;
       break;
     }
@@ -450,10 +465,16 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     const idx = Number.isFinite(g.opsTurnIndex) ? g.opsTurnIndex : 0;
     if (!order.length || order[idx] !== botId) return;
 
-    const nextIdx = (idx + 1) % order.length;
     const roundNum = Number(g.round || 0);
 
     const flagsRound = fillFlags(g.flagsRound);
+
+    // ✅ HARD STOP: als OPS al klaar is → niets meer doen (voorkomt eindeloos PASS ophogen)
+    const target = Number(g.opsActiveCount || order.length);
+    const passesNow = Number(g.opsConsecutivePasses || 0);
+    if (flagsRound.opsLocked || passesNow >= target) return;
+
+    const nextIdx = (idx + 1) % order.length;
 
     const hand = Array.isArray(p.hand) ? [...p.hand] : [];
     const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
@@ -461,10 +482,25 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
 
     const play = chooseBotOpsPlay({ game: g, bot: p, players: latestPlayers || [] });
 
+    // =========================
+    // PASS
+    // =========================
     if (!play) {
-      // PASS
-      const passes = Number(g.opsConsecutivePasses || 0) + 1;
-      tx.update(gRef, { opsTurnIndex: nextIdx, opsConsecutivePasses: passes });
+      let nextPasses = passesNow + 1;
+      if (nextPasses > target) nextPasses = target;
+
+      const ended = nextPasses >= target;
+
+      tx.update(gRef, {
+        opsTurnIndex: nextIdx,
+        opsConsecutivePasses: nextPasses,
+        ...(ended
+          ? {
+              flagsRound: { ...(g.flagsRound || {}), opsLocked: true }, // ✅ hard stop
+              opsEndedAtMs: Date.now(),
+            }
+          : {}),
+      });
 
       logPayload = {
         round: roundNum,
@@ -483,8 +519,21 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     const removed = removeOneCard(hand, cardName);
     if (!removed) {
       // fallback to PASS if card missing
-      const passes = Number(g.opsConsecutivePasses || 0) + 1;
-      tx.update(gRef, { opsTurnIndex: nextIdx, opsConsecutivePasses: passes });
+      let nextPasses = passesNow + 1;
+      if (nextPasses > target) nextPasses = target;
+
+      const ended = nextPasses >= target;
+
+      tx.update(gRef, {
+        opsTurnIndex: nextIdx,
+        opsConsecutivePasses: nextPasses,
+        ...(ended
+          ? {
+              flagsRound: { ...(g.flagsRound || {}), opsLocked: true }, // ✅ hard stop
+              opsEndedAtMs: Date.now(),
+            }
+          : {}),
+      });
 
       logPayload = {
         round: roundNum,
@@ -513,7 +562,8 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
 
     if (cardName === "No-Go Zone") {
       flagsRound.opsLocked = true;
-      extraGameUpdates.opsConsecutivePasses = order.length; // allow host to advance
+      extraGameUpdates.opsConsecutivePasses = target; // ✅ einde OPS (past bij PhaseGate)
+      extraGameUpdates.opsEndedAtMs = Date.now();
     }
 
     if (cardName === "Hold Still") {
@@ -621,10 +671,14 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
 
     let msg = `BOT speelt Action Card: ${cardName}`;
     if (cardName === "Pack Tinker" && extraGameUpdates.lastPackTinker) {
-      msg = `BOT speelt Pack Tinker (swap ${extraGameUpdates.lastPackTinker.i1 + 1} ↔ ${extraGameUpdates.lastPackTinker.i2 + 1})`;
+      msg = `BOT speelt Pack Tinker (swap ${extraGameUpdates.lastPackTinker.i1 + 1} ↔ ${
+        extraGameUpdates.lastPackTinker.i2 + 1
+      })`;
     }
     if (cardName === "Kick Up Dust") {
-      msg = flagsRound.lockEvents ? "BOT speelt Kick Up Dust (geen effect: Burrow Beacon actief)" : "BOT speelt Kick Up Dust (future events geschud)";
+      msg = flagsRound.lockEvents
+        ? "BOT speelt Kick Up Dust (geen effect: Burrow Beacon actief)"
+        : "BOT speelt Kick Up Dust (future events geschud)";
     }
     if (cardName === "Den Signal") {
       msg = `BOT speelt Den Signal (DEN ${normColor(p.color) || "?"} immune)`;
@@ -678,7 +732,10 @@ async function botDoDecision({ db, gameId, botId }) {
       decision = p.burrowUsed ? "LURK" : "BURROW";
     } else if (upcoming.type === "TOLL" && lootPts <= 0) {
       decision = p.burrowUsed ? "LURK" : "BURROW";
-    } else if ((upcoming.type === "DOG" || (upcoming.type === "DEN" && normColor(upcoming.color) === myColor)) && !immune) {
+    } else if (
+      (upcoming.type === "DOG" || (upcoming.type === "DEN" && normColor(upcoming.color) === myColor)) &&
+      !immune
+    ) {
       decision = p.burrowUsed ? "LURK" : "BURROW";
     } else {
       // safer dash model (less suicidal)
@@ -703,7 +760,9 @@ async function botDoDecision({ db, gameId, botId }) {
       playerId: botId,
       playerName: p.name || "BOT",
       choice: `DECISION_${decision}`,
-      message: `BOT kiest ${decision} (next=${String(nextEventId(g, 0) || "?")} loot=${lootPts} immune=${immune ? "yes" : "no"})`,
+      message: `BOT kiest ${decision} (next=${String(nextEventId(g, 0) || "?")} loot=${lootPts} immune=${
+        immune ? "yes" : "no"
+      })`,
     };
   });
 
@@ -722,8 +781,8 @@ export function startBotRunner({ db, gameId, addLog, isBoardOnly = false, hostUi
 
   // Safe defaults (no ReferenceError if constants not defined elsewhere)
   const DEBOUNCE_MS = typeof BOT_DEBOUNCE_MS === "number" ? BOT_DEBOUNCE_MS : 200;
-  const MIN_ACTION_MS = 1500;      // <- critical: slows writes, prevents quota/hot-doc
-  const IDLE_MS = 2500;            // when nothing to do
+  const MIN_ACTION_MS = 1500; // critical: slows writes, prevents quota/hot-doc
+  const IDLE_MS = 2500; // when nothing to do
   const MAX_BACKOFF_MS = 8000;
 
   let latestGame = null;
@@ -772,6 +831,14 @@ export function startBotRunner({ db, gameId, addLog, isBoardOnly = false, hostUi
     }
 
     if (g.phase === "ACTIONS") {
+      const order = Array.isArray(g.opsTurnOrder) ? g.opsTurnOrder : [];
+      const target = Number(g.opsActiveCount || order.length);
+      const passesNow = Number(g.opsConsecutivePasses || 0);
+      const opsLocked = !!g.flagsRound?.opsLocked;
+
+      // ✅ als OPS klaar is, geen jobs meer plannen
+      if (opsLocked || (target > 0 && passesNow >= target)) return null;
+
       const turnId = getOpsTurnId(g);
       if (!turnId) return null;
       const b = bots.find((x) => x.id === turnId);
@@ -873,16 +940,25 @@ export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLU
   const pSnap = await getDocs(playersRef);
   const players = pSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-  const maxJoin = players.reduce((m, p) => (Number.isFinite(p?.joinOrder) ? Math.max(m, p.joinOrder) : m), -1);
+  const maxJoin = players.reduce(
+    (m, p) => (Number.isFinite(p?.joinOrder) ? Math.max(m, p.joinOrder) : m),
+    -1
+  );
   const joinOrder = maxJoin + 1;
   const color = denColors[joinOrder % denColors.length];
+
+  // ✅ random bot name from pool (prefer unused), fallback to old pattern
+  const used = new Set((players || []).map((p) => String(p?.name || "").trim().toLowerCase()).filter(Boolean));
+  const available = BOT_NAME_POOL.filter((n) => !used.has(String(n).toLowerCase()));
+  const namePool = available.length ? available : BOT_NAME_POOL;
+  const pickedName = namePool[Math.floor(Math.random() * namePool.length)] || `BOT Fox ${joinOrder + 1}`;
 
   let actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
   const hand = [];
   for (let i = 0; i < 3; i++) if (actionDeck.length) hand.push(actionDeck.pop());
 
   await addDoc(playersRef, {
-    name: `BOT Fox ${joinOrder + 1}`,
+    name: pickedName,
     isBot: true,
     isHost: false,
     uid: null,
