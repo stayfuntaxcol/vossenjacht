@@ -47,6 +47,69 @@ function dedupeLines(lines) {
   }
   return out;
 }
+function countDashChosenSoFar(players) {
+  return (Array.isArray(players) ? players : []).filter((p) => String(p?.decision || "").toUpperCase() === "DASH").length;
+}
+
+function hiddenNestBonusCards(totalDashers) {
+  if (totalDashers <= 1) return 3;
+  if (totalDashers === 2) return 2;
+  if (totalDashers === 3) return 1;
+  return 0; // 4+ => 0
+}
+
+function trackPosLabel(game) {
+  const len = Array.isArray(game?.eventTrack) ? game.eventTrack.length : 0;
+  const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : null;
+  if (!len || idx == null) return null;
+  return `${idx + 1}/${len}`;
+}
+
+// Alleen “revealen” als speler echt nextKnown heeft.
+// We pakken de echte id uit track, maar alleen als known=true (dus geen cheat).
+function getNextEventIdIfKnown(view, scoutIntel) {
+  const known = !!scoutIntel?.nextKnown; // jij toont dit al als bullet
+  if (!known) return null;
+
+  const game = view?.game || {};
+  if (Array.isArray(game.eventTrack) && typeof game.eventIndex === "number") {
+    return game.eventTrack[game.eventIndex] || null;
+  }
+  return game.currentEventId || null;
+}
+
+function buildHiddenNestMetaBullets({ view, scoutIntel }) {
+  const game = view?.game || {};
+  const players = view?.players || [];
+
+  const nextKnownId = getNextEventIdIfKnown(view, scoutIntel);
+  const isHiddenNest = String(nextKnownId || "") === "HIDDEN_NEST";
+
+  // Als het niet known is: geef alleen een algemene “als je weet dat…” tip.
+  if (!isHiddenNest) {
+    return [
+      "Als je 100% zeker weet dat de volgende kaart een ‘Dash-bonus’ event is: mik op 1–2 dashers (dan krijg je het meeste).",
+      "Vuistregel Dash-bonus: 1 dasher = +3 loot • 2 dashers = +2 p.p. • 3 dashers = +1 p.p. • 4+ = 0.",
+    ];
+  }
+
+  const alreadyDash = countDashChosenSoFar(players);
+  const totalIfYouDash = alreadyDash + 1;
+  const bonusCards = hiddenNestBonusCards(totalIfYouDash);
+
+  const pos = trackPosLabel(game);
+  const posLine = pos ? `Track-positie: ${pos} (laat = Dash interessanter).` : null;
+
+  const lines = [
+    "NextKnown: Hidden Nest → Dash-bonus hangt af van hoeveel spelers DASH kiezen.",
+    "Regel: 1 dasher = +3 loot • 2 dashers = +2 p.p. • 3 dashers = +1 p.p. • 4+ = 0.",
+    `Nu al DASH gekozen: ${alreadyDash}. Als jij DASH kiest ben jij #${totalIfYouDash} → jouw bonus: +${bonusCards} loot kaart(en).`,
+    totalIfYouDash >= 4 ? "Jij zou de 4e+ dasher zijn → meestal NIET DASHen (bonus=0)." : null,
+    posLine,
+  ].filter(Boolean);
+
+  return lines;
+}
 
 // ------------------------------
 // Phase normalisatie
@@ -1250,6 +1313,8 @@ export function getAdvisorHint({
   const scoutIntel = buildPlayerScoutIntel({ view, me: view.me || me || {}, roundState });
   view.intel = { scout: scoutIntel };
 
+  const hiddenNestMetaBullets = buildHiddenNestMetaBullets({ view, scoutIntel });
+
   // risk meta (nu mét “bekend 100%”)
   const riskMeta = buildRiskMeta({
     view,
@@ -1462,6 +1527,7 @@ export function getAdvisorHint({
     const commonBullets = [
       ...headerLinesCompact(view, riskMeta),
       ...riskBullets,
+      ...hiddenNestMetaBullets, 
       ...extraBurrowWarn,
       ...tactical,
     ].filter(Boolean);
