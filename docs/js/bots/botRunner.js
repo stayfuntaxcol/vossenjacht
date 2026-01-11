@@ -98,6 +98,181 @@ function computeHandStrength({ game, bot }) {
     // “total utility”
     raw += (s.controlScore || 0) + (s.infoScore || 0) + (s.lootScore || 0) + (s.tempoScore || 0) - (s.riskScore || 0);
   }
+function avgLootValueFromDeck(lootDeck) {
+  const arr = Array.isArray(lootDeck) ? lootDeck : [];
+  if (!arr.length) return 1.2; // fallback
+  const sum = arr.reduce((s, c) => s + (Number(c?.v) || 0), 0);
+  return Math.max(0.8, sum / arr.length);
+}
+
+function countFutureRoosters(game) {
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : 0;
+  const future = track.slice(Math.max(0, idx));
+  return future.filter((id) => id === "ROOSTER_CROW").length;
+}
+
+function estimateRoundsLeft(game) {
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : 0;
+  const remainingEvents = Math.max(0, track.length - idx);
+
+  // rooster eindigt bij 3e crow; we schatten “druk” op basis van roosterSeen + future roosters
+  const roosterSeen = Number(game?.roosterSeen || 0);
+  const futureRoosters = countFutureRoosters(game);
+  const roostersLeft = Math.max(0, 3 - roosterSeen);
+
+  // simpele schatting: als er nog roosters zijn, raid stopt grofweg binnen remainingEvents,
+  // maar de “deadline” wordt sneller naarmate roosterSeen hoger is.
+  const pressure = 1 + roosterSeen * 0.35; // later = meer druk
+  return Math.max(1, Math.round(Math.min(remainingEvents, 6) / pressure));
+}
+
+function survivalProbNextEvent({ eventId, decision, myColor, immune, isLead, lootPts }) {
+  const id = String(eventId || "");
+
+  // default: veilig
+  let survive = 1;
+
+  if (id.startsWith("DEN_")) {
+    const color = id.slice(4).toUpperCase();
+    if (color === myColor && !immune) {
+      // DEN pakt jouw kleur, behalve BURROW of DASH
+      survive = (decision === "BURROW" || decision === "DASH") ? 1 : 0;
+    }
+    return survive;
+  }
+
+  if (id === "DOG_CHARGE" || id === "SECOND_CHARGE") {
+    if (immune) return 1;
+    // DOG pakt iedereen behalve BURROW (en DASH is ook “safe” in engine)
+    return (decision === "BURROW" || decision === "DASH") ? 1 : 0;
+  }
+
+  if (id === "SHEEPDOG_PATROL") {
+    // PATROL pakt DASHERS
+    return decision === "DASH" ? 0 : 1;
+  }
+
+  if (id === "GATE_TOLL") {
+    // DASH wordt geskipt; anders moet je 1 loot hebben
+    if (decision === "DASH") return 1;
+    return lootPts > 0 ? 1 : 0;
+  }
+
+  if (id === "MAGPIE_SNITCH") {
+    if (!isLead) return 1;
+    // lead wordt gepakt tenzij BURROW of DASH
+    return (decision === "BURROW" || decision === "DASH") ? 1 : 0;
+  }
+
+  if (id === "SILENT_ALARM") {
+    // engine doet nu niks, maar strategisch is dit “lead-penalty”.
+    // We modelleren risico als “scoreverlies”, niet survival.
+    return 1;
+  }
+
+  return survive;
+}
+
+function silentAlarmPenalty({ eventId, decision, isLead, lootPts }) {
+  if (String(eventId || "") !== "SILENT_ALARM") return 0;
+  if (!isLead) return 0;
+
+  // jouw kaarttekst: lead moet 2 loot afleggen of verliest lead
+  // model: als je blijft (LURK/BURROW) betaal je gemiddeld 1.6 punten “penalty”.
+  // DASH ontwijkt penalty (want je bent weg).
+  if (decision === "DASH") return 0;
+  if (lootPts >= 2) return 2.0;
+  return 1.2; // als je weinig hebt, penalty “lead loss” ≈ minder erg dan 2 loot
+}
+
+function expectedSackShareNow({ game, players }) {
+  const sack = Array.isArray(game?.sack) ? game.sack : [];
+  const sackValue = sack.reduce((s, c) => s + (Number(c?.v) || 0), 0);
+  if (!sack.length) return 0;
+
+  // grof: deel door (dashersAlready + 1). (Later: betere voorspelling)
+  const dashersAlready = (players || []).filter((pl) => pl?.dashed && pl?.inYard !== false).length;
+  const divisor = Math.max(1, dashersAlready + 1);
+  return sackValue / divisor;
+}
+
+function pickDecisionLootMaximizer({ g, p, latestPlayers }) {
+  const myColor = String(p?.color || "").trim().toUpperCase();
+  const flags = fillFlags(g?.flagsRound);
+  const immune = !!flags.denImmune?.[myColor];
+
+  const nextId = nextEventId(g, 0);
+  const lootPts = sumLootPoints(p);
+  const isLead = (() => {
+    const ordered = [...(latestPlayers || [])].sort((a, b) => (a.joinOrder ?? 9999) - (b.joinOrder ?? 9999));
+    const idx = Number.isFinite(g?.leadIndex) ? g.leadIndex : 0;
+    return ordered[idx]?.id === p.id;
+  })();
+
+  const avgLoot = avgLootValueFromDeck(g?.lootDeck);
+  const roundsLeft = estimateRoundsLeft(g);
+
+  // “stay value”: als je blijft, verwacht je ~1 lootkaart per ronde + waarde van sack groei
+  const futureGain = roundsLeft * avgLoot;
+
+  const sackShareIfDash = expectedSackShareNow({ game: g, players: latestPlayers || [] });
+
+  // caught in engine = loot weg + out (dus verlies je huidige loot volledig)
+  const caughtLoss = lootPts;
+
+  const options = ["LURK", "DASH", "BURROW"].filter((d) => d !== "BURROW" || !p.burrowUsed);
+
+  const scored = options.map((decision) => {
+    const surviveP = survivalProbNextEvent({
+      eventId: nextId,
+      decision,
+      myColor,
+      immune,
+      isLead,
+      lootPts,
+    });
+
+    const alarmPenalty = silentAlarmPenalty({ eventId: nextId, decision, isLead, lootPts });
+
+    // Opportunity cost van DASH (je stopt met groeien)
+    const dashOpportunityCost = decision === "DASH" ? futureGain * 0.95 : 0;
+
+    // BURROW kost een schaarse resource → early penalty zodat je hem niet verspilt
+    const roundNum = Number(g?.round || 0);
+    const burrowReservePenalty = decision === "BURROW" ? (roundNum <= 1 ? 1.2 : 0.6) : 0;
+
+    const baseNow = lootPts;
+
+    // EV:
+    // - als je DASHt: je houdt loot + krijgt verwachte sack share, maar mist futureGain
+    // - als je blijft: je krijgt futureGain * surviveP, maar als je gepakt wordt verlies je loot
+    let ev = 0;
+
+    if (decision === "DASH") {
+      ev = baseNow + sackShareIfDash - dashOpportunityCost;
+    } else {
+      ev =
+        baseNow +
+        surviveP * futureGain -
+        (1 - surviveP) * caughtLoss -
+        alarmPenalty -
+        burrowReservePenalty;
+    }
+
+    // extra: als loot=0, DASH extra onaantrekkelijk
+    if (lootPts <= 0 && decision === "DASH") ev -= 5;
+
+    return { decision, ev, surviveP };
+  });
+
+  scored.sort((a, b) => b.ev - a.ev);
+
+  // tie-break: liever LURK dan BURROW (resource sparen), liever BURROW dan DASH (niet vroeg uitstappen)
+  const best = scored[0];
+  return best?.decision || "LURK";
+}
 
   // context: als next event gevaarlijk is, is defense/control meer waard
   const nextId = getNextEventId(game);
@@ -858,116 +1033,10 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
 }
 
 /** ===== smarter DECISION ===== */
-async function botDoDecision({ db, gameId, botId }) {
-  const gRef = doc(db, "games", gameId);
-  const pRef = doc(db, "games", gameId, "players", botId);
-
-  let logPayload = null;
-
-  await runTransaction(db, async (tx) => {
-    const gSnap = await tx.get(gRef);
-    const pSnap = await tx.get(pRef);
-    if (!gSnap.exists() || !pSnap.exists()) return;
-
-    const g = gSnap.data();
-    const p = { id: pSnap.id, ...pSnap.data() };
-    if (!canBotDecide(g, p)) return;
-
-    const flags = fillFlags(g.flagsRound);
-    const myColor = normColor(p.color);
-    const immune = !!flags.denImmune?.[myColor];
-
-    const upcoming = classifyEvent(nextEventId(g, 0));
-    const lootPts = sumLootPoints(p);
-    const roundNum = Number(g.round || 0);
-    const roosterSeen = Number(g.roosterSeen || 0);
-
-       // ✅ Nieuwe basis: threat-aware decision via rulesIndex (dangerDash/Lurk/Burrow)
-    const nextId = getNextEventId(g);
-    const f = nextId ? getEventFacts(nextId) : null;
-
-    const dashD = f?.dangerDash ?? 0;
-    const lurkD = f?.dangerLurk ?? 0;
-    const burrowD = f?.dangerBurrow ?? 0;
-
-    // 1) eerst: wat is het veiligst puur op event-risk
-       const nextId = getNextEventId(g);
-    const facts = nextId ? getEventFacts(nextId) : null;
-
-    // fallback dangers als facts ontbreken (bv. SILENT_ALARM nog niet in index)
-    function fallbackDangers(up) {
-      if (up.type === "NO_DASH") return { dash: 9, lurk: 2, burrow: 0 }; // Patrol: dash slecht
-      if (up.type === "DOG") return { dash: 0, lurk: 9, burrow: 0 };     // Charges: lurk slecht
-      if (up.type === "DEN") return { dash: 0, lurk: 4, burrow: 0 };     // Den: conditioneel
-      if (up.type === "TOLL") return { dash: 0, lurk: 4, burrow: 4 };    // Toll: niet-dash kan pijn doen
-      return { dash: 0, lurk: 0, burrow: 0 };                            // Rooster/Other: neutraal
-    }
-
-    const fb = fallbackDangers(upcoming);
-
-    let dashD = facts?.dangerDash ?? fb.dash;
-    let lurkD = facts?.dangerLurk ?? fb.lurk;
-    let burrowD = facts?.dangerBurrow ?? fb.burrow;
-
-    // immunity maakt DOG/DEN minder eng om te blijven
-    if (immune && (upcoming.type === "DOG" || upcoming.type === "DEN")) {
-      lurkD = Math.max(0, lurkD - 6);
-    }
-
-    // Loot-doel: bots moeten richting 15–25 eindigen
-    const LOOT_MIN = 15;
-    const LOOT_MAX = 25;
-
-    const lootGoalNotReached = lootPts < LOOT_MIN;
-    const nearEndPressure = Number(g.roosterSeen || 0) >= 2; // 3e rooster nadert
-
-    // Utility scores (hoger = beter)
-    // Kern: LURK is standaard beter vroeg; DASH pas als doel gehaald of near-end.
-    let uLurk =
-      (lootGoalNotReached ? 8 : 3)     // stay-bonus: vroeg hoog
-      - lurkD * 1.1;                   // risk penalty
-
-    let uDash =
-      (lootPts >= LOOT_MIN ? 6 : -8)   // te vroeg dashen is slecht
-      + (lootPts > LOOT_MAX ? 4 : 0)   // boven max: bank sneller
-      + (nearEndPressure ? 3 : 0)      // einddruk: dash vaker
-      - dashD * 0.6;
-
-    let uBurrow =
-      (p.burrowUsed ? -999 : 4)        // burrow kan niet als al gebruikt
-      - burrowD * 0.9
-      - (lootGoalNotReached ? 2 : 0);  // burrow is “safe” maar remt loot-opbouw
-
-    // Speciaal: SILENT_ALARM (nu nog niet in engine) -> juist stay/loot waarderen
-    if (nextId === "SILENT_ALARM") {
-      uLurk += 4;   // langer blijven
-      uDash -= 4;   // minder “panic dash”
-    }
-
-    // Kies beste, tie-break: LURK > DASH > BURROW
-    const options = [
-      { d: "LURK",  u: uLurk,  t: 0 },
-      { d: "DASH",  u: uDash,  t: 1 },
-      { d: "BURROW",u: uBurrow,t: 2 },
-    ].sort((a, b) => (b.u - a.u) || (a.t - b.t));
-
-    const decision = options[0].d;
-    const update = { decision };
-    if (decision === "BURROW" && !p.burrowUsed) update.burrowUsed = true;
-
-    tx.update(pRef, update);
-
-    logPayload = {
-      round: roundNum,
-      phase: "DECISION",
-      playerId: botId,
-      playerName: p.name || "BOT",
-      choice: `DECISION_${decision}`,
-      message: `BOT kiest ${decision} (next=${String(nextEventId(g, 0) || "?")} loot=${lootPts} immune=${
-        immune ? "yes" : "no"
-      })`,
-    };
-  });
+const decision = pickDecisionLootMaximizer({ g, p, latestPlayers });
+const update = { decision };
+if (decision === "BURROW" && !p.burrowUsed) update.burrowUsed = true;
+tx.update(pRef, update);
 
   if (logPayload) await logBotAction({ db, gameId, addLog: null, payload: logPayload });
 }
