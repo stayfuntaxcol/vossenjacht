@@ -891,24 +891,67 @@ async function botDoDecision({ db, gameId, botId }) {
     const burrowD = f?.dangerBurrow ?? 0;
 
     // 1) eerst: wat is het veiligst puur op event-risk
-    let decision = pickSafestDecisionForUpcomingEvent(g);
+       const nextId = getNextEventId(g);
+    const facts = nextId ? getEventFacts(nextId) : null;
 
-    // 2) BURROW is schaars → alleen gebruiken als het echt veel veiliger is
-    const bestNonBurrow = dashD <= lurkD ? "DASH" : "LURK";
-    const bestNonBurrowD = Math.min(dashD, lurkD);
-
-    if (decision === "BURROW") {
-      if (p.burrowUsed) {
-        decision = bestNonBurrow;
-      } else {
-        // BURROW alleen als het ≥3 punten veiliger is dan de beste non-burrow optie
-        if (burrowD + 3 > bestNonBurrowD) decision = bestNonBurrow;
-      }
+    // fallback dangers als facts ontbreken (bv. SILENT_ALARM nog niet in index)
+    function fallbackDangers(up) {
+      if (up.type === "NO_DASH") return { dash: 9, lurk: 2, burrow: 0 }; // Patrol: dash slecht
+      if (up.type === "DOG") return { dash: 0, lurk: 9, burrow: 0 };     // Charges: lurk slecht
+      if (up.type === "DEN") return { dash: 0, lurk: 4, burrow: 0 };     // Den: conditioneel
+      if (up.type === "TOLL") return { dash: 0, lurk: 4, burrow: 4 };    // Toll: niet-dash kan pijn doen
+      return { dash: 0, lurk: 0, burrow: 0 };                            // Rooster/Other: neutraal
     }
 
-    // 3) kleine “economy” guard: geen DASH als je letterlijk 0 loot hebt (jouw oude gedrag)
-    if (decision === "DASH" && lootPts <= 0) decision = bestNonBurrow === "DASH" ? "LURK" : bestNonBurrow;
+    const fb = fallbackDangers(upcoming);
 
+    let dashD = facts?.dangerDash ?? fb.dash;
+    let lurkD = facts?.dangerLurk ?? fb.lurk;
+    let burrowD = facts?.dangerBurrow ?? fb.burrow;
+
+    // immunity maakt DOG/DEN minder eng om te blijven
+    if (immune && (upcoming.type === "DOG" || upcoming.type === "DEN")) {
+      lurkD = Math.max(0, lurkD - 6);
+    }
+
+    // Loot-doel: bots moeten richting 15–25 eindigen
+    const LOOT_MIN = 15;
+    const LOOT_MAX = 25;
+
+    const lootGoalNotReached = lootPts < LOOT_MIN;
+    const nearEndPressure = Number(g.roosterSeen || 0) >= 2; // 3e rooster nadert
+
+    // Utility scores (hoger = beter)
+    // Kern: LURK is standaard beter vroeg; DASH pas als doel gehaald of near-end.
+    let uLurk =
+      (lootGoalNotReached ? 8 : 3)     // stay-bonus: vroeg hoog
+      - lurkD * 1.1;                   // risk penalty
+
+    let uDash =
+      (lootPts >= LOOT_MIN ? 6 : -8)   // te vroeg dashen is slecht
+      + (lootPts > LOOT_MAX ? 4 : 0)   // boven max: bank sneller
+      + (nearEndPressure ? 3 : 0)      // einddruk: dash vaker
+      - dashD * 0.6;
+
+    let uBurrow =
+      (p.burrowUsed ? -999 : 4)        // burrow kan niet als al gebruikt
+      - burrowD * 0.9
+      - (lootGoalNotReached ? 2 : 0);  // burrow is “safe” maar remt loot-opbouw
+
+    // Speciaal: SILENT_ALARM (nu nog niet in engine) -> juist stay/loot waarderen
+    if (nextId === "SILENT_ALARM") {
+      uLurk += 4;   // langer blijven
+      uDash -= 4;   // minder “panic dash”
+    }
+
+    // Kies beste, tie-break: LURK > DASH > BURROW
+    const options = [
+      { d: "LURK",  u: uLurk,  t: 0 },
+      { d: "DASH",  u: uDash,  t: 1 },
+      { d: "BURROW",u: uBurrow,t: 2 },
+    ].sort((a, b) => (b.u - a.u) || (a.t - b.t));
+
+    const decision = options[0].d;
     const update = { decision };
     if (decision === "BURROW" && !p.burrowUsed) update.burrowUsed = true;
 
