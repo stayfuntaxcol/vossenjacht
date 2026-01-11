@@ -436,6 +436,31 @@ function chooseBotOpsPlay({ game, bot, players }) {
 
   const upcoming = classifyEvent(nextEventId(g, 0));
   const hand = Array.isArray(p.hand) ? p.hand : [];
+    const roundNum = Number(g.round || 0);
+
+  // reserve: early game 2 kaarten houden, later 1
+  const reserve = roundNum <= 1 ? 2 : 1;
+
+  // heeft bot deze ronde al een action gespeeld?
+  const disc = Array.isArray(g.actionDiscard) ? g.actionDiscard : [];
+  const alreadyPlayedThisRound = disc.some(
+    (x) => x?.by === p.id && Number(x?.round || 0) === roundNum
+  );
+
+  // urgent als er direct (volgende kaart) groot gevaar is en we niet immune zijn
+  const dangerSoon =
+    upcoming.type === "DOG" ||
+    (upcoming.type === "DEN" && normColor(upcoming.color) === myColor) ||
+    upcoming.type === "TOLL";
+
+  const urgentDefense = dangerSoon && !immune && hasCard(hand, "Den Signal");
+
+  // Conserve rules:
+  // - als je hand te klein is: alleen noodrem (Den Signal) spelen
+  if (hand.length <= reserve && !urgentDefense) return null;
+
+  // - als je al speelde deze ronde: alleen noodrem (Den Signal) spelen
+  if (alreadyPlayedThisRound && !urgentDefense) return null;
 
   // If OPS locked: must pass (caller will handle)
   if (flags.opsLocked) return null;
@@ -623,8 +648,7 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
 
     // discard + draw replacement
     actionDiscard.push({ name: cardName, by: botId, round: roundNum, at: Date.now() });
-    if (actionDeck.length) hand.push(actionDeck.pop());
-
+ 
     const extraGameUpdates = {};
 
     // effects
