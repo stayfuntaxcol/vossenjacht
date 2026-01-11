@@ -2,6 +2,7 @@
 // Autonomous bots for VOSSENJACHT (smart OPS flow + threat-aware decisions)
 
 import { getEventFacts, rankActions } from "./aiKit.js";
+import { getActionDefByName } from "../cards.js";
 
 import {
   doc,
@@ -120,27 +121,52 @@ function pickSafestDecisionForUpcomingEvent(game) {
   return options[0].k;
 }
 
-function pickBestActionFromHand(game, me) {
-  const hand = Array.isArray(me.hand) ? me.hand : [];
+function pickBestActionFromHand({ game, bot, players }) {
+  const hand = Array.isArray(bot?.hand) ? bot.hand : [];
   if (!hand.length) return null;
 
-  const ranked = rankActions(hand); // hoogste waarde eerst
+  // hand bevat bij jou meestal {name:"Den Signal"} of "Den Signal"
+  const handNames = hand
+    .map((c) => String(c?.name || c || "").trim())
+    .filter(Boolean);
+
+  // map kaartnaam -> actionId via cards.js defs
+  const entries = handNames
+    .map((name) => ({ name, def: getActionDefByName(name) }))
+    .filter((x) => x.def?.id);
+
+  const ids = entries.map((x) => x.def.id);
+  if (!ids.length) return null;
+
+  const ranked = rankActions(ids); // hoogste waarde eerst
+
   for (const r of ranked) {
     const id = r.id;
 
-    // simpele legality checks (breid later uit)
+    // legality checks
     if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
-      if (game?.flagsRound?.lockEvents) continue; // Burrow Beacon lockt track
+      if (game?.flagsRound?.lockEvents) continue;
       if (!Array.isArray(game.eventTrack)) continue;
       if (typeof game.eventIndex !== "number") continue;
-      if (game.eventIndex >= game.eventTrack.length - 1) continue; // geen future slots
+      if (game.eventIndex >= game.eventTrack.length - 1) continue;
     }
 
-    // HOLD STILL: jouw bedoeling = “ops lock” => alleen spelen als er nog niet gelocked is
     if (id === "HOLD_STILL" && game?.flagsRound?.opsLocked) continue;
 
-    return id;
+    // targets waar nodig
+    let targetId = null;
+    if (id === "MASK_SWAP" || id === "HOLD_STILL") {
+      targetId = pickRichestTarget(players || [], bot.id);
+      if (!targetId) continue;
+    }
+
+    // terug naar “kaartnaam” die in hand zit (nodig voor removeOneCard(hand, cardName))
+    const entry = entries.find((x) => x.def.id === id);
+    const name = entry?.name || entry?.def?.name || id;
+
+    return targetId ? { name, targetId } : { name };
   }
+
   return null;
 }
 
@@ -528,7 +554,8 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
     const actionDiscard = Array.isArray(g.actionDiscard) ? [...g.actionDiscard] : [];
 
-    const play = chooseBotOpsPlay({ game: g, bot: p, players: latestPlayers || [] });
+    const play = pickBestActionFromHand({ game: g, bot: p, players: latestPlayers || [] });
+
 
     // =========================
     // PASS
@@ -773,29 +800,32 @@ async function botDoDecision({ db, gameId, botId }) {
     const roundNum = Number(g.round || 0);
     const roosterSeen = Number(g.roosterSeen || 0);
 
-    let decision = "LURK";
+       // ✅ Nieuwe basis: threat-aware decision via rulesIndex (dangerDash/Lurk/Burrow)
+    const nextId = getNextEventId(g);
+    const f = nextId ? getEventFacts(nextId) : null;
 
-    // hard guards
-    if (upcoming.type === "NO_DASH") {
-      decision = p.burrowUsed ? "LURK" : "BURROW";
-    } else if (upcoming.type === "TOLL" && lootPts <= 0) {
-      decision = p.burrowUsed ? "LURK" : "BURROW";
-    } else if (
-      (upcoming.type === "DOG" || (upcoming.type === "DEN" && normColor(upcoming.color) === myColor)) &&
-      !immune
-    ) {
-      decision = p.burrowUsed ? "LURK" : "BURROW";
-    } else {
-      // safer dash model (less suicidal)
-      let dashProb = 0.04 + lootPts * 0.03 + roundNum * 0.02 + roosterSeen * 0.04;
-      if (upcoming.type === "ROOSTER" && lootPts >= 3) dashProb += 0.18;
-      dashProb = Math.max(0, Math.min(dashProb, 0.55));
-      if (lootPts <= 0) dashProb = 0;
+    const dashD = f?.dangerDash ?? 0;
+    const lurkD = f?.dangerLurk ?? 0;
+    const burrowD = f?.dangerBurrow ?? 0;
 
-      if (Math.random() < dashProb) decision = "DASH";
-      else if (!p.burrowUsed && Math.random() < 0.12) decision = "BURROW";
-      else decision = "LURK";
+    // 1) eerst: wat is het veiligst puur op event-risk
+    let decision = pickSafestDecisionForUpcomingEvent(g);
+
+    // 2) BURROW is schaars → alleen gebruiken als het echt veel veiliger is
+    const bestNonBurrow = dashD <= lurkD ? "DASH" : "LURK";
+    const bestNonBurrowD = Math.min(dashD, lurkD);
+
+    if (decision === "BURROW") {
+      if (p.burrowUsed) {
+        decision = bestNonBurrow;
+      } else {
+        // BURROW alleen als het ≥3 punten veiliger is dan de beste non-burrow optie
+        if (burrowD + 3 > bestNonBurrowD) decision = bestNonBurrow;
+      }
     }
+
+    // 3) kleine “economy” guard: geen DASH als je letterlijk 0 loot hebt (jouw oude gedrag)
+    if (decision === "DASH" && lootPts <= 0) decision = bestNonBurrow === "DASH" ? "LURK" : bestNonBurrow;
 
     const update = { decision };
     if (decision === "BURROW" && !p.burrowUsed) update.burrowUsed = true;
