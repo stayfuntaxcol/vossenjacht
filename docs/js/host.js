@@ -890,20 +890,34 @@ if (scoreOverlayCloseBtn && scoreOverlay) scoreOverlayCloseBtn.addEventListener(
 // Deck builders
 // ===============================
 
-// Event track: 12 kaarten, met DOG_CHARGE in eerste helft en SECOND_CHARGE in tweede helft
+// Event track: 12 kaarten
+// - pos0 = SHEEPDOG_PATROL (veilig start)
+// - 1x DOG_CHARGE in eerste helft
+// - 1x (SECOND_CHARGE of PAINT_BOMB_NEST) in tweede helft
+// - 1x (MAGPIE_SNITCH of SILENT_ALARM) in de pool
 function buildEventTrack() {
   const SAFE_FIRST_EVENT = "SHEEPDOG_PATROL";
+
+  const pickOne = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+  // ✅ Variants (later makkelijk uitbreiden)
+  const leadPenalty = pickOne(["MAGPIE_SNITCH", "SILENT_ALARM"]);
+  const secondHalfBig = pickOne(["SECOND_CHARGE", "PAINT_BOMB_NEST"]);
+
+  // Pool moet exact 9 kaarten zijn (want 12 totaal, 3 vaste slots)
+  // NB: GATE_TOLL is eruit gehaald om ruimte te maken voor leadPenalty.
   const others = [
     "DEN_RED",
     "DEN_BLUE",
     "DEN_GREEN",
     "DEN_YELLOW",
     "HIDDEN_NEST",
-    "GATE_TOLL",
+    leadPenalty,
     "ROOSTER_CROW",
     "ROOSTER_CROW",
     "ROOSTER_CROW",
   ];
+
   const pool = shuffleArray(others);
 
   const track = new Array(12).fill(null);
@@ -916,7 +930,7 @@ function buildEventTrack() {
   const secondIndex = secondHalfSlots[Math.floor(Math.random() * secondHalfSlots.length)];
 
   track[dogIndex] = "DOG_CHARGE";
-  track[secondIndex] = "SECOND_CHARGE";
+  track[secondIndex] = secondHalfBig;
 
   let pIdx = 0;
   for (let i = 0; i < track.length; i++) {
