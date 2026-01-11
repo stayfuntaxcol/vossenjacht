@@ -1,6 +1,8 @@
 // js/bots/botRunner.js
 // Autonomous bots for VOSSENJACHT (smart OPS flow + threat-aware decisions)
 
+import { getEventFacts, rankActions } from "./aiKit.js";
+
 import {
   doc,
   getDoc,
@@ -94,6 +96,52 @@ function fillFlags(flagsRound) {
     holdStill: {},
     ...(flagsRound || {}),
   };
+}
+
+function getNextEventId(game) {
+  if (Array.isArray(game.eventTrack) && typeof game.eventIndex === "number") {
+    return game.eventTrack[game.eventIndex] || null;
+  }
+  return game.currentEventId || null;
+}
+
+function pickSafestDecisionForUpcomingEvent(game) {
+  const nextId = getNextEventId(game);
+  const f = nextId ? getEventFacts(nextId) : null;
+  if (!f) return "LURK"; // fallback
+
+  // laagste danger wint; tie-break: BURROW > DASH > LURK (veiliger feel)
+  const options = [
+    { k: "BURROW", d: f.dangerBurrow ?? 0 },
+    { k: "DASH",   d: f.dangerDash ?? 0 },
+    { k: "LURK",   d: f.dangerLurk ?? 0 },
+  ].sort((a, b) => a.d - b.d);
+
+  return options[0].k;
+}
+
+function pickBestActionFromHand(game, me) {
+  const hand = Array.isArray(me.hand) ? me.hand : [];
+  if (!hand.length) return null;
+
+  const ranked = rankActions(hand); // hoogste waarde eerst
+  for (const r of ranked) {
+    const id = r.id;
+
+    // simpele legality checks (breid later uit)
+    if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
+      if (game?.flagsRound?.lockEvents) continue; // Burrow Beacon lockt track
+      if (!Array.isArray(game.eventTrack)) continue;
+      if (typeof game.eventIndex !== "number") continue;
+      if (game.eventIndex >= game.eventTrack.length - 1) continue; // geen future slots
+    }
+
+    // HOLD STILL: jouw bedoeling = “ops lock” => alleen spelen als er nog niet gelocked is
+    if (id === "HOLD_STILL" && game?.flagsRound?.opsLocked) continue;
+
+    return id;
+  }
+  return null;
 }
 
 function getOpsTurnId(game) {
