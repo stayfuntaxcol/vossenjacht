@@ -11,6 +11,7 @@
 import { ADVISOR_PROFILES } from "../core/botConfig.js";
 import { buildPlayerView } from "../core/stateView.js";
 import { getUpcomingEvents } from "../core/eventIntel.js";
+import { getEventFacts, rankActions } from "../aiKit.js";
 import { scoreMoveMoves, scoreOpsPlays, scoreDecisions } from "../core/scoring.js";
 
 // Action defs + info (1 bron: cards.js)
