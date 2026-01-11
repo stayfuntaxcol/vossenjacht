@@ -354,7 +354,9 @@ export async function resolveAfterReveal(gameId) {
   const ev = getEventById(eventId);
   let lootDeck = [...(game.lootDeck || [])];
   let sack = [...(game.sack || [])];
-
+  
+  let leadAdvanceBonus = 0; // +1 betekent: lead roteert extra hard (penalty)
+  
   let flagsRound = {
     lockEvents: false,
     scatter: false,
@@ -418,24 +420,6 @@ export async function resolveAfterReveal(gameId) {
       }
     }
   }
-  
-  // ====== Hold Still – target kan deze ronde niet DASHen ======
-const holdStill = flagsRound.holdStill || {};
-for (const pl of players) {
-  if (!isInYardForEvents(pl)) continue;
-  if (!holdStill[pl.id]) continue;
-
-  if (pl.decision === "DASH") {
-    pl.decision = "LURK";
-    await addLog(gameId, {
-      round,
-      phase: "REVEAL",
-      kind: "EVENT",
-      playerId: pl.id,
-      message: `${pl.name || "Vos"} kan niet dashen door Hold Still en blijft LURK.`,
-    });
-  }
-}
 
   // =======================================
   // Event-specifieke logica
@@ -663,6 +647,58 @@ for (const pl of players) {
         });
       }
     }
+    
+} else if (eventId === "SILENT_ALARM") {
+  const ordered = [...players].sort((a, b) => {
+    const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+    const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
+    return ao - bo;
+  });
+
+  let lead = null;
+  if (ordered.length) {
+    const idx = typeof game.leadIndex === "number" ? game.leadIndex : 0;
+    lead = ordered[idx] || ordered[0];
+  }
+
+  if (lead && isInYardForEvents(lead)) {
+    const loot = Array.isArray(lead.loot) ? [...lead.loot] : [];
+
+    if (loot.length >= 2) {
+      // betaalt 2 loot (valt in de Sack)
+      const drop1 = loot.pop();
+      const drop2 = loot.pop();
+      lead.loot = loot;
+      if (drop1) sack.push(drop1);
+      if (drop2) sack.push(drop2);
+
+      await addLog(gameId, {
+        round,
+        phase: "REVEAL",
+        kind: "EVENT",
+        playerId: lead.id,
+        message: `${lead.name || "Lead Fox"} betaalt Silent Alarm en legt 2 buit af in de Sack.`,
+      });
+    } else {
+      // kan niet betalen -> verliest lead-status (extra lead-rotatie)
+      leadAdvanceBonus = 1;
+      await addLog(gameId, {
+        round,
+        phase: "REVEAL",
+        kind: "EVENT",
+        playerId: lead.id,
+        message: `${lead.name || "Lead Fox"} kan Silent Alarm niet betalen (minder dan 2 buit) en verliest zijn Lead-status.`,
+      });
+    }
+  } else {
+    await addLog(gameId, {
+      round,
+      phase: "REVEAL",
+      kind: "EVENT",
+      message: "Silent Alarm: geen effect (Lead Fox is niet meer in de Yard).",
+    });
+  }
+    
   } else if (eventId === "PAINT_BOMB_NEST") {
     if (sack.length) {
       lootDeck.push(...sack);
@@ -798,7 +834,8 @@ for (const pl of players) {
   let newLeadIndex = typeof game.leadIndex === "number" ? game.leadIndex : 0;
 
   if (ordered.length) {
-    newLeadIndex = (newLeadIndex + 1) % ordered.length;
+    newLeadIndex = (newLeadIndex + 1 + leadAdvanceBonus) % ordered.length;
+
     const newLead = ordered[newLeadIndex];
     await addLog(gameId, {
       round,
