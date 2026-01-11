@@ -329,6 +329,11 @@ function pickDecisionLootMaximizer({ g, p, latestPlayers }) {
     if (String(nextEvent0) !== "HIDDEN_NEST" && lootPts <= 0 && decision === "DASH") ev -= 5;
 
     return { decision, ev, surviveP };
+  });
+
+  scored.sort((a, b) => b.ev - a.ev);
+  return scored[0]?.decision || "LURK";
+}
 
 function nextEventId(game, offset = 0) {
   const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
