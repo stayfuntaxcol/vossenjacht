@@ -1027,12 +1027,44 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
 }
 
 /** ===== smarter DECISION ===== */
-const decision = pickDecisionLootMaximizer({ g, p, latestPlayers });
-const update = { decision };
-if (decision === "BURROW" && !p.burrowUsed) update.burrowUsed = true;
-tx.update(pRef, update);
+async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
+  const gRef = doc(db, "games", gameId);
+  const pRef = doc(db, "games", gameId, "players", botId);
 
-  if (logPayload) await logBotAction({ db, gameId, addLog: null, payload: logPayload });
+  let logPayload = null;
+
+  await runTransaction(db, async (tx) => {
+    const gSnap = await tx.get(gRef);
+    const pSnap = await tx.get(pRef);
+    if (!gSnap.exists() || !pSnap.exists()) return;
+
+    const g = gSnap.data();
+    const p = { id: pSnap.id, ...pSnap.data() };
+
+    if (!canBotDecide(g, p)) return;
+
+    const decision = pickDecisionLootMaximizer({ g, p, latestPlayers });
+    const update = { decision };
+
+    if (decision === "BURROW" && !p.burrowUsed) {
+      update.burrowUsed = true;
+    }
+
+    tx.update(pRef, update);
+
+    logPayload = {
+      round: Number(g.round || 0),
+      phase: "DECISION",
+      playerId: botId,
+      playerName: p.name || "BOT",
+      choice: `DECISION_${decision}`,
+      message: `BOT kiest ${decision}`,
+    };
+  });
+
+  if (logPayload) {
+    await logBotAction({ db, gameId, addLog: null, payload: logPayload });
+  }
 }
 
 /** ===== exported: start runner (1 action per tick + backoff, no interval storm) ===== */
@@ -1152,7 +1184,7 @@ export function startBotRunner({ db, gameId, addLog, isBoardOnly = false, hostUi
       } else if (job.kind === "ACTIONS") {
         await botDoOpsTurn({ db, gameId, botId: job.botId, latestPlayers });
       } else if (job.kind === "DECISION") {
-        await botDoDecision({ db, gameId, botId: job.botId });
+        await botDoDecision({ db, gameId, botId: job.botId, latestPlayers });
       }
     } catch (e) {
       console.warn("[BOTS] loop error", e);
