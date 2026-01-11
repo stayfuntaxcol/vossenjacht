@@ -567,7 +567,7 @@ function normalizeDecision(raw) {
 function decisionMeta(decision) {
   const d = (decision || "").toUpperCase();
   if (d === "DASH") return { label: "DASH", cls: "decision-dash" };
-  if (d === "BURROW") return { label: "BURROW", cls: "decision-burrow" };
+  if (d === "BURROW") return { label: "HIDE", cls: "decision-burrow" };
   if (d === "LURK") return { label: "LURK", cls: "decision-lurk" };
   return { label: "HELLO", cls: "decision-unknown" };
 }
@@ -1599,7 +1599,7 @@ async function startNewRaidFromBoard() {
 
     const url = new URL(window.location.href);
     url.searchParams.set("game", newGameId);
-    url.searchParams.set("mode", "board");
+    url.searchParams.set("mode", "host");
     window.location.href = url.toString();
   } catch (err) {
     console.error("Fout bij Start nieuwe Raid:", err);
