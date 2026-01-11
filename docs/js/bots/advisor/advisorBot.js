@@ -240,6 +240,20 @@ function getRemainingEventIds(game) {
   const idx = typeof game?.eventIndex === "number" ? game.eventIndex : 0;
   return track.slice(Math.max(0, idx)).filter(Boolean);
 }
+
+function getNextEventId(game) {
+  const nextId = (Array.isArray(game?.eventTrack) && typeof game?.eventIndex === "number")
+    ? (game.eventTrack[game.eventIndex] || null)
+    : (game?.currentEventId || null);
+  return nextId;
+}
+
+function getNextEventFacts(game) {
+  const nextId = getNextEventId(game);
+  const f = nextId ? getEventFacts(nextId) : null;
+  return { nextId, f };
+}
+
 function extractDenColorFromEventId(eventId) {
   if (!eventId) return null;
   if (!String(eventId).startsWith("DEN_")) return null;
@@ -1207,6 +1221,11 @@ export function getAdvisorHint({
   view.game.flagsRound = effectiveFlags;
   view.flags = effectiveFlags;
 
+  // next event facts (zonder eventId/titel te lekken naar UI)
+  const { nextId, f: nextEventFacts } = getNextEventFacts(view.game);
+  view.nextEventId = nextId;           // intern
+  view.nextEventFacts = nextEventFacts; // intern
+
   // upcoming peek (intern, voor scoring) — we laten dit staan (bestaande functionaliteit)
   const upcomingPeek = getUpcomingEvents(view, 2) || [];
 
@@ -1237,6 +1256,9 @@ export function getAdvisorHint({
   const riskBullets = [
     `Jouw Den-kleur: ${riskMeta.ctx.myColor || "—"}`,
     `Kans: Den-event van jouw kleur: ${pct(riskMeta.pMyDen)} • Charges: ${pct(riskMeta.pCharges)} • 3e rooster: ${pct(riskMeta.pThirdRooster)}`,
+     nextEventFacts
+      ? `Volgende kaart-risico (0–10): DASH ${nextEventFacts.dangerDash} • LURK ${nextEventFacts.dangerLurk} • BURROW ${nextEventFacts.dangerBurrow}`
+      : null,
     riskMeta.ctx.denSignalActive ? "Den Signal actief: je bent veilig tegen charges + jouw Den-event." : null,
     scoutIntel?.nextKnown ? "Scout-info: jij kent de volgende kaart (100% zekerheid)." : null,
   ].filter(Boolean);
