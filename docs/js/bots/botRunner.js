@@ -436,7 +436,15 @@ function chooseBotOpsPlay({ game, bot, players }) {
 
   const upcoming = classifyEvent(nextEventId(g, 0));
   const hand = Array.isArray(p.hand) ? p.hand : [];
-    const roundNum = Number(g.round || 0);
+
+  const roundNum = Number(g.round || 0);
+
+  // If OPS locked: must pass (caller will handle)
+  if (flags.opsLocked) return null;
+
+  // -------------------------
+  // Conserve rules (hand/deck sparen)
+  // -------------------------
 
   // reserve: early game 2 kaarten houden, later 1
   const reserve = roundNum <= 1 ? 2 : 1;
@@ -447,34 +455,31 @@ function chooseBotOpsPlay({ game, bot, players }) {
     (x) => x?.by === p.id && Number(x?.round || 0) === roundNum
   );
 
-  // urgent als er direct (volgende kaart) groot gevaar is en we niet immune zijn
-  const dangerSoon =
+  // gevaar waarvoor Den Signal echt relevant is (DOG of DEN van jouw kleur)
+  const dangerSoonDogDen =
     upcoming.type === "DOG" ||
-    (upcoming.type === "DEN" && normColor(upcoming.color) === myColor) ||
-    upcoming.type === "TOLL";
+    (upcoming.type === "DEN" && normColor(upcoming.color) === myColor);
 
-  const urgentDefense = dangerSoon && !immune && hasCard(hand, "Den Signal");
+  const urgentDefense = dangerSoonDogDen && !immune && hasCard(hand, "Den Signal");
 
-  // Conserve rules:
-  // - als je hand te klein is: alleen noodrem (Den Signal) spelen
+  // - als hand te klein is: alleen noodrem spelen
   if (hand.length <= reserve && !urgentDefense) return null;
 
-  // - als je al speelde deze ronde: alleen noodrem (Den Signal) spelen
+  // - als bot deze ronde al speelde: alleen noodrem spelen
   if (alreadyPlayedThisRound && !urgentDefense) return null;
 
-  // If OPS locked: must pass (caller will handle)
-  if (flags.opsLocked) return null;
-
-  // 1) Survival first: Den Signal if (DOG soon) or (DEN_myColor soon) and not yet immune
+  // -------------------------
+  // 1) Survival first: Den Signal
+  // -------------------------
   if (!immune && hasCard(hand, "Den Signal")) {
     if (upcoming.type === "DOG") return { name: "Den Signal" };
     if (upcoming.type === "DEN" && normColor(upcoming.color) === myColor) return { name: "Den Signal" };
   }
 
-  // 2) If danger soon and we are NOT immune: try to push danger away
-  const dangerSoon =
-    upcoming.type === "DOG" || (upcoming.type === "DEN" && normColor(upcoming.color) === myColor);
-  if (dangerSoon && !immune && !flags.lockEvents) {
+  // -------------------------
+  // 2) Danger management: push danger away (track-manip / mask swap)
+  // -------------------------
+  if (dangerSoonDogDen && !immune && !flags.lockEvents) {
     if (hasCard(hand, "Kick Up Dust")) return { name: "Kick Up Dust" };
     if (hasCard(hand, "Pack Tinker")) return { name: "Pack Tinker" };
     if (hasCard(hand, "Mask Swap")) {
@@ -483,19 +488,25 @@ function chooseBotOpsPlay({ game, bot, players }) {
     }
   }
 
-  // 3) Tactical: Hold Still on richest target (slows top scorer)
+  // -------------------------
+  // 3) Tactical: Hold Still op rijkste target
+  // -------------------------
   if (hasCard(hand, "Hold Still")) {
     const targetId = pickRichestTarget(players, p.id);
     if (targetId) return { name: "Hold Still", targetId };
   }
 
-  // 4) Utility: Alpha Call if deck has cards and hand not huge
+  // -------------------------
+  // 4) Utility: Alpha Call (alleen als deck nog heeft + hand niet huge)
+  // -------------------------
   const actionDeckLen = Array.isArray(g.actionDeck) ? g.actionDeck.length : 0;
   if (actionDeckLen > 0 && hasCard(hand, "Alpha Call") && hand.length < 4) {
     return { name: "Alpha Call" };
   }
 
-  // 5) End OPS faster: if many passes already, consider No-Go Zone to lock
+  // -------------------------
+  // 5) End OPS faster: No-Go Zone als veel al gepasst is
+  // -------------------------
   const orderLen = Array.isArray(g.opsTurnOrder) ? g.opsTurnOrder.length : 0;
   const passes = Number(g.opsConsecutivePasses || 0);
   if (orderLen >= 2 && passes >= Math.floor(orderLen * 0.6) && hasCard(hand, "No-Go Zone")) {
