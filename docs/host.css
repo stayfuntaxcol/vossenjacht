@@ -343,10 +343,6 @@
   opacity: 0.95;
 }
 
-/* alleen voor niet-onthulde event-cards op de track */
-.event-state-future {
-  background-image: url("./assets/card_back_event_track.png");
-
 .event-state-current {
   box-shadow: 0 0 0 2px #38bdf8;
 }
