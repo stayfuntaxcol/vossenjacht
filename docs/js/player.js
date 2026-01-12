@@ -48,6 +48,43 @@ let lastMe = null;
 let lastPlayers = [];
 let lastActions = [];
 
+// ===== UI PULSE MEMORY (LOOT/HINT) =====
+const _uiKey = (k) => `VJ_${k}_${gameId || "?"}_${playerId || "?"}`;
+
+let _lootSeenHash = null;
+let _lootCurrentHash = null;
+
+let _hintSeenOpsHash = null;
+let _hintSeenOpsRound = null;
+let _hintCurrentHash = null;
+
+function _safeLSGet(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function _safeLSSet(key, val) {
+  try { localStorage.setItem(key, String(val ?? "")); } catch {}
+}
+
+function _fnv1aHex(str) {
+  const s = String(str ?? "");
+  let h = 0x811c9dc5; // 2166136261
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0; // 16777619
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+(function initUiPulseMemoryOnce() {
+  // run vroeg, maar veilig (localStorage kan geblokkeerd zijn)
+  _lootSeenHash = _safeLSGet(_uiKey("lootSeenHash")) || null;
+  _hintSeenOpsHash = _safeLSGet(_uiKey("hintSeenOpsHash")) || null;
+
+  const r = _safeLSGet(_uiKey("hintSeenOpsRound"));
+  const n = r != null ? Number(r) : NaN;
+  _hintSeenOpsRound = Number.isFinite(n) ? n : null;
+})();
+
 // ===== LOG LISTENER (NA db + gameId) =====
 // Single source of truth: games/{gameId}/log
 // lastActions wordt gevuld met logregels uit phase "ACTIONS" (kind "CHOICE")
@@ -78,13 +115,19 @@ if (gameId) {
         payload: e.payload || null,
         message: e.message || "",
       }));
-  });
+  
+
+    // hint UI kan veranderen door nieuwe logs/actions
+    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
+});
 
   // BONUS: hou spelerscache ook live voor advisor (lastPlayers)
   const playersRef = collection(db, "games", gameId, "players");
   onSnapshot(playersRef, (qs) => {
     lastPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
-  });
+  
+    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
+});
 } else {
   console.warn("[LOG] gameId ontbreekt in URL (?game=...)");
 }
@@ -956,6 +999,148 @@ function updateLootUi(player) {
     playerScoreEl.textContent = label;
   }
 }
+
+// ===== LOOT / HINT BUTTON UI (glow + pulse) =====
+function _setBtnGlow(btn, on) {
+  if (!btn) return;
+  if (on) btn.classList.add("is-glow");
+  else btn.classList.remove("is-glow", "is-pulse");
+}
+
+function _setBtnPulse(btn, on) {
+  if (!btn) return;
+  if (on) btn.classList.add("is-pulse");
+  else btn.classList.remove("is-pulse");
+}
+
+function _computeLootHash(player) {
+  const p = player || {};
+  const stats = calcLootStats(p);
+  const lootLen = Array.isArray(p.loot) ? p.loot.length : 0;
+  return _fnv1aHex(`${stats.eggs}|${stats.hens}|${stats.prize}|${stats.lootBonus}|${stats.score}|${lootLen}`);
+}
+
+function _hasAnyLoot(player) {
+  const p = player || {};
+  const lootLen = Array.isArray(p.loot) ? p.loot.length : 0;
+  const stats = calcLootStats(p);
+  return lootLen > 0 || (stats.score || 0) > 0;
+}
+
+function updateLootButtonState(prevP, newP) {
+  if (!btnLoot) return;
+
+  const hasLoot = _hasAnyLoot(newP);
+  _setBtnGlow(btnLoot, hasLoot);
+
+  if (!hasLoot) {
+    _lootCurrentHash = _computeLootHash(newP);
+    _setBtnPulse(btnLoot, false);
+    return;
+  }
+
+  const prevStats = calcLootStats(prevP || {});
+  const newStats = calcLootStats(newP || {});
+  const gained = (newStats.score || 0) > (prevStats.score || 0);
+
+  _lootCurrentHash = _computeLootHash(newP);
+
+  // Pulse alleen bij "nieuw ontvangen" (score omhoog) én nog niet gezien
+  const unseen = !_lootSeenHash || _lootCurrentHash !== _lootSeenHash;
+  _setBtnPulse(btnLoot, gained && unseen);
+}
+
+function markLootSeen() {
+  if (!_lootCurrentHash) return;
+  _lootSeenHash = _lootCurrentHash;
+  _safeLSSet(_uiKey("lootSeenHash"), _lootSeenHash);
+  _setBtnPulse(btnLoot, false);
+  _setBtnGlow(btnLoot, _hasAnyLoot(currentPlayer));
+}
+
+function _hintHasContent(h) {
+  if (!h) return false;
+  if (typeof h.title === "string" && h.title.trim()) return true;
+  if (Array.isArray(h.bullets) && h.bullets.filter(Boolean).length) return true;
+  return false;
+}
+
+function _hintHash(h) {
+  if (!h) return null;
+  const title = (h.title || "").trim();
+  const bullets = Array.isArray(h.bullets) ? h.bullets.filter(Boolean).join("|") : "";
+  const alts = Array.isArray(h.alternatives) ? h.alternatives.map((a) => (typeof a === "string" ? a : a?.title || "")).filter(Boolean).join("|") : "";
+  return _fnv1aHex(`${title}||${bullets}||${alts}`);
+}
+
+function _computeAdvisorHintSafe() {
+  try {
+    if (typeof getAdvisorHint !== "function") return null;
+    if (!lastGame || !lastMe) return null;
+    return getAdvisorHint({
+      game: lastGame,
+      me: lastMe,
+      players: lastPlayers || [],
+      actions: lastActions || [],
+      profileKey: "BEGINNER_COACH",
+    });
+  } catch {
+    return null;
+  }
+}
+
+function updateHintButtonFromState() {
+  if (!btnHint) return;
+
+  const g = lastGame || currentGame || null;
+  const hint = _computeAdvisorHintSafe();
+
+  // Bright als er (waarschijnlijk) een hint is
+  const hasHint = _hintHasContent(hint) || (!!lastGame && !!lastMe);
+  _setBtnGlow(btnHint, hasHint);
+
+  if (!g || g.phase !== "OPS") {
+    _setBtnPulse(btnHint, false);
+    return;
+  }
+
+  if (!_hintHasContent(hint)) {
+    _setBtnPulse(btnHint, false);
+    return;
+  }
+
+  const round = Number.isFinite(Number(g.round)) ? Number(g.round) : null;
+  _hintCurrentHash = _hintHash(hint);
+
+  const roundIsNew = round != null && _hintSeenOpsRound != null ? round > _hintSeenOpsRound : false;
+  const hashIsNew = !!_hintCurrentHash && (!_hintSeenOpsHash || _hintCurrentHash !== _hintSeenOpsHash);
+
+  _setBtnPulse(btnHint, roundIsNew || hashIsNew);
+}
+
+function markHintSeenIfOps(hintObj, gameObj) {
+  const g = gameObj || lastGame || null;
+  if (!g || g.phase !== "OPS") return;
+
+  const h = hintObj || _computeAdvisorHintSafe();
+  if (!_hintHasContent(h)) return;
+
+  const round = Number.isFinite(Number(g.round)) ? Number(g.round) : null;
+  const hh = _hintHash(h);
+
+  if (hh) {
+    _hintSeenOpsHash = hh;
+    _safeLSSet(_uiKey("hintSeenOpsHash"), _hintSeenOpsHash);
+  }
+  if (round != null) {
+    _hintSeenOpsRound = round;
+    _safeLSSet(_uiKey("hintSeenOpsRound"), String(round));
+  }
+
+  _setBtnPulse(btnHint, false);
+  _setBtnGlow(btnHint, true);
+}
+
 
 // ===== HOST FEEDBACK =====
 
@@ -3226,6 +3411,23 @@ if (typeof globalThis.closeHandModal !== "function") {
 
   bindModalClose(handOverlay, handCloseBtn, closeHand);
 
+
+  // --- Loot modal (IDs uit HTML) ---
+  const lootOverlay = document.getElementById("lootModalOverlay");
+  const lootCloseBtn = document.getElementById("lootModalClose");
+
+  const closeLoot = () => {
+    try {
+      if (typeof closeLootModal === "function") {
+        closeLootModal();
+        return;
+      }
+    } catch {}
+    if (lootOverlay) lootOverlay.classList.add("hidden");
+  };
+
+  bindModalClose(lootOverlay, lootCloseBtn, closeLoot);
+
   // --- ESC sluit overlays ---
   document.addEventListener(
     "keydown",
@@ -3234,6 +3436,7 @@ if (typeof globalThis.closeHandModal !== "function") {
 
       if (leadOverlay && !leadOverlay.classList.contains("hidden")) closeLead();
       if (handOverlay && !handOverlay.classList.contains("hidden")) closeHand();
+      if (lootOverlay && !lootOverlay.classList.contains("hidden")) closeLoot();
     },
     { passive: true }
   );
@@ -3267,6 +3470,8 @@ initAuth(async () => {
     prevGame = newGame;
     lastGame = newGame;
 
+    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
+
     renderGame();
   });
 
@@ -3280,11 +3485,15 @@ initAuth(async () => {
 
     const newPlayer = { id: snap.id, ...snap.data() };
 
+    try { if (typeof updateLootButtonState === "function") updateLootButtonState(prevPlayer, newPlayer); } catch {}
+
     applyHostHooks(currentGame, currentGame, prevPlayer, newPlayer, null);
 
     currentPlayer = newPlayer;
     prevPlayer = newPlayer;
     lastMe = newPlayer;
+
+    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
 
     renderPlayer();
   });
@@ -3303,12 +3512,13 @@ initAuth(async () => {
   // ACTIONS
   if (btnPass) btnPass.addEventListener("click", passAction);
   if (btnHand) btnHand.addEventListener("click", openHandModal);
-  if (btnLoot) btnLoot.addEventListener("click", openLootModal);
+  if (btnLoot) btnLoot.addEventListener("click", () => { openLootModal(); markLootSeen(); });
   if (btnLead) btnLead.addEventListener("click", openLeadCommandCenter);
 
  // HINT (1 try/catch)
 if (btnHint) {
   btnHint.addEventListener("click", () => {
+    try { btnHint.classList.remove("is-pulse"); } catch {}
     console.log("[HINT] clicked", {
       hasGame: !!lastGame,
       hasMe: !!lastMe,
@@ -3332,7 +3542,10 @@ if (btnHint) {
         profileKey: "BEGINNER_COACH",
       });
 
-      console.log("[advisor] hint object:", hint);
+      
+      // UI: stop pulse + mark hint as "seen" (alleen OPS)
+      try { markHintSeenIfOps(hint, lastGame); } catch {}
+console.log("[advisor] hint object:", hint);
       console.log("[advisor] title:", hint?.title);
       console.log("[advisor] bullets:", hint?.bullets);
       console.log("[advisor] alternatives:", hint?.alternatives);
