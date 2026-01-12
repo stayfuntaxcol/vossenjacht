@@ -72,9 +72,6 @@ const leadFoxCard = document.getElementById("leadFoxCard");
 const roosterCard = document.getElementById("roosterCard");
 const beaconCard = document.getElementById("beaconCard");
 const scatterCard = document.getElementById("scatterCard");
-const fullMoonCard = document.getElementById("fullMoonCard");
-const optionACard = document.getElementById("optionACard");
-const optionBCard = document.getElementById("optionBCard");
 const sackCard = document.getElementById("sackCard");
 const lootDeckCard = document.getElementById("lootDeckCard");
 const actionDeckCard = document.getElementById("actionDeckCard");
@@ -107,16 +104,6 @@ const eventPosterTitle = document.getElementById("eventPosterTitle");
 const eventPosterImage = document.getElementById("eventPosterImage");
 const eventPosterText = document.getElementById("eventPosterText");
 const eventPosterCloseBtn = document.getElementById("eventPosterCloseBtn");
-const eventPosterPrevBtn = document.getElementById("eventPosterPrevBtn");
-const eventPosterNextBtn = document.getElementById("eventPosterNextBtn");
-
-// Player poster overlay / controls
-const playerPosterOverlay = document.getElementById("playerPosterOverlay");
-const playerPosterTitle = document.getElementById("playerPosterTitle");
-const playerPosterMount = document.getElementById("playerPosterMount");
-const playerPosterCloseBtn = document.getElementById("playerPosterCloseBtn");
-const playerPosterPrevBtn = document.getElementById("playerPosterPrevBtn");
-const playerPosterNextBtn = document.getElementById("playerPosterNextBtn");
 
 // Laatste event dat we fullscreen hebben getoond (UI-key incl. revealed state)
 let lastPosterUiKey = null;
@@ -128,21 +115,13 @@ if (endBtn) endBtn.style.display = "none";
 // NEW: PhaseGate + Pause/AutoAdvance + RevealCountdown config
 // ===============================
 const REVEAL_COUNTDOWN_MS = 10_000; // 10 sec
+const EVENT_TRACK_BACK = "./assets/card_back_event_track.png";
 const AUTO_ADVANCE_MS = 5_000; // 5 sec
-
-// UI assets
-const CARD_BACK_UI = "./assets/card_back_logo.png";
-const CARD_PLACEHOLDER_UI = "./assets/card_placeholder.png";
 
 let autoAdvanceTimer = null;
 let autoAdvanceKey = null;
 let revealCountdownTimer = null;
 let revealCountdownEventId = null;
-
-// Carousel state
-let eventPosterIndex = null;
-let playerPosterIndex = null;
-let playerPosterOrder = [];
 
 // UI elements that may not exist in HTML -> we inject safely
 function ensureAfter(el, newEl) {
@@ -546,108 +525,6 @@ function stopRevealCountdown() {
   revealCountdownTimer = null;
   revealCountdownEventId = null;
 }
-
-// ---- Carousel helpers (Event poster) ----
-function clampInt(n, min, max) {
-  const v = Number.isFinite(Number(n)) ? Number(n) : min;
-  return Math.max(min, Math.min(max, v));
-}
-
-function setPosterNavDisabled(btn, disabled) {
-  if (!btn) return;
-  btn.disabled = !!disabled;
-  btn.classList.toggle("is-disabled", !!disabled);
-}
-
-function showEventPosterNav(show) {
-  const c = document.getElementById("eventPosterCarousel");
-  if (c) c.style.display = show ? "" : "none";
-  if (eventPosterPrevBtn) eventPosterPrevBtn.style.display = show ? "" : "none";
-  if (eventPosterNextBtn) eventPosterNextBtn.style.display = show ? "" : "none";
-}
-
-function renderEventPosterByIndex(idx) {
-  if (!eventPosterOverlay) return;
-
-  const g = latestGame || {};
-  const track = Array.isArray(g.eventTrack) ? g.eventTrack : [];
-  const revealed = Array.isArray(g.eventRevealed) ? g.eventRevealed : [];
-
-  if (!track.length) return;
-
-  const i = clampInt(idx, 0, track.length - 1);
-  eventPosterIndex = i;
-
-  // nav state
-  showEventPosterNav(true);
-  setPosterNavDisabled(eventPosterPrevBtn, i <= 0);
-  setPosterNavDisabled(eventPosterNextBtn, i >= track.length - 1);
-
-  // decision wall weg bij browse
-  hideDecisionWall();
-
-  const eventId = track[i];
-
-  // als niet onthuld: toon back + basic info
-  const isRevealed =
-    !!revealed[i] ||
-    (g.phase === "REVEAL" &&
-      g.currentEventId === eventId &&
-      g.pendingReveal &&
-      g.pendingReveal.revealed === true);
-
-  if (!isRevealed) {
-    if (eventPosterTitle) eventPosterTitle.textContent = `Verborgen Event (${i + 1}/${track.length})`;
-    if (eventPosterText) eventPosterText.textContent = "Nog niet onthuld.";
-    if (eventPosterImage) {
-      eventPosterImage.src = CARD_BACK_UI;
-      eventPosterImage.style.display = "";
-    }
-  } else {
-    const ev = getEventById(eventId);
-    if (eventPosterTitle) eventPosterTitle.textContent = ev?.title || "";
-    if (eventPosterText) eventPosterText.textContent = ev?.text || "";
-    if (eventPosterImage) {
-      eventPosterImage.src = ev?.imagePoster || ev?.imageFront || CARD_BACK_UI;
-      eventPosterImage.style.display = "";
-    }
-  }
-
-  // reveal button uit bij browse
-  const box = eventPosterOverlay.querySelector(".overlay-box");
-  const btn = box ? box.querySelector("#eventRevealNowBtn") : null;
-  if (btn) btn.style.display = "none";
-}
-
-function stepEventPoster(dir) {
-  const g = latestGame || {};
-  const track = Array.isArray(g.eventTrack) ? g.eventTrack : [];
-  if (!track.length) return;
-
-  // tijdens countdown geen browse
-  const pr = g.pendingReveal;
-  if (g.phase === "REVEAL" && pr && pr.eventId === g.currentEventId && pr.revealed !== true) return;
-
-  const cur = Number.isFinite(Number(eventPosterIndex)) ? Number(eventPosterIndex) : 0;
-  const next = clampInt(cur + dir, 0, track.length - 1);
-  if (next === cur) return;
-  renderEventPosterByIndex(next);
-  eventPosterOverlay.classList.remove("hidden");
-}
-
-if (eventPosterPrevBtn) {
-  eventPosterPrevBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    stepEventPoster(-1);
-  });
-}
-if (eventPosterNextBtn) {
-  eventPosterNextBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    stepEventPoster(1);
-  });
-}
-
 // ===============================
 // REVEAL: Decision Wall (nieuw)
 // ===============================
@@ -823,7 +700,7 @@ function renderRevealedEventUi(eventId) {
   if (eventPosterTitle) eventPosterTitle.textContent = ev.title || "";
   if (eventPosterText) eventPosterText.textContent = ev.text || "";
   if (eventPosterImage) {
-    const src = ev.imagePoster || ev.imageFront || CARD_BACK_UI;
+    const src = ev.imagePoster || ev.imageFront || CARD_BACK;
     eventPosterImage.src = src;
     eventPosterImage.style.display = "";
   }
@@ -836,18 +713,11 @@ function renderRevealedEventUi(eventId) {
 function openEventPoster(eventId) {
   if (!eventPosterOverlay || !eventId) return;
 
-  const g = latestGame || {};
-  const track = Array.isArray(g.eventTrack) ? g.eventTrack : [];
-  const idx = track.indexOf(eventId);
-  eventPosterIndex = idx >= 0 ? idx : 0;
-
   // suspense-mode: als pendingReveal matcht en nog niet revealed => countdown UI
+  const g = latestGame;
   const pr = g?.pendingReveal;
 
   if (g?.phase === "REVEAL" && pr && pr.eventId === eventId && pr.revealed !== true) {
-    // tijdens countdown geen carousel
-    showEventPosterNav(false);
-
     renderRevealCountdownUi(pr);
 
     eventPosterOverlay.classList.remove("hidden");
@@ -881,9 +751,8 @@ function openEventPoster(eventId) {
     return;
   }
 
-  // normaal: toon event poster (carousel)
-  showEventPosterNav(true);
-  renderEventPosterByIndex(eventPosterIndex);
+  // normaal: toon onthulde event
+  renderRevealedEventUi(eventId);
   eventPosterOverlay.classList.remove("hidden");
 }
 
@@ -901,102 +770,6 @@ if (eventPosterOverlay) {
     if (e.target === eventPosterOverlay) closeEventPoster();
   });
 }
-
-// ===============================
-// Player poster (click to zoom + carousel)
-// ===============================
-function closePlayerPoster() {
-  if (!playerPosterOverlay) return;
-  playerPosterOverlay.classList.add("hidden");
-}
-
-if (playerPosterCloseBtn && playerPosterOverlay) {
-  playerPosterCloseBtn.addEventListener("click", closePlayerPoster);
-}
-if (playerPosterOverlay) {
-  playerPosterOverlay.addEventListener("click", (e) => {
-    if (e.target === playerPosterOverlay) closePlayerPoster();
-  });
-}
-
-function renderPlayerPosterByIndex(idx) {
-  if (!playerPosterOverlay || !playerPosterMount) return;
-
-  const order =
-    Array.isArray(playerPosterOrder) && playerPosterOrder.length
-      ? playerPosterOrder
-      : Array.isArray(latestPlayers)
-        ? latestPlayers.map((p) => p.id)
-        : [];
-
-  if (!order.length) return;
-
-  const i = clampInt(idx, 0, order.length - 1);
-  playerPosterIndex = i;
-
-  const pid = order[i];
-  const p = Array.isArray(latestPlayers) ? latestPlayers.find((x) => x?.id === pid) : null;
-
-  if (playerPosterTitle) playerPosterTitle.textContent = p?.name || "Player";
-
-  playerPosterMount.innerHTML = "";
-
-  if (p) {
-    const isLead = currentLeadFoxId && p.id === currentLeadFoxId;
-    const card = renderPlayerSlotCard(p, { size: "large", footer: "", isLead });
-    if (card) playerPosterMount.appendChild(card);
-  }
-
-  setPosterNavDisabled(playerPosterPrevBtn, i <= 0);
-  setPosterNavDisabled(playerPosterNextBtn, i >= order.length - 1);
-
-  playerPosterOverlay.classList.remove("hidden");
-}
-
-function stepPlayerPoster(dir) {
-  const order =
-    Array.isArray(playerPosterOrder) && playerPosterOrder.length
-      ? playerPosterOrder
-      : Array.isArray(latestPlayers)
-        ? latestPlayers.map((p) => p.id)
-        : [];
-
-  if (!order.length) return;
-
-  const cur = Number.isFinite(Number(playerPosterIndex)) ? Number(playerPosterIndex) : 0;
-  const next = clampInt(cur + dir, 0, order.length - 1);
-  if (next === cur) return;
-
-  renderPlayerPosterByIndex(next);
-}
-
-function openPlayerPoster(playerId) {
-  const order =
-    Array.isArray(playerPosterOrder) && playerPosterOrder.length
-      ? playerPosterOrder
-      : Array.isArray(latestPlayers)
-        ? latestPlayers.map((p) => p.id)
-        : [];
-
-  if (!order.length) return;
-
-  const idx = order.indexOf(playerId);
-  renderPlayerPosterByIndex(idx >= 0 ? idx : 0);
-}
-
-if (playerPosterPrevBtn) {
-  playerPosterPrevBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    stepPlayerPoster(-1);
-  });
-}
-if (playerPosterNextBtn) {
-  playerPosterNextBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    stepPlayerPoster(1);
-  });
-}
-
 
 // NEW: Finalize pending reveal safely (transaction) + resolve after reveal
 async function finalizePendingRevealIfDue(force = false) {
@@ -1248,7 +1021,7 @@ function renderEventTrack(game) {
     const slot = document.createElement("div");
     slot.classList.add("event-slot", `event-state-${state}`);
 
-    let imgUrl = CARD_BACK_UI;
+    let imgUrl = EVENT_TRACK_BACK;
     if (isRevealed && ev && ev.imageFront) imgUrl = ev.imageFront;
     slot.style.background = `url(${imgUrl}) center / cover no-repeat`;
 
@@ -1761,9 +1534,6 @@ function renderPlayerZones() {
     return ao - bo;
   });
 
-  // poster carousel order (join order)
-  playerPosterOrder = ordered.map((p) => p.id);
-
   const activeOrdered = ordered.filter(isInYardLocal);
   const baseList = activeOrdered.length ? activeOrdered : [];
 
@@ -1798,13 +1568,6 @@ function renderPlayerZones() {
 
     const card = renderPlayerSlotCard(p, { size: "medium", footer: footerBase, isLead });
     if (!card) return;
-
-    // click => grote player poster
-    card.classList.add("player-card-clickable");
-    card.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openPlayerPoster(p.id);
-    });
 
     if (zoneType === "yard") yardZone.appendChild(card);
     else if (zoneType === "dash") dashZone.appendChild(card);
