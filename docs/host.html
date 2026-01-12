@@ -57,11 +57,11 @@
               </div>
 
               <div class="top-center">
-                <div id="fullMoonCard" class="board-card card-status"></div>
-                <div id="beaconCard" class="board-card card-status"></div>
-                <div id="scatterCard" class="board-card card-status"></div>
-                <div id="optionACard" class="board-card card-status"></div>
-                <div id="optionBCard" class="board-card card-status"></div>
+                <div id="fullMoonCard" class="board-card card-status slot-muted"></div>
+                <div id="beaconCard" class="board-card card-status slot-muted"></div>
+                <div id="scatterCard" class="board-card card-status slot-muted"></div>
+                <div id="optionACard" class="board-card card-status slot-muted"></div>
+                <div id="optionBCard" class="board-card card-status slot-muted"></div>
               </div>
 
               <div class="top-right">
@@ -152,8 +152,32 @@
           </button>
         </div>
         <div class="overlay-content">
-          <img id="eventPosterImage" alt="" class="event-poster-img" />
+          <div class="poster-carousel" id="eventPosterCarousel">
+            <button id="eventPosterPrevBtn" class="poster-nav poster-nav-left" aria-label="Vorige event">BACK</button>
+            <img id="eventPosterImage" alt="" class="event-poster-img" />
+            <button id="eventPosterNextBtn" class="poster-nav poster-nav-right" aria-label="Volgende event">NEXT</button>
+          </div>
           <p id="eventPosterText"></p>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- PLAYER POSTER OVERLAY (grote player card) -->
+    <div id="playerPosterOverlay" class="overlay hidden">
+      <div class="overlay-box overlay-player">
+        <div class="overlay-header">
+          <h2 id="playerPosterTitle"></h2>
+          <button id="playerPosterCloseBtn" class="btn btn-secondary">
+            Sluiten
+          </button>
+        </div>
+        <div class="overlay-content">
+          <div class="poster-carousel" id="playerPosterCarousel">
+            <button id="playerPosterPrevBtn" class="poster-nav poster-nav-left" aria-label="Vorige speler">BACK</button>
+            <div id="playerPosterMount" class="player-poster-mount"></div>
+            <button id="playerPosterNextBtn" class="poster-nav poster-nav-right" aria-label="Volgende speler">NEXT</button>
+          </div>
         </div>
       </div>
     </div>
