@@ -9,8 +9,6 @@ import { resolveAfterReveal } from "./engine.js";
 import { renderPlayerSlotCard } from "./cardRenderer.js";
 import { addBotToCurrentGame, startBotRunner } from "./bots/botRunner.js";
 import { addLog } from "./log.js";
-import { CARD_BACK, getActionDefByName } from "./cards.js";
-
 
 import {
   getFirestore,
@@ -61,9 +59,6 @@ const nextPhaseBtn = document.getElementById("nextPhaseBtn");
 const playAsHostBtn = document.getElementById("playAsHostBtn");
 const newRaidBtn = document.getElementById("newRaidBtn");
 const addBotBtn = document.getElementById("addBotBtn");
-const actionDeckCard = document.getElementById("actionDeckCard");
-const actionDiscardCard = document.getElementById("actionDiscardCard");
-
 
 // Board / zones
 const eventTrackDiv = document.getElementById("eventTrack");
@@ -1349,13 +1344,7 @@ function renderStatusCards(game) {
       <div class="card-value">${actionDeck.length}</div>
     `;
   }
-  if (actionDiscardCard) {
-  const discard = Array.isArray(game.actionDiscardPile) ? game.actionDiscardPile : [];
-  actionDiscardCard.innerHTML = `
-    <div class="card-title">Discard Pile</div>
-    <div class="card-value">${discard.length}</div>
-  `;
- }
+  if (actionDiscardCard) actionDiscardCard.innerHTML = "";
 }
 
 // ====================================
@@ -1370,7 +1359,10 @@ function renderActionDeckAndDiscard(game) {
 
   if (!actionDiscardCard) return;
 
-  const discard = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
+const discard =
+  Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile :
+  Array.isArray(game?.actionDiscard) ? game.actionDiscard :
+  [];
   const top = discard.length ? discard[discard.length - 1] : null;
 
   if (!top) {
