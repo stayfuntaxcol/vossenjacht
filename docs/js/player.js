@@ -2861,7 +2861,7 @@ async function playActionCard(index) {
         case "Scent Check":      executed = await playScentCheck(game, player); break;
         case "Follow the Tail":  executed = await playFollowTail(game, player); break;
         case "Alpha Call":       executed = await playAlphaCall(game, player); break;
-        case "Pack Tinker":      executed = await playPackTinker(game, player); break;
+        case "Pack Tinker":      executed = await playPackTinker(game, player, index); break;
         case "Mask Swap":        executed = await playMaskSwap(game, player); break;
         default:
           alert("Deze kaart is nog niet volledig geïmplementeerd in de online versie.");
@@ -2879,8 +2879,21 @@ async function playActionCard(index) {
     }
 
     // ---- consume card ----
-    hand.splice(index, 1);
-    await updateDoc(playerRef, { hand });
+// Pack Tinker wijzigt je hand via engine.js, dus eerst verse hand ophalen
+let handToConsume = hand;
+
+if (cardName === "Pack Tinker") {
+  try {
+    const fresh = await getDoc(playerRef);
+    if (fresh.exists()) {
+      const h2 = fresh.data()?.hand;
+      if (Array.isArray(h2)) handToConsume = [...h2];
+    }
+  } catch {}
+}
+
+handToConsume.splice(index, 1);
+await updateDoc(playerRef, { hand: handToConsume });
 
     // ---- log (fail-safe) ----
     await safeLogMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
@@ -2892,16 +2905,28 @@ async function playActionCard(index) {
       opsConsecutivePasses: 0,
     };
 
-    // optional: discard pile (zelfde write)
-    if (typeof arrayUnion === "function") {
-      gUpdate.actionDiscard = arrayUnion({
-        name: cardName,
-        by: (typeof playerId !== "undefined" ? playerId : null),
-        round: Number(game?.round ?? 0),
-        at: Date.now(),
-      });
-    }
+  // optional: discard pile (zelfde write)
+if (typeof arrayUnion === "function") {
+  const meta = {
+    by: (typeof playerId !== "undefined" ? playerId : null),
+    round: Number(game?.round ?? 0),
+    at: Date.now(),
+  };
 
+  // legacy/monitoring (laat bestaan)
+  gUpdate.actionDiscard = arrayUnion({
+    name: cardName,
+    ...meta,
+  });
+
+  // ✅ echte aflegstapel voor Pack Tinker (met uid)
+  const uid = `${meta.at}_${Math.random().toString(16).slice(2)}`;
+  gUpdate.actionDiscardPile = arrayUnion({
+    uid,
+    name: cardName,
+    ...meta,
+  });
+}
     await updateDoc(gameRef, gUpdate);
 
     try { setHost?.("success", `Kaart gespeeld: ${cardName}`); } catch {}
@@ -3243,56 +3268,57 @@ async function playAlphaCall(game, player) {
   return true;
 }
 
-async function playPackTinker(game, player) {
-  const flags = mergeRoundFlags(game);
-  if (flags.lockEvents) {
-    alert("Burrow Beacon is actief – de Event Track is gelocked en kan niet meer veranderen.");
+async function playPackTinker(game, player, playedIndex) {
+  // ✅ Nieuwe regels: wissel 1 kaart uit hand met 1 kaart uit aflegstapel
+  const discard = Array.isArray(game?.actionDiscardPile) ? [...game.actionDiscardPile] : [];
+  if (!discard.length) {
+    alert("Aflegstapel is leeg. Pack Tinker heeft nu geen effect.");
     return false;
   }
 
-  const track = Array.isArray(game.eventTrack) ? [...game.eventTrack] : [];
-  if (!track.length) {
-    alert("Geen Event Track beschikbaar.");
+  const handRaw = Array.isArray(player?.hand) ? [...player.hand] : [];
+  const handOptions = handRaw
+    .map((c, idx) => ({ idx, name: getActionCardName(c) }))
+    .filter((x) => x.name && x.idx !== playedIndex); // speel-kaart zelf niet kiezen
+
+  if (!handOptions.length) {
+    alert("Je hebt geen andere Action Card in je hand om te wisselen.");
     return false;
   }
 
-  const eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
-  const maxPos = track.length;
+  const handLines = handOptions.map((h, i) => `${i + 1}. ${h.name}`).join("\n");
+  const giveStr = prompt("Pack Tinker – kies 1 kaart uit je hand om te ruilen:\n" + handLines);
+  if (!giveStr) return false;
 
-  const p1Str = prompt(
-    `Pack Tinker – eerste eventpositie (1–${maxPos}). Let op: posities 1–${eventIndex} zijn al onthuld en gelocked.`
-  );
-  if (!p1Str) return false;
+  const gi = parseInt(giveStr, 10) - 1;
+  if (Number.isNaN(gi) || gi < 0 || gi >= handOptions.length) {
+    alert("Ongeldige keuze (hand).");
+    return false;
+  }
+  const giveName = handOptions[gi].name;
 
-  const p2Str = prompt(`Pack Tinker – tweede eventpositie (1–${maxPos}). Kies opnieuw een kaart die nog gesloten ligt.`);
-  if (!p2Str) return false;
+  const discLines = discard
+    .map((d, i) => `${i + 1}. ${getActionCardName(d?.name || d)}`)
+    .join("\n");
+  const takeStr = prompt("Pack Tinker – kies 1 kaart uit de Aflegstapel:\n" + discLines);
+  if (!takeStr) return false;
 
-  const pos1 = parseInt(p1Str, 10);
-  const pos2 = parseInt(p2Str, 10);
-
-  if (
-    Number.isNaN(pos1) ||
-    Number.isNaN(pos2) ||
-    pos1 < 1 ||
-    pos1 > maxPos ||
-    pos2 < 1 ||
-    pos2 > maxPos ||
-    pos1 === pos2
-  ) {
-    alert("Ongeldige posities voor Pack Tinker.");
+  const ti = parseInt(takeStr, 10) - 1;
+  if (Number.isNaN(ti) || ti < 0 || ti >= discard.length) {
+    alert("Ongeldige keuze (aflegstapel).");
     return false;
   }
 
-  const i1 = pos1 - 1;
-  const i2 = pos2 - 1;
+  const takeUid = discard[ti]?.uid;
+  const takeName = getActionCardName(discard[ti]?.name || discard[ti]);
 
-  if (i1 < eventIndex || i2 < eventIndex) {
-    alert("Je kunt geen Event kaarten verschuiven die al zijn onthuld. Kies twee kaarten die nog gesloten liggen.");
+  if (!takeUid || !takeName) {
+    alert("Aflegstapel-item mist uid/name. Start even een nieuwe raid na deploy.");
     return false;
   }
 
-  await applyPackTinker(gameId, i1, i2);
-  setActionFeedback(`Pack Tinker: je hebt toekomstige events op posities ${pos1} en ${pos2} gewisseld.`);
+  await applyPackTinker(gameId, playerId, giveName, takeUid);
+  setActionFeedback?.(`Pack Tinker: "${giveName}" gewisseld met "${takeName}" uit de aflegstapel.`);
   return true;
 }
 
