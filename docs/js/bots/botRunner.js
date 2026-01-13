@@ -3,7 +3,7 @@
 
 import { getEventFacts, rankActions, scoreActionFacts } from "./aiKit.js";
 import { getActionDefByName } from "../cards.js";
-import { rankActions, presetFromDenColor } from "./botHeuristics.js";
+import { presetFromDenColor } from "./botHeuristics.js";
 
 const presetKey = presetFromDenColor(bot.denColor);
 
