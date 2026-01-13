@@ -270,20 +270,48 @@ export async function applyKickUpDust(gameId) {
 async function scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, reason) {
   const round = game.round || 0;
 
+  // Loot Sack eindscore:
+  // - tel punten van alle kaarten die nog in de Sack zitten
+  // - verdeel die punten gelijk over alle vossen die veilig geDASH't zijn (p.dashed === true) en niet gepakt zijn
+  const sackCards = Array.isArray(sack) ? sack : [];
+  const totalSackPoints = sackCards.reduce((sum, c) => sum + (typeof c?.v === "number" ? c.v : 0), 0);
+
+  const eligibleDashers = [...players]
+    .filter((p) => p?.dashed === true && p?.inYard !== false)
+    .sort((a, b) => {
+      const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+      const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
+      return ao - bo;
+    });
+
+  const sackBonusById = new Map();
+  if (eligibleDashers.length && totalSackPoints > 0) {
+    const base = Math.floor(totalSackPoints / eligibleDashers.length);
+    const remainder = totalSackPoints % eligibleDashers.length;
+
+    eligibleDashers.forEach((p, i) => {
+      const extra = i < remainder ? 1 : 0;
+      sackBonusById.set(p.id, base + extra);
+    });
+  }
+
   let bestPoints = -Infinity;
   let winners = [];
 
   for (const p of players) {
     const { eggs, hens, prize, points } = calcLootStats(p.loot);
+    const sackBonus = sackBonusById.get(p.id) || 0;
+
     p.eggs = eggs;
     p.hens = hens;
     p.prize = prize;
-    p.score = points;
+    p.sackBonus = sackBonus;
+    p.score = points + sackBonus;
 
-    if (points > bestPoints) {
-      bestPoints = points;
+    if (p.score > bestPoints) {
+      bestPoints = p.score;
       winners = [p];
-    } else if (points === bestPoints) {
+    } else if (p.score === bestPoints) {
       winners.push(p);
     }
   }
@@ -292,19 +320,41 @@ async function scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack
 
   const sorted = [...players].sort((a, b) => (b.score || 0) - (a.score || 0));
   const summary = sorted
-    .map((p, idx) => `${idx + 1}. ${p.name || "Vos"} – ${p.score || 0} punten (P:${p.prize || 0} H:${p.hens || 0} E:${p.eggs || 0})`)
+    .map((p, idx) => {
+      const baseLine = `${idx + 1}. ${p.name || "Vos"} – ${p.score || 0} punten (P:${p.prize || 0} H:${p.hens || 0} E:${p.eggs || 0})`;
+      const sb = typeof p.sackBonus === "number" && p.sackBonus > 0 ? ` Sack:+${p.sackBonus}` : "";
+      return baseLine + sb;
+    })
     .join(" | ");
 
   const winnerNames = winners.map((w) => w.name || "Vos").join(", ");
+
+  let sackInfo = "";
+  if (totalSackPoints > 0) {
+    if (!eligibleDashers.length) {
+      sackInfo = ` Loot Sack: ${totalSackPoints} punten, maar niemand heeft veilig geDASH't.`;
+    } else {
+      const base = Math.floor(totalSackPoints / eligibleDashers.length);
+      const remainder = totalSackPoints % eligibleDashers.length;
+      sackInfo = ` Loot Sack: ${totalSackPoints} punten → ${eligibleDashers.length} Dasher(s): +${base} p.p.${remainder ? ` (+1 voor ${remainder} vos(sen))` : ""}.`;
+    }
+  }
 
   await addLog(gameId, {
     round,
     phase: "END",
     kind: "SCORE",
-    message: `Raid eindigt (${reason}). Winnaar(s): ${winnerNames}. Stand: ${summary}`,
+    message: `Raid eindigt (${reason}).${sackInfo} Winnaar(s): ${winnerNames}. Stand: ${summary}`,
   });
 
-  await updateDoc(gameRef, { status: "finished", phase: "END", lootDeck, sack });
+  await updateDoc(gameRef, {
+    status: "finished",
+    phase: "END",
+    lootDeck,
+    sack,
+    raidEndedByRooster: !!game.raidEndedByRooster,
+  });
+
   await saveLeaderboardForGame(gameId);
 }
 
@@ -318,40 +368,22 @@ async function endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, 
       return ao - bo;
     });
 
-  if (dashers.length && sack.length) {
-    let idx = 0;
-    let dir = 1;
-    while (sack.length) {
-      const card = sack.pop();
-      const fox = dashers[idx];
-      fox.loot = fox.loot || [];
-      fox.loot.push(card);
-
-      idx += dir;
-      if (idx >= dashers.length) {
-        dir = -1;
-        idx = dashers.length - 1;
-      } else if (idx < 0) {
-        dir = 1;
-        idx = 0;
-      }
-    }
-
-    await addLog(gameId, {
-      round,
-      phase: "REVEAL",
-      kind: "EVENT",
-      message: "Dashers verdelen de Sack na de laatste Rooster Crow.",
-    });
-  }
-
+  // markeer Dashers als "veilig weg" (scoren wel, maar Sack wordt niet als kaarten verdeeld)
   for (const p of players) {
     if (isInYardForEvents(p) && p.decision === "DASH") p.dashed = true;
     p.decision = null;
   }
 
-  sack = [];
   game.raidEndedByRooster = true;
+
+  await addLog(gameId, {
+    round,
+    phase: "REVEAL",
+    kind: "EVENT",
+    message: dashers.length
+      ? "Derde Rooster Crow: raid eindigt. Loot Sack telt als punten-bonus en wordt verdeeld onder de Dashers bij de eindscore."
+      : "Derde Rooster Crow: raid eindigt. Geen Dashers → Loot Sack levert geen bonus op.",
+  });
 
   await scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, "Rooster Crow limiet bereikt");
 }
@@ -790,41 +822,15 @@ export async function resolveAfterReveal(gameId) {
   if (alive.length === 0) {
     const dashersSurviving = players.filter((p) => p.dashed && p.inYard !== false);
 
-    if (dashersSurviving.length && sack.length) {
-      sack = shuffleArray(sack);
+   if (dashersSurviving.length && sack.length) {
+  await addLog(gameId, {
+    round,
+    phase: "REVEAL",
+    kind: "EVENT",
+    message:
+      "De laatste vos is uit de Yard – Loot Sack punten worden verdeeld onder de Dashers bij de eindscore.",
+  });
 
-      const orderedAll = [...players].sort((a, b) => {
-        const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
-        const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
-        return ao - bo;
-      });
-
-      const survivorIds = new Set(dashersSurviving.map((p) => p.id));
-      const survivorsOrdered = orderedAll.filter((p) => survivorIds.has(p.id));
-
-      let startIdx = 0;
-      if (typeof game.leadIndex === "number") {
-        const leadCandidate = orderedAll[game.leadIndex] || null;
-        if (leadCandidate && survivorIds.has(leadCandidate.id)) {
-          const idxInSurvivors = survivorsOrdered.findIndex((p) => p.id === leadCandidate.id);
-          if (idxInSurvivors >= 0) startIdx = idxInSurvivors;
-        }
-      }
-
-      let idx = startIdx;
-      while (sack.length) {
-        const fox = survivorsOrdered[idx];
-        fox.loot = fox.loot || [];
-        fox.loot.push(sack.pop());
-        idx = (idx + 1) % survivorsOrdered.length;
-      }
-
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        message: "De laatste vos is uit de Yard – de overgebleven dashers verdelen de Sack.",
-      });
     } else {
       await addLog(gameId, {
         round,
