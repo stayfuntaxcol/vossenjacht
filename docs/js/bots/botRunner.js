@@ -1,3 +1,4 @@
+
 // js/bots/botRunner.js
 // Autonomous bots for VOSSENJACHT (smart OPS flow + threat-aware decisions)
 
@@ -86,15 +87,17 @@ function handToActionIds(hand) {
 // 0..100 (grof, maar werkt goed)
 function computeHandStrength({ game, bot }) {
   const ids = handToActionIds(bot?.hand);
+  const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
+  const presetKey = presetFromDenColor(denColor);
   if (!ids.length) return { score: 0, ids: [], top: null };
 
   // top-2 kaarten tellen het zwaarst
-  const ranked = rankActions(ids);
+  const ranked = rankActions(ids, { presetKey, denColor, game, me: bot });
   const topIds = ranked.slice(0, 2).map((x) => x.id);
 
   let raw = 0;
   for (const id of topIds) {
-    const s = scoreActionFacts(id);
+    const s = scoreActionFacts(id, { presetKey, denColor, game, me: bot });
     if (!s) continue;
     raw +=
       (s.controlScore || 0) +
@@ -236,7 +239,71 @@ function trackProgress01(game) {
   return Math.max(0, Math.min(1, idx / denom)); // 0..1
 }
 
-function pickDecisionLootMaximizer({ g, p, latestPlayers }) {
+// --- deterministic selection helpers (prevents bot herding on congestion events) ---
+function stableHash32(str) {
+  // FNV-1a 32-bit
+  let h = 2166136261;
+  const s = String(str || "");
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function hiddenNestDashTargetTotal(game, eligibleCount) {
+  const prog = trackProgress01(game); // 0..1
+  if (eligibleCount <= 2) return 1;
+  // early track: usually better to keep tempo; later: 2 dashers is sweet spot
+  return prog < 0.45 ? 1 : 2;
+}
+
+function pickHiddenNestDashSet({ game, gameId, players }) {
+  const list = Array.isArray(players) ? players : [];
+
+  const eligibleAll = list.filter((x) => isInYard(x));
+  const eligibleUndecided = eligibleAll.filter((x) => !x?.decision);
+
+  const alreadyDash = eligibleAll.filter((x) => x?.decision === "DASH");
+  const dashSet = new Set(alreadyDash.map((x) => x.id));
+
+  const targetTotal = hiddenNestDashTargetTotal(game, eligibleAll.length);
+
+  // if already overcrowded (humans/bots), no more slots
+  const remainingSlots = Math.max(0, targetTotal - dashSet.size);
+  if (remainingSlots <= 0) {
+    return { dashSet, targetTotal, remainingSlots };
+  }
+
+  // Color bias: determines *who* gets the limited dash slots (not how many).
+  // Negative bias => more likely to be selected as dasher.
+  const biasByPreset = {
+    RED: -0.15,
+    YELLOW: -0.08,
+    BLUE: -0.05,
+    GREEN: 0.05,
+  };
+
+  const seedBase = `${String(gameId || "")}|${Number(game?.round || 0)}|${Number(game?.eventIndex || 0)}|HIDDEN_NEST`;
+
+  const ranked = eligibleUndecided
+    .map((pl) => {
+      const den = normColor(pl?.color || pl?.den || pl?.denColor);
+      const preset = presetFromDenColor(den);
+      const u = stableHash32(`${seedBase}|${pl.id}`) / 4294967296; // 0..1
+      const bias = biasByPreset[preset] ?? 0;
+      return { id: pl.id, key: u + bias, preset, den };
+    })
+    .sort((a, b) => a.key - b.key);
+
+  for (let i = 0; i < Math.min(remainingSlots, ranked.length); i++) {
+    dashSet.add(ranked[i].id);
+  }
+
+  return { dashSet, targetTotal, remainingSlots };
+}
+
+function pickDecisionLootMaximizer({ g, p, latestPlayers, gameId }) {
   const myColor = String(p?.color || "").trim().toUpperCase();
   const flags = fillFlags(g?.flagsRound);
   const immune = !!flags.denImmune?.[myColor];
@@ -259,7 +326,18 @@ function pickDecisionLootMaximizer({ g, p, latestPlayers }) {
   const sackShareIfDash = expectedSackShareNow({ game: g, players: latestPlayers || [] });
   const caughtLoss = lootPts;
 
-  const options = ["LURK", "DASH", "BURROW"].filter((d) => d !== "BURROW" || !p.burrowUsed);
+  let options = ["LURK", "DASH", "BURROW"].filter((d) => d !== "BURROW" || !p.burrowUsed);
+
+  // Anti-herding coordination for congestion events
+  if (String(nextEvent0) === "HIDDEN_NEST") {
+    const picked = pickHiddenNestDashSet({ game: g, gameId, players: latestPlayers || [] });
+    const dashSet = picked?.dashSet || null;
+
+    // If you are not selected for one of the limited DASH slots, remove DASH from options.
+    if (dashSet && !dashSet.has(p.id)) {
+      options = options.filter((d) => d !== "DASH");
+    }
+  }
 
   const scored = options.map((decision) => {
     const surviveP = survivalProbNextEvent({
@@ -407,7 +485,19 @@ function pickBestActionFromHand({ game, bot, players }) {
   const ids = entries.map((x) => x.def.id);
   if (!ids.length) return null;
 
-  const ranked = rankActions(ids); // hoogste waarde eerst
+  const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
+   const ids = entries.map((x) => x.def.id);
+  if (!ids.length) return null;
+
+  const presetKey = presetFromDenColor(bot?.denColor);
+
+  const ranked = rankActions(ids, {
+    presetKey,
+    denColor: bot?.denColor,
+    game,
+    me: bot,
+  });// hoogste waarde eerst
+
 
   for (const r of ranked) {
     const id = r.id;
@@ -698,9 +788,6 @@ async function botDoMove({ db, gameId, botId }) {
 function chooseBotOpsPlay({ game, bot, players }) {
   const g = game;
   const p = bot;
-
-  const presetKey = presetFromDenColor(bot.denColor);
-  const ranked = rankActions(handToActionIds(bot.hand), { presetKey, denColor: bot.denColor, game, me: bot });
 
   const flags = fillFlags(g.flagsRound);
   const myColor = normColor(p.color);
@@ -1099,7 +1186,15 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
 
     if (!canBotDecide(g, p)) return;
 
-    const decision = pickDecisionLootMaximizer({ g, p, latestPlayers });
+    // Read latest decisions fresh inside the transaction (prevents herding on HIDDEN_NEST)
+    const ids = (latestPlayers || []).map((x) => x?.id).filter(Boolean);
+    const freshPlayers = [];
+    for (const id of ids) {
+      const s = await tx.get(doc(db, "games", gameId, "players", id));
+      if (s.exists()) freshPlayers.push({ id: s.id, ...s.data() });
+    }
+
+    const decision = pickDecisionLootMaximizer({ g, p, latestPlayers: freshPlayers, gameId });
     const update = { decision };
 
     if (decision === "BURROW" && !p.burrowUsed) {
