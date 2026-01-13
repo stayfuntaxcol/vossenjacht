@@ -7,7 +7,7 @@ import { presetFromDenColor } from "./botHeuristics.js";
 
 const presetKey = presetFromDenColor(bot.denColor);
 
-const ranked = rankActions(bot.hand, {
+const ranked = rankActions(bot.hand || bot.actionHand || bot.actionCards || [], {
   presetKey,
   denColor: bot.denColor,
   game,     // moet eventTrack + eventIndex bevatten
