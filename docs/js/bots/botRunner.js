@@ -5,15 +5,6 @@ import { getEventFacts, rankActions, scoreActionFacts } from "./aiKit.js";
 import { getActionDefByName } from "../cards.js";
 import { presetFromDenColor } from "./botHeuristics.js";
 
-const presetKey = presetFromDenColor(bot.denColor);
-
-const ranked = rankActions(bot.hand, {
-  presetKey,
-  denColor: bot.denColor,
-  game,     // moet eventTrack + eventIndex bevatten
-  me: bot,  // optioneel, maar handig als je bot object denColor draagt
-});
-
 import {
   doc,
   getDoc,
@@ -707,6 +698,9 @@ async function botDoMove({ db, gameId, botId }) {
 function chooseBotOpsPlay({ game, bot, players }) {
   const g = game;
   const p = bot;
+
+  const presetKey = presetFromDenColor(bot.denColor);
+  const ranked = rankActions(handToActionIds(bot.hand), { presetKey, denColor: bot.denColor, game, me: bot });
 
   const flags = fillFlags(g.flagsRound);
   const myColor = normColor(p.color);
