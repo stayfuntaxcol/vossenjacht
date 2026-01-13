@@ -9,6 +9,8 @@ import { resolveAfterReveal } from "./engine.js";
 import { renderPlayerSlotCard } from "./cardRenderer.js";
 import { addBotToCurrentGame, startBotRunner } from "./bots/botRunner.js";
 import { addLog } from "./log.js";
+import { CARD_BACK, getActionDefByName } from "./cards.js";
+
 
 import {
   getFirestore,
@@ -59,6 +61,9 @@ const nextPhaseBtn = document.getElementById("nextPhaseBtn");
 const playAsHostBtn = document.getElementById("playAsHostBtn");
 const newRaidBtn = document.getElementById("newRaidBtn");
 const addBotBtn = document.getElementById("addBotBtn");
+const actionDeckCard = document.getElementById("actionDeckCard");
+const actionDiscardCard = document.getElementById("actionDiscardCard");
+
 
 // Board / zones
 const eventTrackDiv = document.getElementById("eventTrack");
@@ -1353,6 +1358,36 @@ function renderStatusCards(game) {
  }
 }
 
+// ====================================
+//  Rendering Action Deck Discard Pile
+// ====================================
+
+function renderActionDeckAndDiscard(game) {
+  // action deck: gewoon de achterkant (of laat zoals jij het al doet)
+  if (actionDeckCard) {
+    actionDeckCard.style.backgroundImage = `url('${CARD_BACK}')`;
+  }
+
+  if (!actionDiscardCard) return;
+
+  const discard = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
+  const top = discard.length ? discard[discard.length - 1] : null;
+
+  if (!top) {
+    // leeg: placeholder (CSS doet dit ook, maar zo is het expliciet)
+    actionDiscardCard.style.backgroundImage =
+      "url('./assets/card_discard_pile.png')";
+    return;
+  }
+
+  // top kan string zijn, of object {name}/{id}
+  const key = String(top?.name || top?.id || top || "").trim();
+  const def = getActionDefByName(key);
+
+  const img = def?.imageFront || CARD_BACK;
+  actionDiscardCard.style.backgroundImage = `url('${img}')`;
+}
+
 // ===============================
 // Scoreboard + leaderboards
 // ===============================
@@ -2305,6 +2340,7 @@ onSnapshot(gameRef, async (snap) => {
 
   renderEventTrack(game);
   renderStatusCards(game);
+  renderActionDeckAndDiscard(game);
 
   if (game.code) renderJoinQr(game);
 
