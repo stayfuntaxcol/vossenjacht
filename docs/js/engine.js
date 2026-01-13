@@ -132,101 +132,82 @@ function applyHiddenNestEvent(players, lootDeck) {
 }
 
 // =======================================
-// Pack Tinker helper (NEW: hand <-> discard swap)
+// Pack Tinker helper (NEW)
+// Wissel 1 handkaart met 1 kaart uit de aflegstapel (actionDiscardPile)
 // =======================================
-export async function applyPackTinker(gameId, playerId, giveFromHand, takeFromDiscard) {
+export async function applyPackTinker(gameId, playerId, giveName, takeUid) {
   const gameRef = doc(db, "games", gameId);
   const playerRef = doc(db, "games", gameId, "players", playerId);
 
-  const [gameSnap, playerSnap] = await Promise.all([getDoc(gameRef), getDoc(playerRef)]);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
+  const [gSnap, pSnap] = await Promise.all([getDoc(gameRef), getDoc(playerRef)]);
+  if (!gSnap.exists() || !pSnap.exists()) return;
 
-  const game = gameSnap.data();
-  const player = playerSnap.data();
+  const game = gSnap.data();
+  const player = pSnap.data();
 
   const round = game.round || 0;
   const phase = game.phase || "ACTIONS";
 
-  // Discard pile op game
-  const discard =
-    Array.isArray(game.actionDiscardPile) ? [...game.actionDiscardPile] :
-    Array.isArray(game.actionDiscard) ? [...game.actionDiscard] :
-    [];
-
-  // Hand veld (probeer bestaande velden te respecteren)
-  const handField =
-    Array.isArray(player.actionHand) ? "actionHand" :
-    Array.isArray(player.actionCards) ? "actionCards" :
-    "actionHand";
-
-  const hand = Array.isArray(player[handField]) ? [...player[handField]] : [];
-
-  // Validatie
-  if (!giveFromHand || !takeFromDiscard) {
+  const hand = Array.isArray(player.hand) ? [...player.hand] : [];
+  const giveIdx = hand.indexOf(giveName);
+  if (giveIdx < 0) {
     await addLog(gameId, {
       round,
       phase,
       kind: "ACTION_CARD",
       choice: "EFFECT_PACK_TINKER_INVALID",
-      payload: { giveFromHand, takeFromDiscard },
-      message: "Pack Tinker: geen geldige keuzes ontvangen.",
+      payload: { reason: "give_not_in_hand", giveName },
+      message: `Pack Tinker: "${giveName}" zit niet (meer) in je hand.`,
     });
     return;
   }
 
-  if (!hand.includes(giveFromHand)) {
+  const discard = Array.isArray(game.actionDiscardPile) ? [...game.actionDiscardPile] : [];
+  const takeIdx = discard.findIndex((it) => it && typeof it === "object" && it.uid === takeUid);
+  if (takeIdx < 0) {
     await addLog(gameId, {
       round,
       phase,
       kind: "ACTION_CARD",
       choice: "EFFECT_PACK_TINKER_INVALID",
-      payload: { giveFromHand, handCount: hand.length },
-      message: "Pack Tinker: gekozen kaart zit niet (meer) in je hand.",
+      payload: { reason: "take_not_in_discard", takeUid },
+      message: "Pack Tinker: gekozen kaart staat niet (meer) in de aflegstapel.",
     });
     return;
   }
 
-  if (!discard.includes(takeFromDiscard)) {
-    await addLog(gameId, {
-      round,
-      phase,
-      kind: "ACTION_CARD",
-      choice: "EFFECT_PACK_TINKER_INVALID",
-      payload: { takeFromDiscard, discardCount: discard.length },
-      message: "Pack Tinker: gekozen kaart zit niet (meer) in de discard pile.",
-    });
-    return;
-  }
+  const takeItem = discard[takeIdx];
+  const takeName = String(takeItem?.name || "").trim();
+  if (!takeName) return;
 
-  // helpers
-  const removeOne = (arr, v) => {
-    const a = [...arr];
-    const i = a.indexOf(v);
-    if (i >= 0) a.splice(i, 1);
-    return a;
-  };
+  // swap in hand
+  hand[giveIdx] = takeName;
 
-  // Swap
-  const nextHand = removeOne(hand, giveFromHand).concat([takeFromDiscard]);
-  const nextDiscard = removeOne(discard, takeFromDiscard).concat([giveFromHand]);
+  // remove taken from discard
+  discard.splice(takeIdx, 1);
 
-  // Schrijf updates
+  // put given into discard as new instance
+  const at = Date.now();
+  discard.push({
+    uid: `${at}_${Math.random().toString(16).slice(2)}`,
+    name: giveName,
+    by: playerId,
+    round: Number(round),
+    at,
+  });
+
   await Promise.all([
-    updateDoc(playerRef, { [handField]: nextHand }),
-    updateDoc(gameRef, {
-      actionDiscardPile: nextDiscard,
-      actionDiscard: nextDiscard, // compat (als ergens nog actionDiscard gebruikt wordt)
-    }),
+    updateDoc(playerRef, { hand }),
+    updateDoc(gameRef, { actionDiscardPile: discard }),
   ]);
 
   await addLog(gameId, {
     round,
     phase,
     kind: "ACTION_CARD",
-    choice: "EFFECT_PACK_TINKER",
-    playerId,
-    payload: { giveFromHand, takeFromDiscard },
-    message: `Pack Tinker: ${giveFromHand} geruild voor ${takeFromDiscard} uit de discard pile.`,
+    choice: "EFFECT_PACK_TINKER_SWAP",
+    payload: { giveName, takeName, takeUid },
+    message: `Pack Tinker: "${giveName}" gewisseld met "${takeName}" uit de aflegstapel.`,
   });
 }
 
