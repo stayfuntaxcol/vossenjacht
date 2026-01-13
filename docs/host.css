@@ -1600,3 +1600,20 @@ body.fullscreen-board #board {
   align-items: center;
   justify-content: center;
 }
+
+/* ==========================================
+   ACTION DISCARD PILE (face-up)
+   ========================================== */
+
+/* default (empty) = placeholder */
+#actionDiscardCard {
+  background-image: url("./assets/card_discard_pile.png");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+/* geen wolk-overlay op discard zodat art helder blijft */
+#actionDiscardCard.board-card::before {
+  opacity: 0;
+}
