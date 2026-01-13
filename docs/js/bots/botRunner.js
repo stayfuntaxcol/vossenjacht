@@ -1,11 +1,9 @@
-
 // js/bots/botRunner.js
 // Autonomous bots for VOSSENJACHT (smart OPS flow + threat-aware decisions)
 
-import { getEventFacts, rankActions, scoreActionFacts } from "./aiKit.js";
+import { getEventFacts } from "./aiKit.js";
 import { getActionDefByName } from "../cards.js";
-import { presetFromDenColor } from "./botHeuristics.js";
-
+import { rankActions, scoreActionFacts, presetFromDenColor } from "./botHeuristics.js";
 import {
   doc,
   getDoc,
@@ -25,6 +23,9 @@ import {
 const BOT_TICK_MS = 700;
 const BOT_DEBOUNCE_MS = 150;
 const LOCK_MS = 1800;
+
+// UI pacing: played Action Cards must stay visible (face-up) on the Discard Pile
+const OPS_DISCARD_VISIBLE_MS = 3100;
 
 /** Bot name pool (player cards exist for these) */
 const BOT_NAME_POOL = [
@@ -488,38 +489,31 @@ function pickBestActionFromHand({ game, bot, players }) {
   const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
   const presetKey = presetFromDenColor(denColor);
 
-  const ranked = rankActions(ids, {
-    presetKey,
-    denColor,
-    game,
-    me: bot,
-  }); // hoogste waarde eerst
+  const ranked = rankActions(ids, { presetKey, denColor, game, me: bot }); // hoogste waarde eerst
 
-  for (const r of ranked || []) {
-    // Gebruik ALTIJD actionId voor legality checks
-    const actionId = r?.s?.actionId || r?.actionId || r?.id;
-    if (!actionId) continue;
+  for (const r of ranked) {
+    const id = r.id;
 
     // legality checks
-    if (actionId === "PACK_TINKER" || actionId === "KICK_UP_DUST") {
+    if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
       if (game?.flagsRound?.lockEvents) continue;
-      if (!Array.isArray(game?.eventTrack)) continue;
-      if (typeof game?.eventIndex !== "number") continue;
+      if (!Array.isArray(game.eventTrack)) continue;
+      if (typeof game.eventIndex !== "number") continue;
       if (game.eventIndex >= game.eventTrack.length - 1) continue;
     }
 
-    if (actionId === "HOLD_STILL" && game?.flagsRound?.opsLocked) continue;
+    if (id === "HOLD_STILL" && game?.flagsRound?.opsLocked) continue;
 
     // targets waar nodig
     let targetId = null;
-    if (actionId === "MASK_SWAP" || actionId === "HOLD_STILL") {
+    if (id === "MASK_SWAP" || id === "HOLD_STILL") {
       targetId = pickRichestTarget(players || [], bot.id);
       if (!targetId) continue;
     }
 
     // terug naar “kaartnaam” die in hand zit (nodig voor removeOneCard(hand, cardName))
-    const entry = entries.find((x) => x.def.id === actionId);
-    const name = entry?.name || entry?.def?.name || actionId;
+    const entry = entries.find((x) => x.def.id === id);
+    const name = entry?.name || entry?.def?.name || id;
 
     return targetId ? { name, targetId } : { name };
   }
@@ -941,6 +935,10 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     const passesNow = Number(g.opsConsecutivePasses || 0);
     if (flagsRound.opsLocked || passesNow >= target) return;
 
+    // ⏳ UI pacing: wacht tot de vorige gespeelde kaart minimaal zichtbaar was
+    const holdUntil = Number(g.opsHoldUntilMs || 0);
+    if (holdUntil && Date.now() < holdUntil) return;
+
     const nextIdx = (idx + 1) % order.length;
 
     const hand = Array.isArray(p.hand) ? [...p.hand] : [];
@@ -1014,10 +1012,18 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
       return;
     }
 
-    // discard + draw replacement
-    actionDiscard.push({ name: cardName, by: botId, round: roundNum, at: Date.now() });
- 
-    const extraGameUpdates = {};
+    // discard (face-up): kaart gaat direct op de Discard Pile
+    const nowMs = Date.now();
+    actionDiscard.push({ name: cardName, by: botId, round: roundNum, at: nowMs });
+    // keep discard pile bounded
+    if (actionDiscard.length > 30) actionDiscard.splice(0, actionDiscard.length - 30);
+
+    const extraGameUpdates = {
+      // host/board kan hiermee de top-discard tonen
+      lastActionPlayed: { name: cardName, by: botId, round: roundNum, at: nowMs },
+      // bots wachten zodat de kaart minimaal 3s zichtbaar is
+      opsHoldUntilMs: nowMs + OPS_DISCARD_VISIBLE_MS,
+    };
 
     // effects
     if (cardName === "Den Signal") {
@@ -1065,9 +1071,7 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
       }
     }
 
-    if (cardName === "Alpha Call") {
-      if (actionDeck.length) hand.push(actionDeck.pop());
-    }
+    // Alpha Call: effect is only lead change (no draw in OPS)
 
     if (cardName === "Burrow Beacon") {
       flagsRound.lockEvents = true;
