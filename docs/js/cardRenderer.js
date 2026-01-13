@@ -169,6 +169,7 @@ function createBaseCard({
     if (subtitle) {
       const subEl = document.createElement("div");
       subEl.className = "vj-card__subtitle";
+      subEl.style.whiteSpace = "pre-line";
       subEl.textContent = subtitle;
       top.appendChild(subEl);
     }
