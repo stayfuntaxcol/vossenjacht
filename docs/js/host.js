@@ -4,7 +4,7 @@
 // + REVEAL suspense: 10s countdown + "Onthul nu" + reveal triggers resolveAfterReveal
 
 import { initAuth } from "./firebase.js";
-import { getEventById, CARD_BACK } from "./cards.js";
+import { getEventById, CARD_BACK, getActionDefByName } from "./cards.js";
 import { resolveAfterReveal } from "./engine.js";
 import { renderPlayerSlotCard } from "./cardRenderer.js";
 import { addBotToCurrentGame, startBotRunner } from "./bots/botRunner.js";
