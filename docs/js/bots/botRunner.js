@@ -1436,3 +1436,5 @@ export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLU
 
   await updateDoc(gRef, { botsEnabled: true, actionDeck });
 }
+
+    // This game was made by SJD Taxcollector
