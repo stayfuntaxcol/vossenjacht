@@ -49,28 +49,30 @@
       <div id="boardShell">
         <div id="board">
           <div id="boardInner">
-            <!-- TOP ROW: LOOT / SPECIALS / ACTION / ROOSTER -->
-            <div class="board-row board-top">
-              <div class="top-left">
-                <div id="sackCard" class="board-card card-stack"></div>
-                <div id="lootDeckCard" class="board-card card-stack"></div>
-              </div>
+          
+            
+            <!-- TOP ROW: LOOT / SPECIALS / ACTION / DISCARD -->
+<div class="board-row board-top">
+  <div class="top-left">
+    <div id="sackCard" class="board-card card-stack"></div>
+    <div id="lootDeckCard" class="board-card card-stack"></div>
+  </div>
 
-             <div class="top-center">
-  <div id="fullMoonCard" class="board-card card-status slot-muted"></div>
-  <div id="beaconCard" class="board-card card-status slot-muted"></div>
-  <div id="scatterCard" class="board-card card-status slot-muted"></div>
-  <div id="optionACard" class="board-card card-status slot-muted"></div>
+  <div class="top-center">
+    <div id="fullMoonCard" class="board-card card-status slot-muted"></div>
+    <div id="beaconCard" class="board-card card-status slot-muted"></div>
+    <div id="scatterCard" class="board-card card-status slot-muted"></div>
 
-  <!-- ✅ Rooster verhuist naar meest rechtse special placeholder -->
-  <div id="roosterCard" class="board-card card-status"></div>
-</div>
+    <!-- ✅ Rooster verhuist naar meest rechtse special placeholder -->
+    <div id="roosterCard" class="board-card card-status"></div>
+  </div>
 
-<div class="top-right">
-  <div id="actionDeckCard" class="board-card card-stack"></div>
+  <div class="top-right">
+    <div id="actionDeckCard" class="board-card card-stack"></div>
 
-  <!-- ✅ Discard Pile komt naast Action Deck -->
-  <div id="actionDiscardCard" class="board-card card-stack"></div>
+    <!-- ✅ Discard Pile komt naast Action Deck -->
+    <div id="actionDiscardCard" class="board-card card-stack"></div>
+  </div>
 </div>
 
             <!-- MIDDLE: EVENT GRID + CAUGHT -->
