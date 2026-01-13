@@ -132,56 +132,101 @@ function applyHiddenNestEvent(players, lootDeck) {
 }
 
 // =======================================
-// Pack Tinker helper
+// Pack Tinker helper (NEW: hand <-> discard swap)
 // =======================================
-export async function applyPackTinker(gameId, indexA, indexB) {
+export async function applyPackTinker(gameId, playerId, giveFromHand, takeFromDiscard) {
   const gameRef = doc(db, "games", gameId);
-  const snap = await getDoc(gameRef);
-  if (!snap.exists()) return;
-  const game = snap.data();
+  const playerRef = doc(db, "games", gameId, "players", playerId);
+
+  const [gameSnap, playerSnap] = await Promise.all([getDoc(gameRef), getDoc(playerRef)]);
+  if (!gameSnap.exists() || !playerSnap.exists()) return;
+
+  const game = gameSnap.data();
+  const player = playerSnap.data();
 
   const round = game.round || 0;
   const phase = game.phase || "ACTIONS";
 
-  const flags = game.flagsRound || {};
-  if (flags.lockEvents) {
-    await addLog(gameId, {
-      round,
-      phase,
-      kind: "ACTION_CARD",
-      choice: "EFFECT_PACK_TINKER_BLOCKED",
-      payload: { reason: "lockEvents" },
-      message: "Pack Tinker had geen effect – Burrow Beacon is actief (Event Track gelocked).",
-    });
-    return;
-  }
+  // Discard pile op game
+  const discard =
+    Array.isArray(game.actionDiscardPile) ? [...game.actionDiscardPile] :
+    Array.isArray(game.actionDiscard) ? [...game.actionDiscard] :
+    [];
 
-  const { track, eventIndex } = splitTrackByStatus(game);
-  const len = track.length;
-  if (!len) return;
+  // Hand veld (probeer bestaande velden te respecteren)
+  const handField =
+    Array.isArray(player.actionHand) ? "actionHand" :
+    Array.isArray(player.actionCards) ? "actionCards" :
+    "actionHand";
 
-  if (indexA < eventIndex || indexB < eventIndex || indexA >= len || indexB >= len) {
+  const hand = Array.isArray(player[handField]) ? [...player[handField]] : [];
+
+  // Validatie
+  if (!giveFromHand || !takeFromDiscard) {
     await addLog(gameId, {
       round,
       phase,
       kind: "ACTION_CARD",
       choice: "EFFECT_PACK_TINKER_INVALID",
-      payload: { indexA, indexB, eventIndex, len },
-      message: "Pack Tinker geblokkeerd – je probeerde een onthulde (locked) Event kaart te verplaatsen.",
+      payload: { giveFromHand, takeFromDiscard },
+      message: "Pack Tinker: geen geldige keuzes ontvangen.",
     });
     return;
   }
 
-  [track[indexA], track[indexB]] = [track[indexB], track[indexA]];
-  await updateDoc(gameRef, { eventTrack: track });
+  if (!hand.includes(giveFromHand)) {
+    await addLog(gameId, {
+      round,
+      phase,
+      kind: "ACTION_CARD",
+      choice: "EFFECT_PACK_TINKER_INVALID",
+      payload: { giveFromHand, handCount: hand.length },
+      message: "Pack Tinker: gekozen kaart zit niet (meer) in je hand.",
+    });
+    return;
+  }
+
+  if (!discard.includes(takeFromDiscard)) {
+    await addLog(gameId, {
+      round,
+      phase,
+      kind: "ACTION_CARD",
+      choice: "EFFECT_PACK_TINKER_INVALID",
+      payload: { takeFromDiscard, discardCount: discard.length },
+      message: "Pack Tinker: gekozen kaart zit niet (meer) in de discard pile.",
+    });
+    return;
+  }
+
+  // helpers
+  const removeOne = (arr, v) => {
+    const a = [...arr];
+    const i = a.indexOf(v);
+    if (i >= 0) a.splice(i, 1);
+    return a;
+  };
+
+  // Swap
+  const nextHand = removeOne(hand, giveFromHand).concat([takeFromDiscard]);
+  const nextDiscard = removeOne(discard, takeFromDiscard).concat([giveFromHand]);
+
+  // Schrijf updates
+  await Promise.all([
+    updateDoc(playerRef, { [handField]: nextHand }),
+    updateDoc(gameRef, {
+      actionDiscardPile: nextDiscard,
+      actionDiscard: nextDiscard, // compat (als ergens nog actionDiscard gebruikt wordt)
+    }),
+  ]);
 
   await addLog(gameId, {
     round,
     phase,
     kind: "ACTION_CARD",
     choice: "EFFECT_PACK_TINKER",
-    payload: { pos1: indexA + 1, pos2: indexB + 1, indexA, indexB, eventIndex },
-    message: `Pack Tinker: toekomstige events verwisseld (${indexA + 1}↔${indexB + 1}).`,
+    playerId,
+    payload: { giveFromHand, takeFromDiscard },
+    message: `Pack Tinker: ${giveFromHand} geruild voor ${takeFromDiscard} uit de discard pile.`,
   });
 }
 
