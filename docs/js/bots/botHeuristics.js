@@ -33,6 +33,12 @@ export const BOT_PRESETS = {
       ROOSTER_TICK: 1.20,
       raid_end_trigger: 1.20,
       dash_reward: 1.10,
+      // --- action economy ---
+      maxActionsPerRound: 1,
+      actionReserveEarly: 2,
+      actionReserveLate: 1,
+      actionPlayMinTotal: 2.6,
+      emergencyActionTotal: 7.5,
     },
   },
 
@@ -47,6 +53,12 @@ export const BOT_PRESETS = {
       DEN_IMMUNITY: 1.25,
       LOCK_EVENTS: 1.10,
       LOCK_OPS: 1.10,
+      // --- action economy ---
+      maxActionsPerRound: 1,
+      actionReserveEarly: 2,
+      actionReserveLate: 1,
+      actionPlayMinTotal: 3.2,
+      emergencyActionTotal: 7.8,
     },
   },
 
@@ -58,6 +70,12 @@ export const BOT_PRESETS = {
       dash_reward: 1.25,
       multi_dasher_bonus: 1.20,
       reset_sack: 1.35, // makes negative loot impact matter more
+      // --- action economy ---
+      maxActionsPerRound: 1,
+      actionReserveEarly: 2,
+      actionReserveLate: 2,
+      actionPlayMinTotal: 3.6,
+      emergencyActionTotal: 7.8,
     },
   },
 
@@ -73,6 +91,12 @@ export const BOT_PRESETS = {
       SWAP_MANUAL: 1.10,
       BLOCK_SCOUT: 1.20,
       BLOCK_SCOUT_POS: 1.15,
+      // --- action economy ---
+      maxActionsPerRound: 1,
+      actionReserveEarly: 2,
+      actionReserveLate: 1,
+      actionPlayMinTotal: 3.0,
+      emergencyActionTotal: 7.6,
     },
   },
 };
@@ -143,7 +167,7 @@ const ACTION_TAG_SCORES = {
   LOCK_OPS: { control: 5, tempo: 2 },
 
   // utility
-  COPY_DECISION_LATER: { info: 2, control: 2 },
+  COPY_DECISION_LATER: { info: 2, control: 2, risk: 2 }, // copying others can be dangerous
   SET_LEAD: { control: 4 },
 
   // future-proof
@@ -295,6 +319,38 @@ export function scoreActionFacts(actionKey, opts = {}) {
   if (affectsFlags.includes("lockEvents")) soft.control += 1;
   if (affectsFlags.includes("denImmune")) soft.risk -= 1;
   if (affectsFlags.includes("noPeek")) soft.control += 0.5;
+
+  // Follow the Tail — vaak bewaren tot jouw Den-event (DEN_<kleur>) al voorbij is.
+  // Reden: bij DEN-events maken verschillende den-kleuren vaak verschillende DECISIONs.
+  // Als jouw eigen den-event al geweest is, is meeliften minder swingy en vaak waardevoller.
+  const isFollowTail = a.id === "FOLLOW_THE_TAIL";
+  if (isFollowTail) {
+    const ctxRevealed =
+      typeof opts?.ctx?.myDenEventRevealed === "boolean"
+        ? opts.ctx.myDenEventRevealed
+        : null;
+
+    const denC =
+      String(opts?.me?.denColor || opts?.denColor || "").trim().toUpperCase();
+
+    const trackRevealed =
+      ctxRevealed != null ? ctxRevealed : myDenEventAlreadyRevealed(opts?.game, denC);
+
+    if (trackRevealed === false) {
+      // te vroeg: verhoog risico + verlies controle (save it)
+      soft.risk += 2.5;
+      soft.control -= 1.0;
+      soft.tempo -= 0.5;
+    } else if (trackRevealed === true) {
+      // later: nuttiger als uncertainty tool
+      soft.risk -= 1.0;
+      soft.info += 0.5;
+      soft.control += 0.5;
+    } else {
+      // onbekend: kleine “save bias”
+      soft.risk += 0.75;
+    }
+  }
 
   const implemented = !!a.engineImplemented;
   const reliability = implemented ? 1.0 : (preset.unimplementedMult ?? 0.90);
