@@ -3,6 +3,16 @@
 
 import { getEventFacts, rankActions, scoreActionFacts } from "./aiKit.js";
 import { getActionDefByName } from "../cards.js";
+import { rankActions, presetFromDenColor } from "./botHeuristics.js";
+
+const presetKey = presetFromDenColor(bot.denColor);
+
+const ranked = rankActions(bot.hand, {
+  presetKey,
+  denColor: bot.denColor,
+  game,     // moet eventTrack + eventIndex bevatten
+  me: bot,  // optioneel, maar handig als je bot object denColor draagt
+});
 
 import {
   doc,
