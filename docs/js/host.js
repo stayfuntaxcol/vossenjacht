@@ -1832,6 +1832,8 @@ async function startNewRaidFromBoard() {
 
     const gameRefLocal = await addDoc(collection(db, "games"), {
       code,
+      actionDiscard: [],
+      actionDiscardPile: [],
       status: "lobby",
       phase: "MOVE",
       round: 0,
