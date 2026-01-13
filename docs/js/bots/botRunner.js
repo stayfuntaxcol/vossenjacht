@@ -1015,6 +1015,13 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     // discard (face-up): kaart gaat direct op de Discard Pile
     const nowMs = Date.now();
     actionDiscard.push({ name: cardName, by: botId, round: roundNum, at: nowMs });
+    
+    const actionDiscardPile = Array.isArray(g.actionDiscardPile) ? [...g.actionDiscardPile] : [];
+    const uid = `${nowMs}_${Math.random().toString(16).slice(2)}`;
+
+    actionDiscardPile.push({ uid, name: cardName, by: botId, round: roundNum, at: nowMs });
+    if (actionDiscardPile.length > 60) actionDiscardPile.splice(0, actionDiscardPile.length - 60);
+
     // keep discard pile bounded
     if (actionDiscard.length > 30) actionDiscard.splice(0, actionDiscard.length - 30);
 
@@ -1133,6 +1140,7 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     tx.update(pRef, { hand, color: p.color, den: p.color });
     tx.update(gRef, {
       actionDeck,
+      actionDiscardPile,
       actionDiscard,
       flagsRound,
       opsTurnIndex: nextIdx,
