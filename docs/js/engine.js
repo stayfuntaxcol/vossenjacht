@@ -912,36 +912,56 @@ export async function saveLeaderboardForGame(gameId) {
 
     const playersSnap = await getDocs(collection(db, "games", gameId, "players"));
 
-    const leaderboardEntries = [];
-    playersSnap.forEach((pDoc) => {
-      const p = pDoc.data();
+ const leaderboardEntries = [];
 
-      const eggs = p.eggs || 0;
-      const hens = p.hens || 0;
-      const prize = p.prize || 0;
+for (const pDoc of playersSnap.docs) {
+  const p = pDoc.data();
 
-      const baseScore = eggs + hens * 2 + prize * 3;
-      const storedScore = typeof p.score === "number" ? p.score : baseScore;
-      const bonus = Math.max(0, storedScore - baseScore);
+  const eggs = Number(p.eggs || 0);
+  const hens = Number(p.hens || 0);
+  const prize = Number(p.prize || 0);
 
-      leaderboardEntries.push({
-        name: p.name || "Fox",
-        score: storedScore,
-        eggs,
-        hens,
-        prize,
-        bonus,
-        gameId,
-        gameCode: game.code || "",
-        playedAt: serverTimestamp(),
-      });
-    });
+  const baseScore = eggs + hens * 2 + prize * 3;
+
+  // score componenten
+  const lootShare   = Number(p.lootShare ?? p.sackBonus ?? 0);
+  const dashPenalty = Number(p.dashPenalty ?? 0);
+  const bonusPoints = Number(p.bonusPoints ?? 0);
+
+  const finalScore = baseScore + lootShare - dashPenalty + bonusPoints;
+
+  // ✅ niet opslaan als score 0 of lager
+  if (!Number.isFinite(finalScore) || finalScore <= 0) {
+    continue;
+  }
+
+  const bonus = lootShare + bonusPoints;
+
+  leaderboardEntries.push({
+    name: p.name || "Fox",
+    score: finalScore,
+
+    baseScore,
+    lootShare,
+    dashPenalty,
+    bonusPoints,
+    bonus,
+
+    eggs,
+    hens,
+    prize,
+
+    gameId,
+    gameCode: game.code || "",
+    playedAt: serverTimestamp(),
+  });
+}
 
     // Alleen entries met een echte score > 0 opslaan
     for (const entry of leaderboardEntries) {
-      const s = typeof entry.score === "number" ? entry.score : 0;
-      if (s <= 0) continue;
-      await addDoc(collection(db, "leaderboard"), entry);
+ const s = Number(entry.score);
+if (!Number.isFinite(s) || s <= 0) continue;
+     await addDoc(collection(db, "leaderboard"), entry);
     }
 
     await updateDoc(gameRef, { leaderboardWritten: true });
