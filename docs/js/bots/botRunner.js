@@ -486,42 +486,40 @@ function pickBestActionFromHand({ game, bot, players }) {
   if (!ids.length) return null;
 
   const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
-   const ids = entries.map((x) => x.def.id);
-  if (!ids.length) return null;
-
-  const presetKey = presetFromDenColor(bot?.denColor);
+  const presetKey = presetFromDenColor(denColor);
 
   const ranked = rankActions(ids, {
     presetKey,
-    denColor: bot?.denColor,
+    denColor,
     game,
     me: bot,
-  });// hoogste waarde eerst
+  }); // hoogste waarde eerst
 
-
-  for (const r of ranked) {
-    const id = r.id;
+  for (const r of ranked || []) {
+    // Gebruik ALTIJD actionId voor legality checks
+    const actionId = r?.s?.actionId || r?.actionId || r?.id;
+    if (!actionId) continue;
 
     // legality checks
-    if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
+    if (actionId === "PACK_TINKER" || actionId === "KICK_UP_DUST") {
       if (game?.flagsRound?.lockEvents) continue;
-      if (!Array.isArray(game.eventTrack)) continue;
-      if (typeof game.eventIndex !== "number") continue;
+      if (!Array.isArray(game?.eventTrack)) continue;
+      if (typeof game?.eventIndex !== "number") continue;
       if (game.eventIndex >= game.eventTrack.length - 1) continue;
     }
 
-    if (id === "HOLD_STILL" && game?.flagsRound?.opsLocked) continue;
+    if (actionId === "HOLD_STILL" && game?.flagsRound?.opsLocked) continue;
 
     // targets waar nodig
     let targetId = null;
-    if (id === "MASK_SWAP" || id === "HOLD_STILL") {
+    if (actionId === "MASK_SWAP" || actionId === "HOLD_STILL") {
       targetId = pickRichestTarget(players || [], bot.id);
       if (!targetId) continue;
     }
 
     // terug naar “kaartnaam” die in hand zit (nodig voor removeOneCard(hand, cardName))
-    const entry = entries.find((x) => x.def.id === id);
-    const name = entry?.name || entry?.def?.name || id;
+    const entry = entries.find((x) => x.def.id === actionId);
+    const name = entry?.name || entry?.def?.name || actionId;
 
     return targetId ? { name, targetId } : { name };
   }
