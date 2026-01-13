@@ -443,18 +443,11 @@ export const ACTION_DEFS = {
     phase: "ACTIONS",
     timing: "anytime",
     description:
-      "Kies 2 toekomstige posities op de Event Track en wissel die om (werkt niet bij lock).",
-    tags: ["TRACK_MANIP", "SWAP_MANUAL", "BLOCKED_BY_LOCK"],
-    meta: {
-      role: "control",
-      affects: ["event_track"],
-      attackValue: 4,
-      defenseValue: 3,
-      triggers: ["when_you_have_scout_info", "when_you_can_place_threat", "when_you_can_remove_threat_from_self"],
-      counters: ["LOCK_EVENTS"],
-      notes: "Gerichte track-control. Sterk met SCOUT-info; kan iemand ‘in het mes’ zetten of jezelf redden.",
-    },
-  },
+    "Wissel 1 Action Card uit jouw hand met 1 Action Card uit de Aflegstapel.\n" +
+    "Kies zelf welke kaart je uit de Discard Pile pakt.",
+  tags: ["HAND_SWAP_DISCARD", "DISCARD_PILE", "UTILITY"],
+  meta: { /* aangepast naar swap-use */ },
+},
 
   "Mask Swap": {
     id: "MASK_SWAP",
