@@ -78,6 +78,8 @@ const optionBCard = document.getElementById("optionBCard");
 const sackCard = document.getElementById("sackCard");
 const lootDeckCard = document.getElementById("lootDeckCard");
 const actionDeckCard = document.getElementById("actionDeckCard");
+const actionDiscardCard = document.getElementById("actionDiscardCard");
+
 
 // Fullscreen toggle
 const fullscreenBtn = document.getElementById("fullscreenBtn");
@@ -1342,6 +1344,13 @@ function renderStatusCards(game) {
       <div class="card-value">${actionDeck.length}</div>
     `;
   }
+  if (actionDiscardCard) {
+  const discard = Array.isArray(game.actionDiscardPile) ? game.actionDiscardPile : [];
+  actionDiscardCard.innerHTML = `
+    <div class="card-title">Discard Pile</div>
+    <div class="card-value">${discard.length}</div>
+  `;
+ }
 }
 
 // ===============================
@@ -1717,6 +1726,7 @@ async function initRaidIfNeeded(gameRefParam) {
       opsTurnIndex: 0,
       opsConsecutivePasses: 0,
       actionDiscard: [],
+      actionDiscardPile: [],
       raidPaused: false,    // ✅ nieuw
       pendingReveal: null,  // ✅ nieuw
     })
