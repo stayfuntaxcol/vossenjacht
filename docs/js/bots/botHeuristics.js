@@ -212,6 +212,38 @@ function sumTagScores(tags, map, preset) {
   return out;
 }
 
+function myDenEventAlreadyRevealed(ctx = {}) {
+  const game = ctx.game || ctx?.ctx?.game || ctx?.g || ctx?.state || null;
+  const me = ctx.me || ctx?.ctx?.me || null;
+
+  // gebruik jouw bestaande normColor() als die er al is
+  const denColor = (typeof normColor === "function"
+    ? normColor(ctx.denColor || me?.denColor || me?.den || me?.color)
+    : String(ctx.denColor || me?.denColor || me?.den || me?.color || "")
+        .trim()
+        .toUpperCase()
+  );
+
+  if (!denColor) return false;
+
+  const denId = `DEN_${denColor}`;
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  if (!track.length) return false;
+
+  const idx = track.findIndex(
+    (e) => String(e || "").trim().toUpperCase() === denId
+  );
+  if (idx < 0) return false;
+
+  const cur = Number.isFinite(game?.eventIndex) ? game.eventIndex : -1;
+  if (cur > idx) return true;
+
+  const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : null;
+  if (rev && rev[idx] === true) return true;
+
+  return false;
+}
+
 // resolve by id OR by display title/name
 function resolveEventKey(input) {
   const raw = String(input || "").trim();
