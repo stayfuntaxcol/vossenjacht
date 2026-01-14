@@ -211,7 +211,6 @@ function computeHandStrength({ game, bot }) {
   const presetKey = presetFromDenColor(denColor);
   if (!ids.length) return { score: 0, ids: [], top: null };
 
-   // handNames was missing (bugfix)
   const handNames = (Array.isArray(bot?.hand) ? bot.hand : [])
     .map((c) => String(c?.name || c || "").trim())
     .filter(Boolean);
@@ -219,40 +218,16 @@ function computeHandStrength({ game, bot }) {
   const ctx = buildBotCtxForHeuristics({
     game,
     bot,
-    players: [],          // computeHandStrength heeft hier meestal geen players nodig
+    players: [], // strength score heeft geen targets nodig
     handNames,
     handIds: ids,
   });
 
-  // top-2 kaarten tellen het zwaarst
+  // ranked (CORE + strategies modifiers zitten nu in rankActions)
   const ranked = rankActions(ids, { presetKey, denColor, game, me: bot, ctx });
-  const ctx = buildBotCtx({ game, bot, players, handActionIds: ids, handActionKeys: handNames, nextEventFacts, isLast, scoreBehind });
-  
-  // --- action economy guardrails (bots should not spam actions) ---
-  const preset = (BOT_PRESETS && BOT_PRESETS[presetKey]) ? BOT_PRESETS[presetKey] : (BOT_PRESETS?.BLUE || {});
-  const roundNum = Number.isFinite(Number(game?.round)) ? Number(game.round) : 1;
+  const topIds = ranked.slice(0, 2).map((x) => x.id);
 
-  const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
-  const alreadyPlayedThisRound = disc.some(
-    (x) => x?.by === bot.id && Number(x?.round || 0) === roundNum
-  );
-
-  const handCount = handNames.length;
-  const reserve = roundNum <= 1 ? (preset.actionReserveEarly ?? 2) : (preset.actionReserveLate ?? 1);
-
-  const top = ranked[0];
-  const topTotal = Number.isFinite(Number(top?.total)) ? Number(top.total) : 0;
-  const topEmergency = topTotal >= (preset.emergencyActionTotal ?? 7.5);
-
-  // conserve cards early + avoid double-playing in same round
-  if (handCount <= reserve && !topEmergency) return null;
-  if (alreadyPlayedThisRound && !topEmergency) return null;
-
-  // only play when it is actually worth it (unless emergency)
-  const minTotal = preset.actionPlayMinTotal ?? 3.0;
-  if (topTotal < minTotal && !topEmergency) return null;
-const topIds = ranked.slice(0, 2).map((x) => x.id);
-
+  // basis raw score op top-2
   let raw = 0;
   for (const id of topIds) {
     const s = scoreActionFacts(id, { presetKey, denColor, game, me: bot, ctx });
@@ -265,7 +240,7 @@ const topIds = ranked.slice(0, 2).map((x) => x.id);
       (s.riskScore || 0);
   }
 
-  // context: als next event gevaarlijk is, is defense/control meer waard
+  // context: als next event gevaarlijk is, wil je liever een sterke hand
   const nextEvent0 = getNextEventId(game);
   const f = nextEvent0 ? getEventFacts(nextEvent0) : null;
   const dangerPeak = f ? Math.max(f.dangerDash ?? 0, f.dangerLurk ?? 0, f.dangerBurrow ?? 0) : 0;
@@ -273,7 +248,7 @@ const topIds = ranked.slice(0, 2).map((x) => x.id);
   // schaal en clamp
   let score = Math.round(Math.max(0, Math.min(100, raw * 5)));
 
-  // als danger hoog is, verlaag “comfort”: je wil liever een sterke hand
+  // bij hoog danger: iets strenger
   if (dangerPeak >= 7) score = Math.max(0, score - 10);
 
   return { score, ids, top: topIds[0] || null };
