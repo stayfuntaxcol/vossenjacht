@@ -1,36 +1,22 @@
 // docs/js/bots/botHeuristics.js
-// Heuristiek basis (zonder Firebase) + 4 kleur-presets (RED/GREEN/YELLOW/BLUE)
+// Heuristics for VOSSENJACHT bots
+// - Backwards compatible exports: BOT_WEIGHTS, BOT_PRESETS, presetFromDenColor,
+//   scoreEventFacts, scoreActionFacts, rankActions
+// - Added exports: pickActionOrPass, recommendDecision
 //
-// Doel:
-// - Zelfde API als je huidige file, maar met presets die je per bot (via denColor) kunt kiezen.
-// - Stateless: je geeft presetKey mee in de call (geen globale "current preset").
-//
-// Backwards compatible:
-// - BOT_WEIGHTS blijft bestaan (default = BLUE preset)
-// - scoreEventFacts(id) / scoreActionFacts(id) werken nog steeds zonder opts
-// - rankActions(actionIds) werkt nog steeds zonder opts
-//
-// Nieuw (extra, optioneel):
-// - presetFromDenColor(denColor)
-// - rankActions(actionIds, { presetKey, denColor, ctx })
-// - scoreEventFacts(eventKey, { presetKey, denColor, ctx })
-// - scoreActionFacts(actionKey, { presetKey, denColor, ctx })
-// - pickActionOrPass(actionIds, { ... })  // 1 plek voor action-economie + thresholds
-//
-// Kern-upgrades (heuristiek):
-// - Action budget: max 0–1 action per ronde, 2 alleen bij nood/combo.
-// - Bewaar-reserve: early 2 kaarten, late 1–2 (preset).
-// - Diminishing returns op intel.
-// - Pack Tinker / Kick Up Dust alleen als voorwaarden kloppen.
-// - Context-aware “emergency” bij hoge dreiging (rooster/charge).
+// Key upgrades:
+// - Action economy: budget per round + reserve hand size
+// - Diminishing returns on intel actions when bot already has "nextKnown"
+// - Pack Tinker / Kick Up Dust: only good in specific conditions
+// - Defense gets extra value when dangerNext is high
+// - Optional decision recommendation (DASH/BURROW/LURK) based on carry + danger
 
 import { RULES_INDEX, getEventFacts, getActionFacts } from "./rulesIndex.js";
 
-// ============================================================
-// 1) Presets (koppel dit aan Den-kleur)
-// ============================================================
+/* ============================================================
+   1) Presets (koppel aan Den-kleur)
+============================================================ */
 export const BOT_PRESETS = {
-  // ROOD = tempo/agro (accept more risk for pressure)
   RED: {
     weights: { risk: 0.75, loot: 1.05, info: 0.8, control: 0.85, tempo: 1.25 },
     unimplementedMult: 0.9,
@@ -38,19 +24,18 @@ export const BOT_PRESETS = {
       ROOSTER_TICK: 1.2,
       raid_end_trigger: 1.2,
       dash_reward: 1.1,
-      // --- action economy ---
+
       maxActionsPerRound: 1,
       actionReserveEarly: 2,
       actionReserveLate: 1,
       actionPlayMinTotal: 2.6,
       emergencyActionTotal: 7.5,
-      // --- per-card clamps ---
+
       packTinkerLookahead: 4,
       kickUpDustLookahead: 3,
     },
   },
 
-  // GROEN = defensief/stable (protect loot, reduce variance)
   GREEN: {
     weights: { risk: 1.35, loot: 0.95, info: 0.9, control: 1.1, tempo: 0.75 },
     unimplementedMult: 0.9,
@@ -61,37 +46,37 @@ export const BOT_PRESETS = {
       DEN_IMMUNITY: 1.25,
       LOCK_EVENTS: 1.1,
       LOCK_OPS: 1.1,
-      // --- action economy ---
+
       maxActionsPerRound: 1,
       actionReserveEarly: 2,
       actionReserveLate: 1,
       actionPlayMinTotal: 3.2,
       emergencyActionTotal: 7.8,
+
       packTinkerLookahead: 4,
       kickUpDustLookahead: 3,
     },
   },
 
-  // GEEL = greedy/opportunist (max loot value, hates sack reset)
   YELLOW: {
     weights: { risk: 1.0, loot: 1.35, info: 0.85, control: 0.85, tempo: 0.9 },
     unimplementedMult: 0.9,
     tagBias: {
       dash_reward: 1.25,
       multi_dasher_bonus: 1.2,
-      reset_sack: 1.35, // makes negative loot impact matter more
-      // --- action economy ---
+      reset_sack: 1.35,
+
       maxActionsPerRound: 1,
       actionReserveEarly: 2,
       actionReserveLate: 2,
       actionPlayMinTotal: 3.6,
       emergencyActionTotal: 7.8,
+
       packTinkerLookahead: 4,
       kickUpDustLookahead: 3,
     },
   },
 
-  // BLAUW = info/control (setups, track manipulation, deny scout)
   BLUE: {
     weights: { risk: 1.05, loot: 0.95, info: 1.25, control: 1.25, tempo: 0.85 },
     unimplementedMult: 0.9,
@@ -103,24 +88,22 @@ export const BOT_PRESETS = {
       SWAP_MANUAL: 1.1,
       BLOCK_SCOUT: 1.2,
       BLOCK_SCOUT_POS: 1.15,
-      // --- action economy ---
+
       maxActionsPerRound: 1,
       actionReserveEarly: 2,
       actionReserveLate: 1,
       actionPlayMinTotal: 3.0,
       emergencyActionTotal: 7.6,
+
       packTinkerLookahead: 4,
       kickUpDustLookahead: 3,
     },
   },
 };
 
-// Backwards-compat default weights
+// Backwards compat default
 export const BOT_WEIGHTS = BOT_PRESETS.BLUE.weights;
 
-// ============================================================
-// 2) Kleur → preset key (tolerant voor NL/EN)
-// ============================================================
 export function presetFromDenColor(denColor) {
   const c = String(denColor || "").trim().toUpperCase();
   if (!c) return "BLUE";
@@ -132,14 +115,13 @@ export function presetFromDenColor(denColor) {
 }
 
 function getPreset(presetKey, denColor) {
-  const key =
-    String(presetKey || "").trim().toUpperCase() || presetFromDenColor(denColor);
+  const key = String(presetKey || "").trim().toUpperCase() || presetFromDenColor(denColor);
   return BOT_PRESETS[key] || BOT_PRESETS.BLUE;
 }
 
-// ============================================================
-// 3) Tag → score mapping (basis)
-// ============================================================
+/* ============================================================
+   2) Base tag scores
+============================================================ */
 const EVENT_TAG_SCORES = {
   CATCH_DASHERS: { risk: 8, tempo: 1 },
   CATCH_ALL_YARD: { risk: 7, tempo: 1 },
@@ -180,39 +162,28 @@ const ACTION_TAG_SCORES = {
   LOCK_OPS: { control: 5, tempo: 2 },
 
   // utility
-  COPY_DECISION_LATER: { info: 2, control: 2, risk: 2 }, // copying others can be dangerous
+  COPY_DECISION_LATER: { info: 2, control: 2, risk: 2 },
   SET_LEAD: { control: 4 },
 
-  // future-proof
   DISCARD_SWAP: { control: 3, info: 2, tempo: 1 },
 };
 
-// ============================================================
-// 4) Helpers
-// ============================================================
 const DIM_KEYS = ["risk", "loot", "info", "control", "tempo"];
 
+function normColor(c) {
+  return String(c || "").trim().toUpperCase();
+}
+function safeTags(x) {
+  return Array.isArray(x) ? x : [];
+}
 function blankScores() {
   return { risk: 0, loot: 0, info: 0, control: 0, tempo: 0 };
 }
-
 function addInto(out, add, scale = 1) {
   if (!out || !add) return out;
   for (const k of DIM_KEYS) out[k] += (add[k] || 0) * scale;
   return out;
 }
-
-function normForMatch(s) {
-  return String(s || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "")
-    .trim();
-}
-
-function safeTags(x) {
-  return Array.isArray(x) ? x : [];
-}
-
 function sumTagScores(tags, map, preset) {
   const out = blankScores();
   const bias = preset?.tagBias || {};
@@ -224,35 +195,61 @@ function sumTagScores(tags, map, preset) {
   }
   return out;
 }
-
 function clamp(n, lo, hi) {
   const x = Number(n);
   if (!Number.isFinite(x)) return lo;
   return Math.max(lo, Math.min(hi, x));
 }
+function totalScore(s) {
+  if (!s) return -999999;
+  return (s.controlScore || 0) + (s.infoScore || 0) + (s.lootScore || 0) + (s.tempoScore || 0) - (s.riskScore || 0);
+}
+function normForMatch(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "").trim();
+}
 
+/* ============================================================
+   3) Resolve keys
+============================================================ */
+function resolveEventKey(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return { id: null, f: null };
+  const fDirect = getEventFacts(raw);
+  if (fDirect) return { id: fDirect.id, f: fDirect };
+
+  const n = normForMatch(raw);
+  for (const [id, f] of Object.entries(RULES_INDEX?.events || {})) {
+    if (!f) continue;
+    if (normForMatch(f.title) === n) return { id, f };
+  }
+  return { id: null, f: null };
+}
+
+function resolveActionKey(input) {
+  const raw = String(input || "").trim();
+  if (!raw) return { id: null, a: null };
+  const aDirect = getActionFacts(raw);
+  if (aDirect) return { id: aDirect.id, a: aDirect };
+
+  const n = normForMatch(raw);
+  for (const [id, a] of Object.entries(RULES_INDEX?.actions || {})) {
+    if (!a) continue;
+    if (normForMatch(a.name) === n) return { id, a };
+  }
+  const stripped = raw.replace(/^ACTION_/, "");
+  if (stripped !== raw) return resolveActionKey(stripped);
+
+  return { id: null, a: null };
+}
+
+/* ============================================================
+   4) Context helpers
+============================================================ */
 function getCtx(opts = {}) {
-  // callers mogen { ctx } geven of game/me direct meegeven
   const ctx = opts?.ctx && typeof opts.ctx === "object" ? opts.ctx : {};
   const game = opts?.game || ctx?.game || null;
   const me = opts?.me || ctx?.me || null;
   return { ctx, game, me };
-}
-
-function getHandCount(me, actionKeys) {
-  // tolerant: verschillende namen (hand/actionHand/actionCards)
-  const candidates = [
-    me?.hand,
-    me?.actionHand,
-    me?.actionCards,
-    me?.actions,
-    me?.cards,
-  ];
-  for (const c of candidates) {
-    if (Array.isArray(c)) return c.length;
-  }
-  // fallback: wat rankActions binnenkrijgt (kan filtered zijn, maar beter dan niks)
-  return Array.isArray(actionKeys) ? actionKeys.length : 0;
 }
 
 function guessRound(game) {
@@ -266,8 +263,7 @@ function isLateGame(game) {
   const idx = Number(game?.eventIndex);
   const trackLen = Array.isArray(game?.eventTrack) ? game.eventTrack.length : 0;
   const byRound = round >= 6;
-  const byTrack =
-    Number.isFinite(idx) && trackLen ? idx >= Math.max(0, trackLen - 4) : false;
+  const byTrack = Number.isFinite(idx) && trackLen ? idx >= Math.max(0, trackLen - 4) : false;
   return byRound || byTrack;
 }
 
@@ -294,11 +290,8 @@ function getDangerPeakFromFacts(f) {
 
 function getNextEventFactsFromOpts(opts = {}) {
   const { ctx, game } = getCtx(opts);
-  // 1) explicit facts
   if (ctx?.nextEventFacts) return ctx.nextEventFacts;
-  // 2) explicit key
   if (ctx?.nextEventKey) return getEventFacts(ctx.nextEventKey) || null;
-  // 3) derive from game track
   const k = getNextEventKey(game);
   return k ? getEventFacts(k) || null : null;
 }
@@ -310,141 +303,26 @@ function getDangerNext(opts = {}) {
 
 function getActionsPlayedThisRound(opts = {}) {
   const { ctx } = getCtx(opts);
-  const v =
-    ctx?.actionsPlayedThisRound ??
-    ctx?.playsThisRound ??
-    ctx?.playedThisRound ??
-    ctx?.actionsThisRound ??
-    0;
+  const v = ctx?.actionsPlayedThisRound ?? ctx?.playsThisRound ?? ctx?.playedThisRound ?? ctx?.actionsThisRound ?? 0;
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
 }
 
+function getHandCount(me, actionKeys) {
+  const candidates = [me?.hand, me?.actionHand, me?.actionCards, me?.actions, me?.cards];
+  for (const c of candidates) if (Array.isArray(c)) return c.length;
+  return Array.isArray(actionKeys) ? actionKeys.length : 0;
+}
+
 function getScoreRankHints(opts = {}) {
-  // optioneel: botRunner kan dit meegeven als meta
   const { ctx } = getCtx(opts);
   const isLast = !!(ctx?.isLast || ctx?.rank === "LAST" || ctx?.rankFromEnd === 1);
   const behind = Number(ctx?.scoreBehind ?? ctx?.deltaScore ?? 0);
   return { isLast, scoreBehind: Number.isFinite(behind) ? behind : 0 };
 }
 
-// zeer ruwe carry value (alleen voor “dash instinct”/hail-mary)
-// - werkt met arrays of simpele counters.
-function estimateCarryValue(me) {
-  if (!me) return 0;
-
-  // 1) expliciete score fields
-  const eggs = Number(me?.eggs);
-  const hens = Number(me?.hens);
-  const prize = Number(me?.prize);
-  if (Number.isFinite(eggs) || Number.isFinite(hens) || Number.isFinite(prize)) {
-    return (Number.isFinite(eggs) ? eggs * 1 : 0) + (Number.isFinite(hens) ? hens * 2 : 0) + (Number.isFinite(prize) ? prize * 3 : 0);
-  }
-
-  // 2) loot array (strings of objects)
-  const lootArr = me?.loot || me?.sack || me?.bag || null;
-  if (!Array.isArray(lootArr)) return 0;
-
-  let v = 0;
-  for (const it of lootArr) {
-    const s = typeof it === "string" ? it : (it?.type || it?.id || it?.key || "");
-    const t = String(s || "").toUpperCase();
-    if (!t) continue;
-    if (t.includes("PRIZE")) v += 3;
-    else if (t.includes("HEN")) v += 2;
-    else if (t.includes("EGG")) v += 1;
-    else v += 1; // fallback: iets is beter dan niets
-  }
-  return v;
-}
-
-function myDenEventAlreadyRevealed(ctx = {}) {
-  const game = ctx.game || null;
-  const me = ctx.me || null;
-
-  // gebruik jouw bestaande normColor() als die er al is
-  const denColor = (typeof normColor === "function"
-    ? normColor(ctx.denColor || me?.denColor || me?.den || me?.color)
-    : String(ctx.denColor || me?.denColor || me?.den || me?.color || "")
-        .trim()
-        .toUpperCase()
-  );
-
-  if (!denColor) return false;
-
-  const denId = `DEN_${denColor}`;
-  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
-  if (!track.length) return false;
-
-  const idx = track.findIndex(
-    (e) => String(e || "").trim().toUpperCase() === denId
-  );
-  if (idx < 0) return false;
-
-  const cur = Number.isFinite(game?.eventIndex) ? game.eventIndex : -1;
-  if (cur > idx) return true;
-
-  const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : null;
-  if (rev && rev[idx] === true) return true;
-
-  return false;
-}
-
-// resolve by id OR by display title/name
-function resolveEventKey(input) {
-  const raw = String(input || "").trim();
-  if (!raw) return { id: null, f: null };
-  const fDirect = getEventFacts(raw);
-  if (fDirect) return { id: fDirect.id, f: fDirect };
-
-  const n = normForMatch(raw);
-  for (const [id, f] of Object.entries(RULES_INDEX?.events || {})) {
-    if (!f) continue;
-    if (normForMatch(f.title) === n) return { id, f };
-  }
-  return { id: null, f: null };
-}
-
-function resolveActionKey(input) {
-  const raw = String(input || "").trim();
-  if (!raw) return { id: null, a: null };
-  const aDirect = getActionFacts(raw);
-  if (aDirect) return { id: aDirect.id, a: aDirect };
-
-  const n = normForMatch(raw);
-  for (const [id, a] of Object.entries(RULES_INDEX?.actions || {})) {
-    if (!a) continue;
-    if (normForMatch(a.name) === n) return { id, a };
-  }
-  // try stripping ACTION_ prefix
-  const stripped = raw.replace(/^ACTION_/, "");
-  if (stripped !== raw) return resolveActionKey(stripped);
-
-  return { id: null, a: null };
-}
-
-// total: higher is better
-function totalScore(s) {
-  if (!s) return -999999;
-  return (
-    (s.controlScore || 0) +
-    (s.infoScore || 0) +
-    (s.lootScore || 0) +
-    (s.tempoScore || 0) -
-    (s.riskScore || 0)
-  );
-}
-
 function computeHandMeta(actionKeys = []) {
-  const meta = {
-    ids: [],
-    resolved: [],
-    countByActionId: {},
-    hasDefense: false,
-    hasIntel: false,
-    hasTrack: false,
-  };
-
+  const meta = { ids: [], resolved: [], countByActionId: {}, hasDefense: false, hasIntel: false, hasTrack: false };
   const list = Array.isArray(actionKeys) ? actionKeys : [];
   meta.ids = [...list];
 
@@ -464,20 +342,9 @@ function computeHandMeta(actionKeys = []) {
   return meta;
 }
 
-function isDangerousEventByFacts(f, threshold = 7) {
-  if (!f) return false;
-  const peak = getDangerPeakFromFacts(f);
-  if (peak >= threshold) return true;
-  const tags = safeTags(f.tags);
-  // rooster/charge style tags vallen vaak hieronder
-  if (tags.includes("CATCH_DASHERS") || tags.includes("CATCH_ALL_YARD")) return true;
-  return false;
-}
-
 function getKnownUpcomingEvents(opts = {}) {
   const { ctx, game } = getCtx(opts);
 
-  // beste: botRunner geeft expliciet mee wat bot "zeker weet"
   const list =
     (Array.isArray(ctx?.knownUpcomingEvents) && ctx.knownUpcomingEvents) ||
     (Array.isArray(ctx?.nextKnownEvents) && ctx.nextKnownEvents) ||
@@ -486,7 +353,7 @@ function getKnownUpcomingEvents(opts = {}) {
 
   if (list && list.length) return list.map((x) => String(x || "").trim()).filter(Boolean);
 
-  // fallback: als er revealed positions zijn, pak die (globaal, niet per speler)
+  // fallback: use global revealed positions (not player-specific)
   const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
   const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
   const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : 0;
@@ -503,27 +370,54 @@ function actionHasAnyTag(a, wanted = []) {
   const tags = safeTags(a.tags);
   return wanted.some((t) => tags.includes(t));
 }
-
 function isIntelAction(a) {
-  return (
-    a?.role === "info" ||
-    actionHasAnyTag(a, ["INFO", "PEEK_DECISION", "PREDICT_EVENT"])
-  );
+  return a?.role === "info" || actionHasAnyTag(a, ["INFO", "PEEK_DECISION", "PREDICT_EVENT"]);
 }
-
 function isDefenseAction(a) {
   return a?.role === "defense" || actionHasAnyTag(a, ["DEN_IMMUNITY"]);
 }
-
 function isTrackManipAction(a) {
   return a?.role === "control" || actionHasAnyTag(a, ["TRACK_MANIP", "SWAP_MANUAL", "LOCK_EVENTS", "SWAP_RANDOM"]);
 }
 
-// ============================================================
-// 5) Public scoring API
-// ============================================================
+function isDangerousEventByFacts(f, threshold = 7) {
+  if (!f) return false;
+  const peak = getDangerPeakFromFacts(f);
+  if (peak >= threshold) return true;
+  const tags = safeTags(f.tags);
+  if (tags.includes("CATCH_DASHERS") || tags.includes("CATCH_ALL_YARD")) return true;
+  return false;
+}
 
-// Event scoring: dangerPeak + tag-scores
+function estimateCarryValue(me) {
+  if (!me) return 0;
+
+  const eggs = Number(me?.eggs);
+  const hens = Number(me?.hens);
+  const prize = Number(me?.prize);
+  if (Number.isFinite(eggs) || Number.isFinite(hens) || Number.isFinite(prize)) {
+    return (Number.isFinite(eggs) ? eggs * 1 : 0) + (Number.isFinite(hens) ? hens * 2 : 0) + (Number.isFinite(prize) ? prize * 3 : 0);
+  }
+
+  const lootArr = me?.loot || me?.sack || me?.bag || null;
+  if (!Array.isArray(lootArr)) return 0;
+
+  let v = 0;
+  for (const it of lootArr) {
+    const s = typeof it === "string" ? it : it?.type || it?.id || it?.key || "";
+    const t = String(s || "").toUpperCase();
+    if (!t) continue;
+    if (t.includes("PRIZE")) v += 3;
+    else if (t.includes("HEN")) v += 2;
+    else if (t.includes("EGG")) v += 1;
+    else v += 1;
+  }
+  return v;
+}
+
+/* ============================================================
+   5) Public scoring API
+============================================================ */
 export function scoreEventFacts(eventKey, opts = {}) {
   const preset = getPreset(opts.presetKey, opts.denColor);
   const w = preset.weights || BOT_WEIGHTS;
@@ -532,8 +426,6 @@ export function scoreEventFacts(eventKey, opts = {}) {
   if (!f) return null;
 
   const tagScore = sumTagScores(f.tags, EVENT_TAG_SCORES, preset);
-
-  // danger → risk (peak)
   const dangerPeak = getDangerPeakFromFacts(f);
 
   const implemented = !!f.engineImplemented;
@@ -543,33 +435,27 @@ export function scoreEventFacts(eventKey, opts = {}) {
     eventId: f.id,
     title: f.title,
     implemented,
-
     dangerPeak,
-
     riskScore: ((dangerPeak + tagScore.risk) * w.risk) / reliability,
     lootScore: (tagScore.loot * w.loot) * reliability,
     infoScore: (tagScore.info * w.info) * reliability,
     controlScore: (tagScore.control * w.control) * reliability,
     tempoScore: (tagScore.tempo * w.tempo) * reliability,
-
-    notes: [...(f.dangerNotes || []), ...(f.lootImpact?.notes || [])],
+    notes: [...(f.dangerNotes || []), ...((f.lootImpact && f.lootImpact.notes) || [])],
     tags: f.tags || [],
   };
 }
 
-// Action scoring: tag-scores + role bonus + affectsFlags/Track hinting + heuristics (ctx)
 export function scoreActionFacts(actionKey, opts = {}) {
   const preset = getPreset(opts.presetKey, opts.denColor);
   const w = preset.weights || BOT_WEIGHTS;
 
   const { ctx, game, me } = getCtx(opts);
-
   const { a } = resolveActionKey(actionKey);
   if (!a) return null;
 
   const tagScore = sumTagScores(a.tags, ACTION_TAG_SCORES, preset);
 
-  // small role bonus (feel better)
   const roleBonus =
     {
       defense: { risk: -2, control: 1 },
@@ -580,8 +466,7 @@ export function scoreActionFacts(actionKey, opts = {}) {
       utility: { control: 1, info: 1 },
     }[a.role] || {};
 
-  // Extra soft signal if tags are missing but action impacts flags/track
-  // (keeps it stable if definitions aren't complete)
+  // Soft signal when tags incomplete
   const affectsFlags = Array.isArray(a.affectsFlags) ? a.affectsFlags : [];
   const affectsTrack = !!a.affectsTrack;
 
@@ -591,9 +476,7 @@ export function scoreActionFacts(actionKey, opts = {}) {
   if (affectsFlags.includes("denImmune")) soft.risk -= 1;
   if (affectsFlags.includes("noPeek")) soft.control += 0.5;
 
-  // -------------------------
-  // Context-aware heuristics
-  // -------------------------
+  // --- Context-aware heuristics ---
   const dangerNext = getDangerNext(opts);
   const emergency = dangerNext >= 8 || ctx?.emergency === true;
 
@@ -609,44 +492,39 @@ export function scoreActionFacts(actionKey, opts = {}) {
 
   const projectedHandAfterPlay = Math.max(0, handCount - 1);
 
-  // A) Action budget: als je al aan je max zit → hard dempen (tenzij emergency / combo)
+  // A) budget
   const comboAllowed = !!(ctx?.comboAllowed || ctx?.comboFollowUp || ctx?.comboPrimed);
   const allowOverBudget = emergency || comboAllowed;
 
   if (playedThisRound >= maxPerRound && !allowOverBudget) {
-    // Niet blokkeren (want ranker), maar maak het zo onaantrekkelijk dat PASS/logica wint.
     soft.risk += 9;
     soft.tempo -= 4;
     soft.control -= 2;
     soft.info -= 1;
   } else if (playedThisRound >= maxPerRound && allowOverBudget) {
-    // Over budget maar wél toegestaan: kleine frictie zodat het niet standaard wordt
     soft.risk += 2.5;
     soft.tempo -= 0.5;
   }
 
-  // B) Reserve: vroeg 2 bewaren, laat 1–2
+  // B) reserve
   if (!emergency && projectedHandAfterPlay < reserve) {
-    soft.risk += 5.0;      // “spaar” bias
+    soft.risk += 5.0;
     soft.tempo -= 1.5;
     soft.control -= 0.75;
   }
 
-  // C) Diminishing returns op intel: als je al nextKnown hebt → intel kaarten omlaag
-  const nextKnown =
-    !!(ctx?.nextKnown || ctx?.scoutIntel?.nextKnown || ctx?.intel?.nextKnown || ctx?.knownNext);
+  // C) diminishing returns for intel
+  const nextKnown = !!(ctx?.nextKnown || ctx?.scoutIntel?.nextKnown || ctx?.intel?.nextKnown || ctx?.knownNext);
   const knownUpcoming = getKnownUpcomingEvents(opts);
   const knownCount = Array.isArray(knownUpcoming) ? knownUpcoming.length : 0;
 
   if (!emergency && isIntelAction(a) && (nextKnown || knownCount >= 2)) {
-    // Als je al info hebt, is extra peek vaak “waste”
     soft.info -= 4.0;
     soft.tempo -= 1.0;
     soft.risk += 0.75;
   }
 
-  // D) Harde voorwaarden voor Pack Tinker (alleen als er echt iets te fixen valt)
-  //    - voorkeur: botRunner geeft knownUpcomingEvents mee (wat bot weet)
+  // D) Pack Tinker strict conditions
   const isPackTinker = a.id === "PACK_TINKER";
   if (isPackTinker) {
     const lookN = Number(preset?.tagBias?.packTinkerLookahead ?? 4);
@@ -660,21 +538,17 @@ export function scoreActionFacts(actionKey, opts = {}) {
     const hailMary = isLast || scoreBehind >= 6;
 
     if (hasBad && hasGood) {
-      // duidelijk waarde: je kan een slechte binnenkort vervangen
       soft.control += 3.5;
       soft.tempo += 1.0;
       soft.risk -= 1.0;
     } else if (hasBad && !hasGood) {
-      // waarschijnlijk nog steeds oké (chaos), maar minder zeker
       soft.control += 1.2;
       soft.risk += 0.5;
     } else if (hailMary) {
-      // achter staan → variance is soms goed
       soft.control += 0.75;
       soft.tempo += 0.25;
       soft.risk += 1.0;
     } else {
-      // geen bewijs dat dit nodig is → save it
       soft.risk += 6.0;
       soft.control -= 2.0;
       soft.tempo -= 1.0;
@@ -682,131 +556,66 @@ export function scoreActionFacts(actionKey, opts = {}) {
     }
   }
 
-  // E) Kick Up Dust: zeldzaam, vooral nood/hail-mary
+  // E) Kick Up Dust rare
   const isKickUpDust = a.id === "KICK_UP_DUST";
   if (isKickUpDust) {
     const { isLast, scoreBehind } = getScoreRankHints(opts);
     const hailMary = isLast || scoreBehind >= 6;
 
     if (emergency && !ctx?._handMeta?.hasDefense) {
-      // je hebt gevaar + geen defense: noodknop wordt aantrekkelijk
       soft.tempo += 1.5;
       soft.control += 1.0;
       soft.risk -= 0.5;
     } else if (hailMary) {
-      // als je achter ligt, variance mag
       soft.tempo += 0.75;
       soft.risk += 0.75;
     } else {
-      // standaard: zwaar ontmoedigen
       soft.risk += 7.0;
       soft.control -= 2.0;
       soft.tempo -= 2.0;
     }
   }
 
-  // F) Defense prioriteit bij hoge dreiging: defense actions iets omhoog bij dangerNext
+  // F) defense more valuable at high danger
   if (dangerNext >= 7 && isDefenseAction(a)) {
     soft.risk -= 2.0;
     soft.control += 0.75;
   }
 
-  // G) Track-manip is nuttiger als er (bekend) gevaar aankomt
+  // G) track-manip more valuable at medium-high danger
   if (!emergency && isTrackManipAction(a) && dangerNext >= 6) {
     soft.control += 1.25;
     soft.tempo += 0.25;
   }
 
-  // Follow the Tail — bewaren tot jouw Den-event voorbij/revealed is
-  const isFollowTail = a.id === "FOLLOW_THE_TAIL";
-  if (isFollowTail) {
-    const ctxRevealed =
-      typeof ctx?.myDenEventRevealed === "boolean" ? ctx.myDenEventRevealed : null;
-
-    const trackRevealed =
-      ctxRevealed != null
-        ? ctxRevealed
-        : myDenEventAlreadyRevealed({
-            game,
-            me,
-            denColor: opts?.denColor || me?.denColor,
-          });
-
-    if (trackRevealed === false) {
-      // te vroeg: verhoog risico + verlies controle (save it)
-      soft.risk += 2.5;
-      soft.control -= 1.0;
-      soft.tempo -= 0.5;
-    } else if (trackRevealed === true) {
-      // later: nuttiger als uncertainty tool
-      soft.risk -= 1.0;
-      soft.info += 0.5;
-      soft.control += 0.5;
-    } else {
-      // onbekend: kleine “save bias”
-      soft.risk += 0.75;
-    }
-  }
-
-  // Reliability (unimplemented) — beware of “paper actions”
   const implemented = !!a.engineImplemented;
   const reliability = implemented ? 1.0 : (preset.unimplementedMult ?? 0.9);
 
-  const s = {
+  return {
     actionId: a.id,
     name: a.name,
     implemented,
     affectsFlags,
     affectsTrack,
-
-    riskScore:
-      (((tagScore.risk || 0) + (roleBonus.risk || 0) + soft.risk) * w.risk) /
-      reliability,
-    lootScore:
-      (((tagScore.loot || 0) + (roleBonus.loot || 0) + soft.loot) * w.loot) *
-      reliability,
-    infoScore:
-      (((tagScore.info || 0) + (roleBonus.info || 0) + soft.info) * w.info) *
-      reliability,
-    controlScore:
-      (((tagScore.control || 0) + (roleBonus.control || 0) + soft.control) *
-        w.control) *
-      reliability,
-    tempoScore:
-      (((tagScore.tempo || 0) + (roleBonus.tempo || 0) + soft.tempo) * w.tempo) *
-      reliability,
-
+    riskScore: (((tagScore.risk || 0) + (roleBonus.risk || 0) + soft.risk) * w.risk) / reliability,
+    lootScore: (((tagScore.loot || 0) + (roleBonus.loot || 0) + soft.loot) * w.loot) * reliability,
+    infoScore: (((tagScore.info || 0) + (roleBonus.info || 0) + soft.info) * w.info) * reliability,
+    controlScore: (((tagScore.control || 0) + (roleBonus.control || 0) + soft.control) * w.control) * reliability,
+    tempoScore: (((tagScore.tempo || 0) + (roleBonus.tempo || 0) + soft.tempo) * w.tempo) * reliability,
     tags: a.tags || [],
     role: a.role || "unknown",
-
-    // debug helpers (optioneel; safe om te negeren)
     __meta: ctx?.includeMeta
-      ? {
-          dangerNext,
-          emergency,
-          playedThisRound,
-          handCount,
-          reserve,
-          early,
-          late,
-        }
+      ? { dangerNext, emergency, playedThisRound, handCount, reserve, early, late }
       : undefined,
   };
-
-  return s;
 }
 
-// Quick-rank of actions in hand (highest total first)
-// Backwards compat: rankActions(actionIds) still works.
-// New: rankActions(actionIds, { presetKey, denColor, ctx })
 export function rankActions(actionKeys = [], opts = {}) {
   const list = Array.isArray(actionKeys) ? actionKeys : [];
   const handMeta = computeHandMeta(list);
 
-  // zorg dat scoreActionFacts handmeta kan gebruiken (zonder caller-wijziging)
   const ctx = opts?.ctx && typeof opts.ctx === "object" ? opts.ctx : {};
   const ctx2 = { ...ctx, _handMeta: handMeta, _handKeys: list };
-
   const opts2 = { ...opts, ctx: ctx2 };
 
   return [...list]
@@ -819,34 +628,26 @@ export function rankActions(actionKeys = [], opts = {}) {
     .sort((a, b) => b.total - a.total);
 }
 
-// ============================================================
-// 6) Action play gate (optional helper)
-// ============================================================
-//
-// Gebruik in botRunner:
-//
-// const pick = pickActionOrPass(handIds, { game, me, ctx:{ actionsPlayedThisRound, nextEventFacts, nextKnown, isLast, scoreBehind }})
-// if (pick.play) ... else PASS
-//
+/* ============================================================
+   6) Action gate: play vs PASS (bot economy)
+============================================================ */
 export function pickActionOrPass(actionKeys = [], opts = {}) {
   const preset = getPreset(opts.presetKey, opts.denColor);
   const minTotal = Number(preset?.tagBias?.actionPlayMinTotal ?? 3.0);
   const emergencyTotal = Number(preset?.tagBias?.emergencyActionTotal ?? 7.5);
 
   const ranked = rankActions(actionKeys, opts);
-  if (!ranked.length) {
-    return { play: null, ranked, reason: "no_actions" };
-  }
+  if (!ranked.length) return { play: null, ranked, reason: "no_actions" };
 
   const best = ranked[0];
   const bestTotal = Number(best?.total);
+
   const dangerNext = getDangerNext(opts);
   const emergency = dangerNext >= 8 || opts?.ctx?.emergency === true;
 
   const playedThisRound = getActionsPlayedThisRound(opts);
   const maxPerRound = Number(preset?.tagBias?.maxActionsPerRound ?? 1) || 1;
 
-  // hard budget: als al max en niet emergency/combo -> PASS
   const comboAllowed = !!(opts?.ctx?.comboAllowed || opts?.ctx?.comboFollowUp || opts?.ctx?.comboPrimed);
   const allowOverBudget = emergency || comboAllowed;
 
@@ -854,10 +655,7 @@ export function pickActionOrPass(actionKeys = [], opts = {}) {
     return { play: null, ranked, reason: "budget_max_reached" };
   }
 
-  // threshold: niet spelen als het “meh” is (action-economie)
-  if (!Number.isFinite(bestTotal)) {
-    return { play: null, ranked, reason: "invalid_score" };
-  }
+  if (!Number.isFinite(bestTotal)) return { play: null, ranked, reason: "invalid_score" };
 
   if (emergency) {
     if (bestTotal >= emergencyTotal) return { play: best.id, ranked, reason: "emergency_play" };
@@ -868,27 +666,21 @@ export function pickActionOrPass(actionKeys = [], opts = {}) {
   return { play: null, ranked, reason: "below_threshold" };
 }
 
-// ============================================================
-// 7) Decision helper (optional)
-// ============================================================
-// Dit is niet verplicht voor bestaande code, maar handig als je decision-IQ wil upgraden.
+/* ============================================================
+   7) Optional decision recommendation (DASH/BURROW/LURK)
+============================================================ */
 export function recommendDecision(opts = {}) {
   const { me } = getCtx(opts);
   const dangerNext = getDangerNext(opts);
   const carry = estimateCarryValue(me);
 
-  // roosters ahead (alleen als je knownUpcomingEvents meegeeft)
   const knownUpcoming = getKnownUpcomingEvents(opts);
   const facts = knownUpcoming.map((k) => getEventFacts(k) || null).filter(Boolean);
   const roostersAhead3 = facts
     .slice(0, 3)
-    .filter(
-      (f) =>
-        safeTags(f.tags).includes("ROOSTER_TICK") ||
-        String(f.id || "").includes("ROOSTER")
-    ).length;
+    .filter((f) => safeTags(f.tags).includes("ROOSTER_TICK") || String(f.id || "").includes("ROOSTER"))
+    .length;
 
-  // simpele triggers (kan botRunner direct gebruiken)
   if (carry >= 7) {
     if (dangerNext >= 5 || roostersAhead3 >= 1) return { decision: "DASH", carry, dangerNext, roostersAhead3 };
     return { decision: "LURK", carry, dangerNext, roostersAhead3 };
@@ -900,7 +692,6 @@ export function recommendDecision(opts = {}) {
     return { decision: "LURK", carry, dangerNext, roostersAhead3 };
   }
 
-  // carry low
   if (dangerNext >= 7) return { decision: "BURROW", carry, dangerNext, roostersAhead3 };
   return { decision: "LURK", carry, dangerNext, roostersAhead3 };
 }
