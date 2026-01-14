@@ -12,6 +12,8 @@
 // - Optional decision recommendation (DASH/BURROW/LURK) based on carry + danger
 
 import { RULES_INDEX, getEventFacts, getActionFacts } from "./rulesIndex.js";
+import { evaluateCorePolicy, DEFAULT_CORE_CONFIG } from "./botPolicyCore.js";
+
 
 /* ============================================================
    1) Presets (koppel aan Den-kleur)
