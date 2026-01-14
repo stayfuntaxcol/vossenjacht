@@ -610,22 +610,158 @@ export function scoreActionFacts(actionKey, opts = {}) {
   };
 }
 
+// Quick-rank of actions in hand (highest total first)
+// Backwards compat: rankActions(actionIds) still works.
+// New: rankActions(actionIds, { presetKey, denColor, game, me, ctx, coreConfig, comboInfo })
 export function rankActions(actionKeys = [], opts = {}) {
-  const list = Array.isArray(actionKeys) ? actionKeys : [];
-  const handMeta = computeHandMeta(list);
+  const keys = Array.isArray(actionKeys) ? actionKeys : [];
 
-  const ctx = opts?.ctx && typeof opts.ctx === "object" ? opts.ctx : {};
-  const ctx2 = { ...ctx, _handMeta: handMeta, _handKeys: list };
-  const opts2 = { ...opts, ctx: ctx2 };
+  // ---- canonical actionId mapping (accept id OR human name) ----
+  if (!globalThis.__BOT_ACTION_NAME_TO_ID) {
+    const map = new Map();
+    const actions = (RULES_INDEX && RULES_INDEX.actions) ? RULES_INDEX.actions : {};
+    for (const [id, a] of Object.entries(actions)) {
+      const nm = String(a?.name || "").trim();
+      if (nm) map.set(nm.toLowerCase(), id);
+    }
+    globalThis.__BOT_ACTION_NAME_TO_ID = map;
+  }
+  const nameToId = globalThis.__BOT_ACTION_NAME_TO_ID;
 
-  return [...list]
-    .map((key) => {
-      const s = scoreActionFacts(key, opts2);
+  function toActionId(keyOrName) {
+    const k = String(keyOrName || "").trim();
+    if (!k) return null;
+    // already an id?
+    if (RULES_INDEX?.actions?.[k]) return k;
+    // try lookup by human name
+    return nameToId.get(k.toLowerCase()) || null;
+  }
+
+  const actionIds = keys.map(toActionId).filter(Boolean);
+  if (!actionIds.length) return [];
+
+  // ---- derive ctx for CORE (if caller didn't supply ctx) ----
+  const presetKey =
+    opts?.presetKey ||
+    (typeof presetFromDenColor === "function" ? presetFromDenColor(opts?.denColor) : "BLUE");
+
+  const preset = (BOT_PRESETS && BOT_PRESETS[presetKey]) ? BOT_PRESETS[presetKey] : (BOT_PRESETS?.BLUE || {});
+  const cfg = { ...DEFAULT_CORE_CONFIG, ...(preset?.coreOverride || {}), ...(opts?.coreConfig || {}) };
+
+  const game = opts?.game || null;
+  const me = opts?.me || null;
+
+  const ctx = opts?.ctx || (() => {
+    const round = Number.isFinite(Number(game?.round)) ? Number(game.round) : 0;
+    const phase = String(game?.phase || "");
+
+    const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
+
+    const discardThisRoundActionIds = disc
+      .filter((x) => Number(x?.round || 0) === round)
+      .map((x) => toActionId(x?.name || x?.id || x?.actionId))
+      .filter(Boolean);
+
+    const discardRecentActionIds = [...disc]
+      .sort((a, b) => Number(a?.at || 0) - Number(b?.at || 0))
+      .slice(-10)
+      .map((x) => toActionId(x?.name || x?.id || x?.actionId))
+      .filter(Boolean);
+
+    const discardActionIds = [
+      ...disc.map((x) => toActionId(x?.name || x?.id || x?.actionId)),
+      ...(Array.isArray(game?.actionDiscardPile)
+        ? game.actionDiscardPile.map((x) => toActionId(x))
+        : []),
+    ].filter(Boolean);
+
+    const actionsPlayedThisRound =
+      me?.id
+        ? disc.filter((x) => x?.by === me.id && Number(x?.round || 0) === round).length
+        : 0;
+
+    const knownUpcomingEvents = Array.isArray(me?.knownUpcomingEvents) ? me.knownUpcomingEvents : [];
+    const knownUpcomingCount = knownUpcomingEvents.length;
+    const scoutTier = knownUpcomingCount >= 2 ? "HARD_SCOUT" : knownUpcomingCount >= 1 ? "SOFT_SCOUT" : "NO_SCOUT";
+
+    // dangerNext fallback (v1 = 0; later geef je ctx.dangerNext mee vanuit botRunner)
+    const dangerNext = 0;
+
+    const roosterSeen = Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0;
+
+    const carryValue =
+      (Number.isFinite(Number(me?.score)) ? Number(me.score) : null) ??
+      (Number(me?.eggs || 0) + Number(me?.hens || 0) + (me?.prize ? 3 : 0));
+
+    return {
+      phase,
+      round,
+      botId: me?.id || null,
+      denColor: String(opts?.denColor || me?.denColor || me?.color || ""),
+      carryValue,
+      isLast: !!opts?.isLast,
+      scoreBehind: Number(opts?.scoreBehind || 0),
+
+      handActionIds: actionIds,
+      handSize: actionIds.length,
+      actionsPlayedThisRound,
+
+      discardActionIds,
+      discardThisRoundActionIds,
+      discardRecentActionIds,
+
+      nextKnown: false,
+      knownUpcomingEvents,
+      knownUpcomingCount,
+      scoutTier,
+      nextEventFacts: null,
+      dangerNext,
+
+      roosterSeen,
+      rooster2JustRevealed: false,
+      postRooster2Window: roosterSeen >= 2,
+
+      lockEventsActive: !!game?.flagsRound?.lockEvents,
+      opsLockedActive: !!game?.flagsRound?.opsLocked,
+
+      revealedDenEventsByColor: {},
+    };
+  })();
+
+  // ---- comboInfo: optioneel (CORE werkt ook zonder matrix) ----
+  const comboInfo = opts?.comboInfo || {
+    bestPair: { a: null, b: null, score: 0 },
+    bestPartnerScoreByActionId: {},
+    allowsDuplicatePair: () => false,
+  };
+
+  const core = evaluateCorePolicy(ctx, comboInfo, cfg);
+  const denySet = new Set(Array.isArray(core?.denyActionIds) ? core.denyActionIds : []);
+
+  return actionIds
+    .map((id) => {
+      if (denySet.has(id)) return null;
+
+      const s = scoreActionFacts(id, { ...opts, presetKey });
       if (!s) return null;
-      return { id: key, s, total: totalScore(s) };
+
+      const base = totalScore(s);
+      const delta = Number(core?.addToActionTotal?.[id] || 0);
+      const total = base + delta;
+
+      return {
+        id,
+        s: {
+          ...s,
+          coreDelta: delta,
+          coreDangerEffective: core?.dangerEffective,
+          coreCashoutBias: core?.cashoutBias,
+        },
+        total,
+      };
     })
     .filter(Boolean)
-    .sort((a, b) => b.total - a.total);
+    .sort((a, b) => (b.total - a.total));
 }
 
 /* ============================================================
