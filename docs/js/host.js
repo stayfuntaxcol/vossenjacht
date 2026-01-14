@@ -1352,31 +1352,38 @@ function renderStatusCards(game) {
 // ====================================
 
 function renderActionDeckAndDiscard(game) {
-  // action deck: gewoon de achterkant (of laat zoals jij het al doet)
   if (actionDeckCard) {
     actionDeckCard.style.backgroundImage = `url('${CARD_BACK}')`;
   }
-
   if (!actionDiscardCard) return;
 
-const discard =
-  Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile :
-  Array.isArray(game?.actionDiscard) ? game.actionDiscard :
-  [];
-  const top = discard.length ? discard[discard.length - 1] : null;
+  // Zorg dat oude overlays weg zijn
+  actionDiscardCard.innerHTML = "";
+
+  // 1) meest betrouwbaar: lastActionPlayed
+  const last = game?.lastActionPlayed || null;
+
+  // 2) daarna: echte discard pile (met uid)
+  const pile = Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : [];
+
+  // 3) legacy fallback
+  const legacy = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
+
+  const top =
+    last ||
+    (pile.length ? pile[pile.length - 1] : null) ||
+    (legacy.length ? legacy[legacy.length - 1] : null);
 
   if (!top) {
-    // leeg: placeholder (CSS doet dit ook, maar zo is het expliciet)
     actionDiscardCard.style.backgroundImage =
       "url('./assets/card_discard_pile.png')";
     return;
   }
 
-  // top kan string zijn, of object {name}/{id}
-  const key = String(top?.name || top?.id || top || "").trim();
+  const key = String(top?.name || top?.id || top?.cardId || top || "").trim();
   const def = getActionDefByName(key);
-
   const img = def?.imageFront || CARD_BACK;
+
   actionDiscardCard.style.backgroundImage = `url('${img}')`;
 }
 
