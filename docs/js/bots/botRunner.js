@@ -548,7 +548,15 @@ function pickBestActionFromHand({ game, bot, players }) {
       targetId = pickRichestTarget(players || [], bot.id);
       if (!targetId) continue;
     }
-
+    
+let pick = null;
+try {
+  pick = pickBestActionFromHand({ game: g, bot: p, players: latestPlayers });
+} catch (err) {
+  console.warn("[BOTS] action pick crashed -> PASS", err);
+  pick = null; // force PASS path
+}
+    
     // terug naar “kaartnaam” die in hand zit (nodig voor removeOneCard(hand, cardName))
     const entry = entries.find((x) => x.def.id === id);
     const name = entry?.name || entry?.def?.name || id;
