@@ -3,7 +3,14 @@
 
 import { getEventFacts } from "./aiKit.js";
 import { getActionDefByName } from "../cards.js";
-import { rankActions, scoreActionFacts, presetFromDenColor, BOT_PRESETS } from "./botHeuristics.js";
+import {
+  rankActions,
+  scoreActionFacts,
+  presetFromDenColor,
+  BOT_PRESETS,
+  pickActionOrPass, // ✅ toevoegen
+} from "./botHeuristics.js";
+
 import {
   doc,
   getDoc,
@@ -527,19 +534,67 @@ function pickBestActionFromHand({ game, bot, players }) {
   const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
   const presetKey = presetFromDenColor(denColor);
 
-  const ranked = rankActions(ids, { presetKey, denColor, game, me: bot }); // hoogste waarde eerst
+  // --- context voor heuristics (budget / emergency / intel-diminishing / hail-mary) ---
+  const roundNum = Number(game?.round || 0);
+  const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
+  const actionsPlayedThisRound = disc.filter(
+    (x) => x?.by === bot.id && Number(x?.round || 0) === roundNum
+  ).length;
 
-  for (const r of ranked) {
-    const id = r.id;
+  const flags = fillFlags(game?.flagsRound);
+  const nextId = nextEventId(game, 0);
+  const nextEventFacts = nextId ? getEventFacts(nextId) : null;
 
-    // legality checks
+  // bot “knows next” als hij een prediction heeft gezet op deze next event
+  const nextKnown = !!(Array.isArray(flags?.predictions) ? flags.predictions : []).some(
+    (x) => x?.playerId === bot.id && String(x?.eventId || "") === String(nextId || "")
+  );
+
+  // score meta (heel simpel): gebruik score als die bestaat, anders lootpunten
+  const list = Array.isArray(players) ? players : [];
+  const getVal = (pl) => {
+    const s = Number(pl?.score);
+    if (Number.isFinite(s)) return s;
+    return sumLootPoints(pl);
+  };
+  const sorted = [...list].filter((x) => x?.id).sort((a, b) => getVal(b) - getVal(a));
+  const leaderVal = sorted.length ? getVal(sorted[0]) : 0;
+  const myVal = getVal(bot);
+  const myRank = sorted.findIndex((x) => x.id === bot.id);
+  const isLast = myRank >= 0 ? myRank === sorted.length - 1 : false;
+  const scoreBehind = Math.max(0, leaderVal - myVal);
+
+  const pick = pickActionOrPass(ids, {
+    presetKey,
+    denColor,
+    game,
+    me: bot,
+    ctx: {
+      actionsPlayedThisRound,
+      nextEventFacts,
+      nextKnown,
+      isLast,
+      scoreBehind,
+    },
+  });
+
+  if (!pick?.play) return null;
+
+  // Kandidaten: eerst de gekozen, daarna de rest van de ranking als fallback
+  const ranked = Array.isArray(pick?.ranked) ? pick.ranked : [];
+  const candidateIds = [
+    pick.play,
+    ...ranked.map((r) => r.id).filter((id) => id && id !== pick.play),
+  ];
+
+  for (const id of candidateIds) {
+    // legality checks (zelfde als jij al had)
     if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
       if (game?.flagsRound?.lockEvents) continue;
-      if (!Array.isArray(game.eventTrack)) continue;
-      if (typeof game.eventIndex !== "number") continue;
+      if (!Array.isArray(game?.eventTrack)) continue;
+      if (typeof game?.eventIndex !== "number") continue;
       if (game.eventIndex >= game.eventTrack.length - 1) continue;
     }
-
     if (id === "HOLD_STILL" && game?.flagsRound?.opsLocked) continue;
 
     // targets waar nodig
@@ -548,15 +603,7 @@ function pickBestActionFromHand({ game, bot, players }) {
       targetId = pickRichestTarget(players || [], bot.id);
       if (!targetId) continue;
     }
-    
-let pick = null;
-try {
-  pick = pickBestActionFromHand({ game: g, bot: p, players: latestPlayers });
-} catch (err) {
-  console.warn("[BOTS] action pick crashed -> PASS", err);
-  pick = null; // force PASS path
-}
-    
+
     // terug naar “kaartnaam” die in hand zit (nodig voor removeOneCard(hand, cardName))
     const entry = entries.find((x) => x.def.id === id);
     const name = entry?.name || entry?.def?.name || id;
@@ -564,6 +611,7 @@ try {
     return targetId ? { name, targetId } : { name };
   }
 
+  // niets legaals gevonden => PASS
   return null;
 }
 
