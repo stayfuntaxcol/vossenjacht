@@ -92,6 +92,117 @@ function handToActionIds(hand) {
   }
   return ids;
 }
+// ================================
+// Heuristics/Strategies ctx builder
+// ================================
+function peakDanger(f) {
+  if (!f) return 0;
+  return Math.max(Number(f.dangerDash || 0), Number(f.dangerLurk || 0), Number(f.dangerBurrow || 0));
+}
+
+function buildRevealedDenMap(game) {
+  const out = {};
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
+  const n = Math.min(track.length, rev.length);
+
+  for (let i = 0; i < n; i++) {
+    if (rev[i] !== true) continue;
+    const id = String(track[i] || "");
+    if (id.startsWith("DEN_")) out[id.slice(4).toUpperCase()] = true;
+  }
+  return out;
+}
+
+// Belangrijk: Rooster-gevaar pas opvoeren NA de 2e rooster die echt REVEALED is.
+// We baseren dit op eventRevealed (en vallen terug op game.roosterSeen als dat ontbreekt).
+function countRevealedRoosters(game) {
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
+  const n = Math.min(track.length, rev.length);
+
+  let c = 0;
+  for (let i = 0; i < n; i++) {
+    if (rev[i] === true && String(track[i]) === "ROOSTER_CROW") c++;
+  }
+  if (c === 0 && Number.isFinite(Number(game?.roosterSeen))) c = Number(game.roosterSeen);
+  return c;
+}
+
+function buildBotCtxForHeuristics({ game, bot, players, handNames, handIds }) {
+  const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
+  const round = Number.isFinite(Number(game?.round)) ? Number(game.round) : 0;
+
+  const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
+  const discThisRound = disc.filter((x) => Number(x?.round || 0) === round);
+
+  const actionsPlayedThisRound = discThisRound.filter((x) => x?.by === bot?.id).length;
+
+  // ids van actions die deze ronde al op discard liggen (voor anti-duplicate rules)
+  const discardThisRoundActionIds = discThisRound
+    .map((x) => String(x?.id || x?.actionId || x?.key || ""))
+    .filter(Boolean);
+
+  const nextId = getNextEventId(game);
+  const nextFacts = nextId ? getEventFacts(nextId) : null;
+
+  // scout knowledge (als je dit al bijhoudt op player doc)
+  const known = Array.isArray(bot?.knownUpcomingEvents)
+    ? bot.knownUpcomingEvents.filter(Boolean)
+    : [];
+  const scoutTier = known.length >= 2 ? "FULL_SCOUT" : known.length === 1 ? "PARTIAL_SCOUT" : "NO_SCOUT";
+
+  // rooster reveal window
+  const revealedRoosters = countRevealedRoosters(game);
+
+  // follow-tail target hints
+  const ps = Array.isArray(players) ? players : [];
+  const candidates = ps.filter((pl) => pl?.id && pl.id !== bot?.id && isInYard(pl));
+  const sameDenCandidates = candidates.filter(
+    (pl) => normColor(pl?.color || pl?.den || pl?.denColor) === denColor
+  );
+
+  const bestFollowTarget = sameDenCandidates[0] || candidates[0] || null;
+  const bestFollowTargetDen = bestFollowTarget
+    ? normColor(bestFollowTarget?.color || bestFollowTarget?.den || bestFollowTarget?.denColor)
+    : null;
+
+  const revealedDenEventsByColor = buildRevealedDenMap(game);
+
+  return {
+    round,
+    phase: String(game?.phase || ""),
+    botId: bot?.id || null,
+    denColor,
+
+    handActionNames: Array.isArray(handNames) ? handNames : [],
+    handActionIds: Array.isArray(handIds) ? handIds : [],
+    handSize: Array.isArray(handIds) ? handIds.length : 0,
+
+    actionsPlayedThisRound,
+    discardThisRoundActionIds,
+
+    nextEventId: nextId,
+    nextEventFacts: nextFacts,
+    dangerNext: peakDanger(nextFacts),
+
+    scoutTier,
+    nextKnown: scoutTier !== "NO_SCOUT",
+
+    revealedRoosters,
+    postRooster2Window: revealedRoosters >= 2,
+
+    revealedDenEventsByColor,
+
+    hasEligibleFollowTarget: !!bestFollowTarget,
+    bestFollowTargetIsSameDen: !!bestFollowTargetDen && bestFollowTargetDen === denColor,
+    bestFollowTargetDenRevealed: !!bestFollowTargetDen && revealedDenEventsByColor[bestFollowTargetDen] === true,
+
+    // bot-only anti duplicate (humans niet beperken)
+    avoidDuplicateActionThisRound: true,
+    allowDuplicateForCombo: true,
+  };
+}
 
 // 0..100 (grof, maar werkt goed)
 function computeHandStrength({ game, bot }) {
@@ -100,8 +211,21 @@ function computeHandStrength({ game, bot }) {
   const presetKey = presetFromDenColor(denColor);
   if (!ids.length) return { score: 0, ids: [], top: null };
 
+   // handNames was missing (bugfix)
+  const handNames = (Array.isArray(bot?.hand) ? bot.hand : [])
+    .map((c) => String(c?.name || c || "").trim())
+    .filter(Boolean);
+
+  const ctx = buildBotCtxForHeuristics({
+    game,
+    bot,
+    players: [],          // computeHandStrength heeft hier meestal geen players nodig
+    handNames,
+    handIds: ids,
+  });
+
   // top-2 kaarten tellen het zwaarst
-  const ranked = rankActions(ids, { presetKey, denColor, game, me: bot });
+  const ranked = rankActions(ids, { presetKey, denColor, game, me: bot, ctx });
   const ctx = buildBotCtx({ game, bot, players, handActionIds: ids, handActionKeys: handNames, nextEventFacts, isLast, scoreBehind });
   
   // --- action economy guardrails (bots should not spam actions) ---
@@ -131,7 +255,7 @@ const topIds = ranked.slice(0, 2).map((x) => x.id);
 
   let raw = 0;
   for (const id of topIds) {
-    const s = scoreActionFacts(id, { presetKey, denColor, game, me: bot });
+    const s = scoreActionFacts(id, { presetKey, denColor, game, me: bot, ctx });
     if (!s) continue;
     raw +=
       (s.controlScore || 0) +
@@ -709,6 +833,86 @@ function pickBestActionFromHand({ game, bot, players }) {
   const myRank = sorted.findIndex((x) => x.id === bot.id);
   const isLast = myRank >= 0 ? myRank === sorted.length - 1 : false;
   const scoreBehind = Math.max(0, leaderVal - myVal);
+
+    // >>> ADD: ctx voor CORE + actionStrategies
+  const discThisRound = disc.filter((x) => Number(x?.round || 0) === roundNum);
+
+  const discardThisRoundActionIds = discThisRound
+    .map((x) => String(x?.id || "").trim())
+    .filter(Boolean);
+
+  const discardRecentActionIds = [...disc]
+    .sort((a, b) => Number(a?.at || 0) - Number(b?.at || 0))
+    .slice(-10)
+    .map((x) => String(x?.id || "").trim())
+    .filter(Boolean);
+
+  // Scout tier (actionStrategies verwacht: NO_SCOUT / SOFT_SCOUT / HARD_SCOUT)
+  const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
+    ? bot.knownUpcomingEvents.filter(Boolean)
+    : [];
+  const scoutTier =
+    knownUpcomingEvents.length >= 2
+      ? "HARD_SCOUT"
+      : knownUpcomingEvents.length >= 1
+      ? "SOFT_SCOUT"
+      : (nextKnown ? "SOFT_SCOUT" : "NO_SCOUT"); // fallback op jouw prediction-logic
+
+  const dangerNext = nextEventFacts
+    ? Math.max(
+        Number(nextEventFacts.dangerDash || 0),
+        Number(nextEventFacts.dangerLurk || 0),
+        Number(nextEventFacts.dangerBurrow || 0)
+      )
+    : 0;
+
+  const roosterSeen = Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0;
+
+  const ctx = {
+    phase: String(game?.phase || ""),
+    round: roundNum,
+    botId: bot?.id || null,
+    denColor,
+
+    carryValue: myVal,
+    isLast,
+    scoreBehind,
+
+    handActionIds: ids,
+    handSize: ids.length,
+    actionsPlayedThisRound,
+
+    discardActionIds,
+    discardThisRoundActionIds,
+    discardRecentActionIds,
+
+    nextKnown,
+    knownUpcomingEvents,
+    knownUpcomingCount: knownUpcomingEvents.length,
+    scoutTier,
+
+    nextEventFacts,
+    dangerNext,
+
+    roosterSeen,
+    rooster2JustRevealed: false,
+    postRooster2Window: roosterSeen >= 2,
+
+    lockEventsActive,
+    opsLockedActive,
+
+    // Follow-the-tail hints (v1 default; later maken we dit target-aware)
+    hasEligibleFollowTarget: false,
+    bestFollowTargetIsSameDen: false,
+    bestFollowTargetDenRevealed: false,
+
+    revealedDenEventsByColor: {}, // later vullen als je wil
+  };
+
+  // handHas_* flags voor strategies (KickUpDust combo-save)
+  for (const id of ids) ctx["handHas_" + id] = true;
+  // <<< END ctx
+
   // -------- Combo context (voor matrix) --------
   const discardActionIds = [
     ...(Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : []),
@@ -760,24 +964,103 @@ function pickBestActionFromHand({ game, bot, players }) {
     denColor,
     game,
     me: bot,
-    ctx: {
-      actionsPlayedThisRound,
-      nextEventFacts,
-      nextKnown,
-      isLast,
-      scoreBehind,
+   ctx: (() => {
+  const roundNum = Number(game?.round || 0);
+  const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
+  const discThisRound = disc.filter((x) => Number(x?.round || 0) === roundNum);
 
-      // ✅ nieuw voor combo-planning + sparen
-      comboPrimed: wantsCombo,        // laat heuristics toe om 2e action te overwegen
-      comboAllowed: wantsCombo,       // budget override alleen bij echte combo
-      comboScore: combo.score,        // debug/telemetry
-      comboPlan: wantsCombo ? { a: combo.a, b: combo.b } : null,
+  const discardThisRoundActionIds = discThisRound
+    .map((x) => String(x?.id || x?.actionId || x?.key || "").trim())
+    .filter(Boolean);
 
-      // ✅ context voor matrix
-      discardActionIds,
-      lockEventsActive,
-      opsLockedActive,
-    },
+  const discardRecentActionIds = [...disc]
+    .sort((a, b) => Number(a?.at || 0) - Number(b?.at || 0))
+    .slice(-10)
+    .map((x) => String(x?.id || x?.actionId || x?.key || "").trim())
+    .filter(Boolean);
+
+  // Scout tier voor strategies (NO/ SOFT/ HARD)
+  const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
+    ? bot.knownUpcomingEvents.filter(Boolean)
+    : [];
+  const knownUpcomingCount = knownUpcomingEvents.length;
+
+  const scoutTier =
+    knownUpcomingCount >= 2
+      ? "HARD_SCOUT"
+      : knownUpcomingCount >= 1
+      ? "SOFT_SCOUT"
+      : (nextKnown ? "SOFT_SCOUT" : "NO_SCOUT"); // fallback op jouw prediction-based nextKnown
+
+  const dangerNext = nextEventFacts
+    ? Math.max(
+        Number(nextEventFacts.dangerDash || 0),
+        Number(nextEventFacts.dangerLurk || 0),
+        Number(nextEventFacts.dangerBurrow || 0)
+      )
+    : 0;
+
+  const roosterSeen = Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0;
+
+  const lockEventsActive = !!game?.flagsRound?.lockEvents;
+  const opsLockedActive = !!game?.flagsRound?.opsLocked;
+
+  const ctx = {
+    // CORE basics
+    phase: String(game?.phase || ""),
+    round: roundNum,
+    botId: bot?.id || null,
+    denColor,
+
+    carryValue: myVal,
+    isLast,
+    scoreBehind,
+
+    handActionIds: ids,
+    handSize: ids.length,
+
+    actionsPlayedThisRound,
+    discardActionIds,
+    discardThisRoundActionIds,
+    discardRecentActionIds,
+
+    // knowledge / danger
+    nextEventFacts,
+    dangerNext,
+    nextKnown,
+    knownUpcomingEvents,
+    knownUpcomingCount,
+    scoutTier,
+
+    // rooster timing (v1)
+    roosterSeen,
+    rooster2JustRevealed: false,
+    postRooster2Window: roosterSeen >= 2,
+
+    // flags
+    lockEventsActive,
+    opsLockedActive,
+
+    // Follow-the-tail hints (later target-aware maken; nu neutraal)
+    hasEligibleFollowTarget: false,
+    bestFollowTargetIsSameDen: false,
+    bestFollowTargetDenRevealed: false,
+
+    revealedDenEventsByColor: {},
+
+    // JOUW combo context (mag blijven bestaan; CORE negeert onbekenden)
+    comboPrimed: wantsCombo,
+    comboAllowed: wantsCombo,
+    comboScore: combo.score,
+    comboPlan: wantsCombo ? { a: combo.a, b: combo.b } : null,
+  };
+
+  // handHas_* flags voor actionStrategies (KickUpDust bewaart als geen BURROW_BEACON)
+  for (const id of ids) ctx["handHas_" + id] = true;
+
+  return ctx;
+})(),
+
   });
 
   if (!pick?.play) return null;
