@@ -102,6 +102,7 @@ function computeHandStrength({ game, bot }) {
 
   // top-2 kaarten tellen het zwaarst
   const ranked = rankActions(ids, { presetKey, denColor, game, me: bot });
+  const ctx = buildBotCtx({ game, bot, players, handActionIds: ids, handActionKeys: handNames, nextEventFacts, isLast, scoreBehind });
   
   // --- action economy guardrails (bots should not spam actions) ---
   const preset = (BOT_PRESETS && BOT_PRESETS[presetKey]) ? BOT_PRESETS[presetKey] : (BOT_PRESETS?.BLUE || {});
