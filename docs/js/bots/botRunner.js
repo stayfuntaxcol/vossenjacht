@@ -3,6 +3,7 @@
 
 import { getEventFacts } from "./aiKit.js";
 import { getActionDefByName } from "../cards.js";
+import { comboScore } from "./actionComboMatrix.js";
 import {
   rankActions,
   scoreActionFacts,
@@ -563,7 +564,52 @@ function pickBestActionFromHand({ game, bot, players }) {
   const myRank = sorted.findIndex((x) => x.id === bot.id);
   const isLast = myRank >= 0 ? myRank === sorted.length - 1 : false;
   const scoreBehind = Math.max(0, leaderVal - myVal);
+  // -------- Combo context (voor matrix) --------
+  const discardActionIds = [
+    ...(Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : []),
+    ...(Array.isArray(game?.actionDiscard)
+      ? game.actionDiscard.map((x) => x?.id).filter(Boolean)
+      : []),
+  ].map((x) => String(x || "").trim()).filter(Boolean);
 
+  const lockEventsActive = !!game?.flagsRound?.lockEvents;
+  const opsLockedActive = !!game?.flagsRound?.opsLocked;
+
+  function bestComboPair(actionIds, ctx) {
+    let best = { a: null, b: null, score: 0 };
+    const list = Array.isArray(actionIds) ? actionIds : [];
+    for (const a of list) {
+      if (a === "HOLD_STILL") continue; // HOLD_STILL als opener is altijd slecht
+      for (const b of list) {
+        if (!b || b === a) continue;
+        const s = comboScore(a, b, ctx);
+        if (s > best.score) best = { a, b, score: s };
+      }
+    }
+    return best;
+  }
+
+  // ctx voor comboScore (sluit aan op actionComboMatrix.js + botHeuristics.js)
+  const comboCtx = {
+    nextKnown,
+    knownUpcomingEvents: Array.isArray(flags?.knownUpcomingEvents) ? flags.knownUpcomingEvents : [],
+    nextEventFacts,
+    lockEventsActive,
+    opsLockedActive,
+    discardActionIds,
+    isLast,
+    scoreBehind,
+  };
+
+  const combo = bestComboPair(ids, comboCtx);
+  const COMBO_THRESHOLD = 7; // >=7 = “echte” combo, mag 2 actions rechtvaardigen
+  const wantsCombo = combo.score >= COMBO_THRESHOLD;
+
+  // Prefer A op eerste play, prefer B op tweede play
+  let preferredId = null;
+  if (wantsCombo) {
+    preferredId = actionsPlayedThisRound === 0 ? combo.a : actionsPlayedThisRound === 1 ? combo.b : null;
+  }
   const pick = pickActionOrPass(ids, {
     presetKey,
     denColor,
@@ -575,16 +621,31 @@ function pickBestActionFromHand({ game, bot, players }) {
       nextKnown,
       isLast,
       scoreBehind,
+
+      // ✅ nieuw voor combo-planning + sparen
+      comboPrimed: wantsCombo,        // laat heuristics toe om 2e action te overwegen
+      comboAllowed: wantsCombo,       // budget override alleen bij echte combo
+      comboScore: combo.score,        // debug/telemetry
+      comboPlan: wantsCombo ? { a: combo.a, b: combo.b } : null,
+
+      // ✅ context voor matrix
+      discardActionIds,
+      lockEventsActive,
+      opsLockedActive,
     },
   });
 
   if (!pick?.play) return null;
 
+  // ✅ forceer “combo-first” als we een sterke combo hebben
+  let chosenId = pick.play;
+  if (preferredId && ids.includes(preferredId)) chosenId = preferredId;
+
   // Kandidaten: eerst de gekozen, daarna de rest van de ranking als fallback
-  const ranked = Array.isArray(pick?.ranked) ? pick.ranked : [];
+   const ranked = Array.isArray(pick?.ranked) ? pick.ranked : [];
   const candidateIds = [
-    pick.play,
-    ...ranked.map((r) => r.id).filter((id) => id && id !== pick.play),
+    chosenId,
+    ...ranked.map((r) => r.id).filter((id) => id && id !== chosenId),
   ];
 
   for (const id of candidateIds) {
