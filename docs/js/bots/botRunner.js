@@ -3,7 +3,7 @@
 
 import { getEventFacts } from "./aiKit.js";
 import { getActionDefByName } from "../cards.js";
-import { rankActions, scoreActionFacts, presetFromDenColor } from "./botHeuristics.js";
+import { rankActions, scoreActionFacts, presetFromDenColor, BOT_PRESETS } from "./botHeuristics.js";
 import {
   doc,
   getDoc,
@@ -94,7 +94,31 @@ function computeHandStrength({ game, bot }) {
 
   // top-2 kaarten tellen het zwaarst
   const ranked = rankActions(ids, { presetKey, denColor, game, me: bot });
-  const topIds = ranked.slice(0, 2).map((x) => x.id);
+  
+  // --- action economy guardrails (bots should not spam actions) ---
+  const preset = (BOT_PRESETS && BOT_PRESETS[presetKey]) ? BOT_PRESETS[presetKey] : (BOT_PRESETS?.BLUE || {});
+  const roundNum = Number.isFinite(Number(game?.round)) ? Number(game.round) : 1;
+
+  const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
+  const alreadyPlayedThisRound = disc.some(
+    (x) => x?.by === bot.id && Number(x?.round || 0) === roundNum
+  );
+
+  const handCount = handNames.length;
+  const reserve = roundNum <= 1 ? (preset.actionReserveEarly ?? 2) : (preset.actionReserveLate ?? 1);
+
+  const top = ranked[0];
+  const topTotal = Number.isFinite(Number(top?.total)) ? Number(top.total) : 0;
+  const topEmergency = topTotal >= (preset.emergencyActionTotal ?? 7.5);
+
+  // conserve cards early + avoid double-playing in same round
+  if (handCount <= reserve && !topEmergency) return null;
+  if (alreadyPlayedThisRound && !topEmergency) return null;
+
+  // only play when it is actually worth it (unless emergency)
+  const minTotal = preset.actionPlayMinTotal ?? 3.0;
+  if (topTotal < minTotal && !topEmergency) return null;
+const topIds = ranked.slice(0, 2).map((x) => x.id);
 
   let raw = 0;
   for (const id of topIds) {
@@ -312,7 +336,11 @@ function pickDecisionLootMaximizer({ g, p, latestPlayers, gameId }) {
   const nextEvent0 = nextEventId(g, 0);
   const lootPts = sumLootPoints(p);
 
-  const isLead = (() => {
+  
+  // Rooster pressure: after 2 roosters the next one can end the raid.
+  // If you already have loot, prefer to bail out (DASH) instead of risking getting caught.
+  const roosterSeen = Number.isFinite(Number(g?.roosterSeen)) ? Number(g.roosterSeen) : 0;
+const isLead = (() => {
     const ordered = [...(latestPlayers || [])].sort(
       (a, b) => (a.joinOrder ?? 9999) - (b.joinOrder ?? 9999)
     );
@@ -407,6 +435,16 @@ function pickDecisionLootMaximizer({ g, p, latestPlayers, gameId }) {
     // extra: dash met 0 loot is normaal onaantrekkelijk,
     // maar bij HIDDEN_NEST kan dash juist loot opleveren → geen straf daar
     if (String(nextEvent0) !== "HIDDEN_NEST" && lootPts <= 0 && decision === "DASH") ev -= 5;
+
+    // Rooster risk bias (late raid)
+    if (roosterSeen >= 2 && lootPts > 0) {
+      if (decision === "DASH") ev += 6;
+      else ev -= 8;
+    } else if (roosterSeen === 1 && lootPts >= 3) {
+      if (decision === "DASH") ev += 2;
+      else ev -= 3;
+    }
+
 
     return { decision, ev, surviveP };
   });
@@ -1015,13 +1053,6 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     // discard (face-up): kaart gaat direct op de Discard Pile
     const nowMs = Date.now();
     actionDiscard.push({ name: cardName, by: botId, round: roundNum, at: nowMs });
-    
-    const actionDiscardPile = Array.isArray(g.actionDiscardPile) ? [...g.actionDiscardPile] : [];
-    const uid = `${nowMs}_${Math.random().toString(16).slice(2)}`;
-
-    actionDiscardPile.push({ uid, name: cardName, by: botId, round: roundNum, at: nowMs });
-    if (actionDiscardPile.length > 60) actionDiscardPile.splice(0, actionDiscardPile.length - 60);
-
     // keep discard pile bounded
     if (actionDiscard.length > 30) actionDiscard.splice(0, actionDiscard.length - 30);
 
@@ -1140,7 +1171,6 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     tx.update(pRef, { hand, color: p.color, den: p.color });
     tx.update(gRef, {
       actionDeck,
-      actionDiscardPile,
       actionDiscard,
       flagsRound,
       opsTurnIndex: nextIdx,
@@ -1436,5 +1466,3 @@ export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLU
 
   await updateDoc(gRef, { botsEnabled: true, actionDeck });
 }
-
-    // This game was made by SJD Taxcollector
