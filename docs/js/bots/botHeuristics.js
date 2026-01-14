@@ -746,9 +746,7 @@ const denySet = new Set([
   ...(Array.isArray(core?.denyActionIds) ? core.denyActionIds : []),
   ...(Array.isArray(strat?.denyActionIds) ? strat.denyActionIds : []),
 ]);
-
-  const denySet = new Set(Array.isArray(core?.denyActionIds) ? core.denyActionIds : []);
-
+   
   return actionIds
     .map((id) => {
       if (denySet.has(id)) return null;
