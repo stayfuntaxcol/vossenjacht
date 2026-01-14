@@ -2509,4 +2509,3 @@ onSnapshot(playersColRef, (snapshot) => {
     });
   }
 });
-
