@@ -368,9 +368,32 @@ async function endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, 
       return ao - bo;
     });
 
-  // markeer Dashers als "veilig weg" (scoren wel, maar Sack wordt niet als kaarten verdeeld)
+  // markeer Dashers als "veilig weg" + vang iedereen die nog in de YARD staat bij de 3e Rooster.
+  // Regel: wie niet DASH’t bij de 3e Rooster Crow wordt gepakt en verliest alle LOOT (dus ook 0 punten).
   for (const p of players) {
-    if (isInYardForEvents(p) && p.decision === "DASH") p.dashed = true;
+    const inYard = isInYardForEvents(p);
+    const choseDash = inYard && p.decision === "DASH";
+    const getsCaught = inYard && !choseDash;
+
+    if (choseDash) {
+      p.dashed = true;
+    }
+
+    if (getsCaught) {
+      p.caught = true;
+      p.inYard = false; // host kan CAUGHT tonen
+      // wipe loot + all score-related fields so leaderboard becomes 0
+      p.loot = [];
+      p.eggs = 0;
+      p.hens = 0;
+      p.prize = 0;
+      p.score = 0;
+      p.lootShare = 0;
+      p.sackBonus = 0;
+      p.bonusPoints = 0;
+      p.dashPenalty = 0;
+    }
+
     p.decision = null;
   }
 
@@ -928,7 +951,13 @@ for (const pDoc of playersSnap.docs) {
   const dashPenalty = Number(p.dashPenalty ?? 0);
   const bonusPoints = Number(p.bonusPoints ?? 0);
 
-  const finalScore = baseScore + lootShare - dashPenalty + bonusPoints;
+  let finalScore = baseScore + lootShare - dashPenalty + bonusPoints;
+
+
+  // safety: if the raid ended by 3rd rooster, anyone who did NOT dash is caught => score must be 0
+
+
+  if (game?.raidEndedByRooster && !p?.dashed) finalScore = 0;
 
   // ✅ niet opslaan als score 0 of lager
   if (!Number.isFinite(finalScore) || finalScore <= 0) {
