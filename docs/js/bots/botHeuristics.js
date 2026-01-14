@@ -13,6 +13,7 @@
 
 import { RULES_INDEX, getEventFacts, getActionFacts } from "./rulesIndex.js";
 import { evaluateCorePolicy, DEFAULT_CORE_CONFIG } from "./botPolicyCore.js";
+import { applyActionStrategies } from "./strategies/actionStrategies.js";
 
 
 /* ============================================================
@@ -738,6 +739,14 @@ export function rankActions(actionKeys = [], opts = {}) {
   };
 
   const core = evaluateCorePolicy(ctx, comboInfo, cfg);
+   const strat = applyActionStrategies(ctx, comboInfo);
+
+// deny merge (core + strategies)
+const denySet = new Set([
+  ...(Array.isArray(core?.denyActionIds) ? core.denyActionIds : []),
+  ...(Array.isArray(strat?.denyActionIds) ? strat.denyActionIds : []),
+]);
+
   const denySet = new Set(Array.isArray(core?.denyActionIds) ? core.denyActionIds : []);
 
   return actionIds
@@ -748,18 +757,21 @@ export function rankActions(actionKeys = [], opts = {}) {
       if (!s) return null;
 
       const base = totalScore(s);
-      const delta = Number(core?.addToActionTotal?.[id] || 0);
+      const coreDelta = Number(core?.addToActionTotal?.[id] || 0);
+      const stratDelta = Number(strat?.addToActionTotal?.[id] || 0);
+      const delta = coreDelta + stratDelta;
       const total = base + delta;
 
       return {
         id,
         s: {
-          ...s,
-          coreDelta: delta,
-          coreDangerEffective: core?.dangerEffective,
-          coreCashoutBias: core?.cashoutBias,
-        },
-        total,
+           ...s,
+           coreDelta,
+           stratDelta,
+           coreDangerEffective: core?.dangerEffective,
+           coreCashoutBias: core?.cashoutBias,
+            },
+      total,
       };
     })
     .filter(Boolean)
