@@ -785,323 +785,324 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
 }
 
 function pickBestActionFromHand({ game, bot, players }) {
-  const hand = Array.isArray(bot?.hand) ? bot.hand : [];
-  if (!hand.length) return null;
+  try {
+    const hand = Array.isArray(bot?.hand) ? bot.hand : [];
+    if (!hand.length) return null;
 
-  // hand bevat bij jou meestal {name:"Den Signal"} of "Den Signal"
-  const handNames = hand
-    .map((c) => String(c?.name || c || "").trim())
-    .filter(Boolean);
+    // 1) hand: kaartnaam -> action def (id)
+    const handNames = hand
+      .map((c) => String(c?.name || c || "").trim())
+      .filter(Boolean);
 
-  // map kaartnaam -> actionId via cards.js defs
-  const entries = handNames
-    .map((name) => ({ name, def: getActionDefByName(name) }))
-    .filter((x) => x.def?.id);
+    const entries = handNames
+      .map((name) => ({ name, def: getActionDefByName(name) }))
+      .filter((x) => x.def?.id);
 
-  const ids = entries.map((x) => x.def.id);
-  if (!ids.length) return null;
+    const ids = entries.map((x) => String(x.def.id || "").trim()).filter(Boolean);
+    if (!ids.length) return null;
 
-  const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
-  const presetKey = presetFromDenColor(denColor);
+    const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
+    const presetKey = presetFromDenColor(denColor);
 
-  // --- context voor heuristics (budget / emergency / intel-diminishing / hail-mary) ---
-  const roundNum = Number(game?.round || 0);
-  const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
-  const actionsPlayedThisRound = disc.filter(
-    (x) => x?.by === bot.id && Number(x?.round || 0) === roundNum
-  ).length;
+    // ---------- helpers ----------
+    const toMillis = (v) => {
+      if (typeof v === "number") return v;
+      if (v && typeof v === "object") {
+        if (typeof v.toMillis === "function") return v.toMillis();
+        if (v.seconds != null) return Number(v.seconds) * 1000;
+      }
+      return 0;
+    };
 
-  const flags = fillFlags(game?.flagsRound);
-  const nextId = nextEventId(game, 0);
-  const nextEventFacts = nextId ? getEventFacts(nextId) : null;
+    const toActionId = (maybeNameOrId) => {
+      const raw = String(maybeNameOrId || "").trim();
+      if (!raw) return null;
 
-  // bot “knows next” als hij een prediction heeft gezet op deze next event
-  const nextKnown = !!(Array.isArray(flags?.predictions) ? flags.predictions : []).some(
-    (x) => x?.playerId === bot.id && String(x?.eventId || "") === String(nextId || "")
-  );
+      // als het al op ID lijkt
+      if (/^[A-Z0-9_]+$/.test(raw) && raw.includes("_")) return raw;
 
-  // score meta (heel simpel): gebruik score als die bestaat, anders lootpunten
-  const list = Array.isArray(players) ? players : [];
-  const getVal = (pl) => {
-    const s = Number(pl?.score);
-    if (Number.isFinite(s)) return s;
-    return sumLootPoints(pl);
-  };
-  const sorted = [...list].filter((x) => x?.id).sort((a, b) => getVal(b) - getVal(a));
-  const leaderVal = sorted.length ? getVal(sorted[0]) : 0;
-  const myVal = getVal(bot);
-  const myRank = sorted.findIndex((x) => x.id === bot.id);
-  const isLast = myRank >= 0 ? myRank === sorted.length - 1 : false;
-  const scoreBehind = Math.max(0, leaderVal - myVal);
+      // anders: probeer te mappen als naam
+      const def = getActionDefByName(raw);
+      return def?.id ? String(def.id) : null;
+    };
 
-    // >>> ADD: ctx voor CORE + actionStrategies
-  const discThisRound = disc.filter((x) => Number(x?.round || 0) === roundNum);
+    const roundNum = Number.isFinite(Number(game?.round)) ? Number(game.round) : 0;
 
-  const discardThisRoundActionIds = discThisRound
-    .map((x) => String(x?.id || "").trim())
-    .filter(Boolean);
+    // actionDiscard heeft bij jou: { name, by, round, at }
+    const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
 
-  const discardRecentActionIds = [...disc]
-    .sort((a, b) => Number(a?.at || 0) - Number(b?.at || 0))
-    .slice(-10)
-    .map((x) => String(x?.id || "").trim())
-    .filter(Boolean);
+    const discThisRound = disc.filter((x) => Number(x?.round || 0) === roundNum);
 
-  // Scout tier (actionStrategies verwacht: NO_SCOUT / SOFT_SCOUT / HARD_SCOUT)
-  const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
-    ? bot.knownUpcomingEvents.filter(Boolean)
-    : [];
-  const scoutTier =
-    knownUpcomingEvents.length >= 2
-      ? "HARD_SCOUT"
-      : knownUpcomingEvents.length >= 1
-      ? "SOFT_SCOUT"
-      : (nextKnown ? "SOFT_SCOUT" : "NO_SCOUT"); // fallback op jouw prediction-logic
+    const botPlayedThisRound = discThisRound.filter((x) => x?.by === bot.id);
+    const actionsPlayedThisRound = botPlayedThisRound.length;
 
-  const dangerNext = nextEventFacts
-    ? Math.max(
-        Number(nextEventFacts.dangerDash || 0),
-        Number(nextEventFacts.dangerLurk || 0),
-        Number(nextEventFacts.dangerBurrow || 0)
-      )
-    : 0;
+    const botPlayedActionIdsThisRound = botPlayedThisRound
+      .map((x) => toActionId(x?.name))
+      .filter(Boolean);
 
-  const roosterSeen = Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0;
+    const discardThisRoundActionIds = discThisRound
+      .map((x) => toActionId(x?.name))
+      .filter(Boolean);
 
-  const ctx = {
-    phase: String(game?.phase || ""),
-    round: roundNum,
-    botId: bot?.id || null,
-    denColor,
+    const discardRecentActionIds = [...disc]
+      .sort((a, b) => toMillis(a?.at) - toMillis(b?.at))
+      .slice(-10)
+      .map((x) => toActionId(x?.name))
+      .filter(Boolean);
 
-    carryValue: myVal,
-    isLast,
-    scoreBehind,
+    const discardActionIds = [
+      ...(Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : []),
+      ...disc.map((x) => x?.name),
+    ]
+      .map(toActionId)
+      .filter(Boolean);
 
-    handActionIds: ids,
-    handSize: ids.length,
-    actionsPlayedThisRound,
+    // ---------- next event / flags / knowledge ----------
+    const flags = fillFlags(game?.flagsRound);
+    const nextId = nextEventId(game, 0);
+    const nextEventFacts = nextId ? getEventFacts(nextId) : null;
 
-    discardActionIds,
-    discardThisRoundActionIds,
-    discardRecentActionIds,
+    const dangerNext = nextEventFacts
+      ? Math.max(
+          Number(nextEventFacts.dangerDash || 0),
+          Number(nextEventFacts.dangerLurk || 0),
+          Number(nextEventFacts.dangerBurrow || 0)
+        )
+      : 0;
 
-    nextKnown,
-    knownUpcomingEvents,
-    knownUpcomingCount: knownUpcomingEvents.length,
-    scoutTier,
+    // “nextKnown” volgens jouw bestaande prediction-model
+    const nextKnown = !!(Array.isArray(flags?.predictions) ? flags.predictions : []).some(
+      (x) => x?.playerId === bot.id && String(x?.eventId || "") === String(nextId || "")
+    );
 
-    nextEventFacts,
-    dangerNext,
+    // “knownUpcomingEvents” (als je dit al op player-doc opslaat)
+    const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
+      ? bot.knownUpcomingEvents.filter(Boolean)
+      : [];
+    const knownUpcomingCount = knownUpcomingEvents.length;
 
-    roosterSeen,
-    rooster2JustRevealed: false,
-    postRooster2Window: roosterSeen >= 2,
+    const scoutTier =
+      knownUpcomingCount >= 2
+        ? "HARD_SCOUT"
+        : knownUpcomingCount >= 1
+        ? "SOFT_SCOUT"
+        : nextKnown
+        ? "SOFT_SCOUT"
+        : "NO_SCOUT";
 
-    lockEventsActive,
-    opsLockedActive,
+    // ---------- rooster timing (gevaar pas NA reveal #2) ----------
+    const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+    const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
+    const revealedRoosters = track.reduce((n, id, i) => {
+      if (rev[i] === true && String(id) === "ROOSTER_CROW") return n + 1;
+      return n;
+    }, 0);
 
-    // Follow-the-tail hints (v1 default; later maken we dit target-aware)
-    hasEligibleFollowTarget: false,
-    bestFollowTargetIsSameDen: false,
-    bestFollowTargetDenRevealed: false,
+    const roosterSeen = Number.isFinite(revealedRoosters) && rev.length ? revealedRoosters
+      : Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen)
+      : 0;
 
-    revealedDenEventsByColor: {}, // later vullen als je wil
-  };
+    const postRooster2Window = roosterSeen >= 2; // ✅ pas na reveal 2
 
-  // handHas_* flags voor strategies (KickUpDust combo-save)
-  for (const id of ids) ctx["handHas_" + id] = true;
-  // <<< END ctx
+    // ---------- ranking / behind / last ----------
+    const list = Array.isArray(players) ? players.filter((x) => x?.id) : [];
+    const getVal = (pl) => {
+      const s = Number(pl?.score);
+      if (Number.isFinite(s)) return s;
+      return sumLootPoints(pl);
+    };
+    const sorted = [...list].sort((a, b) => getVal(b) - getVal(a));
+    const leaderVal = sorted.length ? getVal(sorted[0]) : 0;
+    const myVal = getVal(bot);
+    const myRank = sorted.findIndex((x) => x.id === bot.id);
+    const isLast = myRank >= 0 ? myRank === sorted.length - 1 : false;
+    const scoreBehind = Math.max(0, leaderVal - myVal);
 
-  // -------- Combo context (voor matrix) --------
-  const discardActionIds = [
-    ...(Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : []),
-    ...(Array.isArray(game?.actionDiscard)
-      ? game.actionDiscard.map((x) => x?.id).filter(Boolean)
-      : []),
-  ].map((x) => String(x || "").trim()).filter(Boolean);
+    const lockEventsActive = !!flags?.lockEvents;
+    const opsLockedActive = !!flags?.opsLocked;
 
-  const lockEventsActive = !!game?.flagsRound?.lockEvents;
-  const opsLockedActive = !!game?.flagsRound?.opsLocked;
-
-  function bestComboPair(actionIds, ctx) {
-    let best = { a: null, b: null, score: 0 };
-    const list = Array.isArray(actionIds) ? actionIds : [];
-    for (const a of list) {
-      if (a === "HOLD_STILL") continue; // HOLD_STILL als opener is altijd slecht
-      for (const b of list) {
-        if (!b || b === a) continue;
-        const s = comboScore(a, b, ctx);
-        if (s > best.score) best = { a, b, score: s };
+    // ---------- revealed den events by color ----------
+    const revealedDenEventsByColor = {};
+    for (let i = 0; i < track.length; i++) {
+      if (!rev[i]) continue;
+      const id = String(track[i] || "");
+      if (id.startsWith("DEN_")) {
+        const c = normColor(id.split("_")[1] || "");
+        if (c) revealedDenEventsByColor[c] = true;
       }
     }
-    return best;
-  }
 
-  // ctx voor comboScore (sluit aan op actionComboMatrix.js + botHeuristics.js)
-  const comboCtx = {
-    nextKnown,
-    knownUpcomingEvents: Array.isArray(flags?.knownUpcomingEvents) ? flags.knownUpcomingEvents : [],
-    nextEventFacts,
-    lockEventsActive,
-    opsLockedActive,
-    discardActionIds,
-    isLast,
-    scoreBehind,
-  };
+    // ---------- Follow target selection (basis) ----------
+    function pickBestFollowTarget() {
+      const candidates = (players || []).filter((x) => x?.id && x.id !== bot.id && isInYard(x));
+      if (!candidates.length) return { targetId: null, sameDen: false, denRevealed: false, eligible: false };
 
-  const combo = bestComboPair(ids, comboCtx);
-  const COMBO_THRESHOLD = 7; // >=7 = “echte” combo, mag 2 actions rechtvaardigen
-  const wantsCombo = combo.score >= COMBO_THRESHOLD;
+      let best = null;
+      for (const pl of candidates) {
+        const cDen = normColor(pl?.color || pl?.den || pl?.denColor);
 
-  // Prefer A op eerste play, prefer B op tweede play
-  let preferredId = null;
-  if (wantsCombo) {
-    preferredId = actionsPlayedThisRound === 0 ? combo.a : actionsPlayedThisRound === 1 ? combo.b : null;
-  }
-  const pick = pickActionOrPass(ids, {
-    presetKey,
-    denColor,
-    game,
-    me: bot,
-   ctx: (() => {
-  const roundNum = Number(game?.round || 0);
-  const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
-  const discThisRound = disc.filter((x) => Number(x?.round || 0) === roundNum);
+        const sameDen = cDen && cDen === denColor;
+        const denRevealed = !!revealedDenEventsByColor[cDen];
 
-  const discardThisRoundActionIds = discThisRound
-    .map((x) => String(x?.id || x?.actionId || x?.key || "").trim())
-    .filter(Boolean);
+        // jouw regel: Follow heeft vooral zin als je next NIET weet
+        const eligible = !nextKnown && (sameDen || denRevealed);
 
-  const discardRecentActionIds = [...disc]
-    .sort((a, b) => Number(a?.at || 0) - Number(b?.at || 0))
-    .slice(-10)
-    .map((x) => String(x?.id || x?.actionId || x?.key || "").trim())
-    .filter(Boolean);
+        // score: sameDen > denRevealed > loot-rich (fallback)
+        let score = 0;
+        if (sameDen) score += 10;
+        if (denRevealed) score += 6;
+        if (eligible) score += 4;
 
-  // Scout tier voor strategies (NO/ SOFT/ HARD)
-  const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
-    ? bot.knownUpcomingEvents.filter(Boolean)
-    : [];
-  const knownUpcomingCount = knownUpcomingEvents.length;
+        // kleine bonus als target “intel” lijkt te hebben
+        const k = Array.isArray(pl?.knownUpcomingEvents) ? pl.knownUpcomingEvents.length : 0;
+        score += Math.min(3, k);
 
-  const scoutTier =
-    knownUpcomingCount >= 2
-      ? "HARD_SCOUT"
-      : knownUpcomingCount >= 1
-      ? "SOFT_SCOUT"
-      : (nextKnown ? "SOFT_SCOUT" : "NO_SCOUT"); // fallback op jouw prediction-based nextKnown
+        // tie-break: rijkste target
+        score += Math.min(5, sumLootPoints(pl) * 0.4);
 
-  const dangerNext = nextEventFacts
-    ? Math.max(
-        Number(nextEventFacts.dangerDash || 0),
-        Number(nextEventFacts.dangerLurk || 0),
-        Number(nextEventFacts.dangerBurrow || 0)
-      )
-    : 0;
+        if (!best || score > best.score) best = { id: pl.id, score, sameDen, denRevealed, eligible };
+      }
 
-  const roosterSeen = Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0;
-
-  const lockEventsActive = !!game?.flagsRound?.lockEvents;
-  const opsLockedActive = !!game?.flagsRound?.opsLocked;
-
-  const ctx = {
-    // CORE basics
-    phase: String(game?.phase || ""),
-    round: roundNum,
-    botId: bot?.id || null,
-    denColor,
-
-    carryValue: myVal,
-    isLast,
-    scoreBehind,
-
-    handActionIds: ids,
-    handSize: ids.length,
-
-    actionsPlayedThisRound,
-    discardActionIds,
-    discardThisRoundActionIds,
-    discardRecentActionIds,
-
-    // knowledge / danger
-    nextEventFacts,
-    dangerNext,
-    nextKnown,
-    knownUpcomingEvents,
-    knownUpcomingCount,
-    scoutTier,
-
-    // rooster timing (v1)
-    roosterSeen,
-    rooster2JustRevealed: false,
-    postRooster2Window: roosterSeen >= 2,
-
-    // flags
-    lockEventsActive,
-    opsLockedActive,
-
-    // Follow-the-tail hints (later target-aware maken; nu neutraal)
-    hasEligibleFollowTarget: false,
-    bestFollowTargetIsSameDen: false,
-    bestFollowTargetDenRevealed: false,
-
-    revealedDenEventsByColor: {},
-
-    // JOUW combo context (mag blijven bestaan; CORE negeert onbekenden)
-    comboPrimed: wantsCombo,
-    comboAllowed: wantsCombo,
-    comboScore: combo.score,
-    comboPlan: wantsCombo ? { a: combo.a, b: combo.b } : null,
-  };
-
-  // handHas_* flags voor actionStrategies (KickUpDust bewaart als geen BURROW_BEACON)
-  for (const id of ids) ctx["handHas_" + id] = true;
-
-  return ctx;
-})(),
-
-  });
-
-  if (!pick?.play) return null;
-
-  // ✅ forceer “combo-first” als we een sterke combo hebben
-  let chosenId = pick.play;
-  if (preferredId && ids.includes(preferredId)) chosenId = preferredId;
-
-  // Kandidaten: eerst de gekozen, daarna de rest van de ranking als fallback
-   const ranked = Array.isArray(pick?.ranked) ? pick.ranked : [];
-  const candidateIds = [
-    chosenId,
-    ...ranked.map((r) => r.id).filter((id) => id && id !== chosenId),
-  ];
-
-  for (const id of candidateIds) {
-    // legality checks (zelfde als jij al had)
-    if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
-      if (game?.flagsRound?.lockEvents) continue;
-      if (!Array.isArray(game?.eventTrack)) continue;
-      if (typeof game?.eventIndex !== "number") continue;
-      if (game.eventIndex >= game.eventTrack.length - 1) continue;
-    }
-    if (id === "HOLD_STILL" && game?.flagsRound?.opsLocked) continue;
-
-    // targets waar nodig
-    let targetId = null;
-    if (id === "MASK_SWAP" || id === "HOLD_STILL") {
-      targetId = pickRichestTarget(players || [], bot.id);
-      if (!targetId) continue;
+      return {
+        targetId: best?.id || null,
+        sameDen: !!best?.sameDen,
+        denRevealed: !!best?.denRevealed,
+        eligible: !!best?.eligible,
+      };
     }
 
-    // terug naar “kaartnaam” die in hand zit (nodig voor removeOneCard(hand, cardName))
-    const entry = entries.find((x) => x.def.id === id);
-    const name = entry?.name || entry?.def?.name || id;
+    const followPick = pickBestFollowTarget();
 
-    return targetId ? { name, targetId } : { name };
+    // ---------- ctx voor heuristics/strategies ----------
+    const ctx = {
+      phase: String(game?.phase || ""),
+      round: roundNum,
+      botId: bot?.id || null,
+      denColor,
+
+      carryValue: myVal,
+      isLast,
+      scoreBehind,
+
+      handActionIds: ids,
+      handSize: ids.length,
+
+      actionsPlayedThisRound,
+      discardActionIds,
+      discardThisRoundActionIds,
+      discardRecentActionIds,
+
+      nextEventFacts,
+      dangerNext,
+      nextKnown,
+      knownUpcomingEvents,
+      knownUpcomingCount,
+      scoutTier,
+
+      roosterSeen,
+      postRooster2Window,
+
+      lockEventsActive,
+      opsLockedActive,
+
+      hasEligibleFollowTarget: followPick.eligible && !!followPick.targetId,
+      bestFollowTargetIsSameDen: followPick.sameDen,
+      bestFollowTargetDenRevealed: followPick.denRevealed,
+
+      revealedDenEventsByColor,
+    };
+
+    // handHas_* flags (handig voor strategies)
+    for (const id of ids) ctx["handHas_" + id] = true;
+
+    // ---------- pick (nieuw: pickActionOrPass als beschikbaar) ----------
+    let pick = null;
+    if (typeof pickActionOrPass === "function") {
+      pick = pickActionOrPass(ids, { presetKey, denColor, game, me: bot, ctx });
+    } else {
+      const ranked = rankActions(ids, { presetKey, denColor, game, me: bot, ctx });
+      pick = { play: ranked[0]?.id || null, ranked, reason: "fallback_rankActions" };
+    }
+
+    const ranked = Array.isArray(pick?.ranked)
+      ? pick.ranked
+      : rankActions(ids, { presetKey, denColor, game, me: bot, ctx });
+
+    if (!pick?.play) return null;
+
+    // Kandidaten: eerst pick.play, daarna rest ranking
+    const candidateIds = [
+      String(pick.play),
+      ...ranked.map((r) => r?.id).filter((x) => x && x !== pick.play),
+    ]
+      .map((x) => String(x || "").trim())
+      .filter(Boolean);
+
+    // Anti-duplicate: bot zelf niet 2x dezelfde action in dezelfde ronde
+    const botPlayedSet = new Set(botPlayedActionIdsThisRound);
+
+    // Anti-duplicate: “globale” kaarten liever niet 2x in dezelfde round door iedereen
+    const GLOBAL_SINGLETON_ACTIONS = new Set(["KICK_UP_DUST", "PACK_TINKER", "NO_GO_ZONE", "SCATTER"]);
+
+    for (const id of candidateIds) {
+      // --- bot-self duplicate guard ---
+      if (botPlayedSet.has(id)) continue;
+
+      // --- global duplicate guard (bots only) ---
+      if (GLOBAL_SINGLETON_ACTIONS.has(id) && discardThisRoundActionIds.includes(id)) continue;
+
+      // --- legality checks ---
+      if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
+        if (lockEventsActive) continue;
+        if (!Array.isArray(game?.eventTrack)) continue;
+        if (!Number.isFinite(Number(game?.eventIndex))) continue;
+        if (Number(game.eventIndex) >= game.eventTrack.length - 1) continue;
+      }
+
+      if (id === "HOLD_STILL" && opsLockedActive) continue;
+
+      // --- target selection where needed ---
+      let targetId = null;
+
+      if (id === "MASK_SWAP" || id === "HOLD_STILL") {
+        targetId = pickRichestTarget(players || [], bot.id);
+        if (!targetId) continue;
+      }
+
+      if (id === "FOLLOW_THE_TAIL") {
+        targetId = followPick.targetId || pickRichestTarget(players || [], bot.id);
+        if (!targetId) continue;
+      }
+
+      if (id === "SCENT_CHECK") {
+        // kies bij voorkeur iemand met intel / anders rijkste
+        const intelTarget =
+          (players || [])
+            .filter((x) => x?.id && x.id !== bot.id && isInYard(x))
+            .map((x) => ({
+              id: x.id,
+              k: Array.isArray(x?.knownUpcomingEvents) ? x.knownUpcomingEvents.length : 0,
+              loot: sumLootPoints(x),
+            }))
+            .sort((a, b) => (b.k - a.k) || (b.loot - a.loot))[0]?.id || null;
+
+        targetId = intelTarget || pickRichestTarget(players || [], bot.id);
+        if (!targetId) continue;
+      }
+
+      // --- terug naar kaartnaam in hand (removeOneCard werkt op naam) ---
+      const entry = entries.find((x) => x.def?.id === id);
+      const name = entry?.name || entry?.def?.name || id;
+
+      return targetId ? { name, targetId } : { name };
+    }
+
+    // niets legaals/zinvol -> PASS
+    return null;
+  } catch (err) {
+    console.warn("[BOTS] pickBestActionFromHand crashed -> PASS", err);
+    return null;
   }
-
-  // niets legaals gevonden => PASS
-  return null;
 }
 
 function getOpsTurnId(game) {
