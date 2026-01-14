@@ -514,6 +514,150 @@ function pickSafestDecisionForUpcomingEvent(game) {
 
   return options[0].k;
 }
+function toActionId(nameOrId) {
+  const n = String(nameOrId || "").trim();
+  if (!n) return null;
+  const def = getActionDefByName(n);
+  return def?.id || null;
+}
+
+function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEventFacts, isLast, scoreBehind }) {
+  const round = Number.isFinite(game?.round) ? game.round : 0;
+  const phase = String(game?.phase || "");
+  const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
+
+  // --- discard arrays (visible to all bots) ---
+  const actionDiscard = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
+  const discardThisRound = actionDiscard.filter((x) => Number(x?.round) === round);
+  const discardThisRoundActionIds = discardThisRound
+    .map((x) => toActionId(x?.name))
+    .filter(Boolean);
+
+  const discardRecentActionIds = [...actionDiscard]
+    .sort((a, b) => Number(a?.at || 0) - Number(b?.at || 0))
+    .slice(-10)
+    .map((x) => toActionId(x?.name))
+    .filter(Boolean);
+
+  const discardActionIds = [
+    ...actionDiscard.map((x) => toActionId(x?.name)),
+    ...(Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile.map((x) => toActionId(x)) : []),
+  ].filter(Boolean);
+
+  // --- den events revealed knowledge ---
+  const revealedDenEventsByColor = { RED: false, GREEN: false, BLUE: false, YELLOW: false };
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
+  for (let i = 0; i < Math.min(track.length, rev.length); i++) {
+    if (!rev[i]) continue;
+    const eid = String(track[i] || "");
+    if (eid.startsWith("DEN_")) {
+      const c = normColor(eid.slice(4));
+      if (c && c in revealedDenEventsByColor) revealedDenEventsByColor[c] = true;
+    }
+  }
+
+  // --- scout (v1: meestal leeg; later vullen vanuit intel) ---
+  const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents) ? bot.knownUpcomingEvents : [];
+  const knownUpcomingCount = knownUpcomingEvents.length;
+  const scoutTier = knownUpcomingCount >= 2 ? "HARD_SCOUT" : knownUpcomingCount >= 1 ? "SOFT_SCOUT" : "NO_SCOUT";
+  const nextKnown = knownUpcomingCount >= 1;
+
+  // --- dangerNext (0..10) ---
+  const dangerNext = nextEventFacts
+    ? Math.max(
+        Number(nextEventFacts.dangerDash || 0),
+        Number(nextEventFacts.dangerLurk || 0),
+        Number(nextEventFacts.dangerBurrow || 0)
+      )
+    : 0;
+
+  // --- rooster timing (v1) ---
+  const roosterSeen = Number.isFinite(game?.roosterSeen) ? game.roosterSeen : 0;
+  const postRooster2Window = roosterSeen >= 2;
+  const rooster2JustRevealed = false; // later netjes als je reveal-moment flagt
+
+  // --- flags ---
+  const lockEventsActive = !!game?.flagsRound?.lockEvents;
+  const opsLockedActive = !!game?.flagsRound?.opsLocked;
+
+  // --- carry value (use score if present) ---
+  const carryValue =
+    (Number.isFinite(Number(bot?.score)) ? Number(bot.score) : null) ??
+    (Number(bot?.eggs || 0) + Number(bot?.hens || 0) + (bot?.prize ? 3 : 0));
+
+  // --- follow target hints (simple v1) ---
+  const list = Array.isArray(players) ? players : [];
+  const candidates = list.filter((p) => p?.id && p.id !== bot?.id && !p?.caught);
+  const sameDenTargets = candidates.filter((p) => normColor(p?.den || p?.denColor || p?.color) === denColor);
+  const denRevealedTargets = candidates.filter((p) => {
+    const c = normColor(p?.den || p?.denColor || p?.color);
+    return !!revealedDenEventsByColor[c];
+  });
+
+  const eligible = [...new Map([...sameDenTargets, ...denRevealedTargets].map((p) => [p.id, p])).values()];
+  const hasEligibleFollowTarget = eligible.length > 0;
+
+  // pick best eligible target by carry/score
+  const best = eligible
+    .map((p) => ({
+      p,
+      v: Number.isFinite(Number(p?.score)) ? Number(p.score) : Number(p?.eggs || 0) + Number(p?.hens || 0) + (p?.prize ? 3 : 0),
+    }))
+    .sort((a, b) => b.v - a.v)[0]?.p;
+
+  const bestFollowTargetIsSameDen = best ? normColor(best?.den || best?.denColor || best?.color) === denColor : false;
+  const bestFollowTargetDenRevealed = best
+    ? !!revealedDenEventsByColor[normColor(best?.den || best?.denColor || best?.color)]
+    : false;
+
+  // --- ctx base ---
+  const ctx = {
+    phase,
+    round,
+    botId: bot?.id,
+    denColor,
+    carryValue,
+    isLast: !!isLast,
+    scoreBehind: Number(scoreBehind || 0),
+
+    handActionKeys: handActionKeys || [],
+    handActionIds: handActionIds || [],
+    handSize: Array.isArray(handActionIds) ? handActionIds.length : 0,
+
+    actionsPlayedThisRound: Number(bot?.actionsPlayedThisRound || 0), // als je dit al bijhoudt; anders later uit discard per bot
+    discardActionIds,
+    discardThisRoundActionIds,
+    discardRecentActionIds,
+
+    nextKnown,
+    knownUpcomingEvents,
+    knownUpcomingCount,
+    scoutTier,
+    nextEventFacts: nextEventFacts || null,
+    dangerNext,
+
+    roosterSeen,
+    rooster2JustRevealed,
+    postRooster2Window,
+
+    lockEventsActive,
+    opsLockedActive,
+
+    revealedDenEventsByColor,
+
+    sameDenTargetsCount: sameDenTargets.length,
+    hasEligibleFollowTarget,
+    bestFollowTargetIsSameDen,
+    bestFollowTargetDenRevealed,
+  };
+
+  // dynamic handHas_* flags
+  const set = new Set(handActionIds || []);
+  for (const id of set) ctx["handHas_" + id] = true;
+
+  return ctx;
+}
 
 function pickBestActionFromHand({ game, bot, players }) {
   const hand = Array.isArray(bot?.hand) ? bot.hand : [];
