@@ -1619,7 +1619,8 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
     const actionDiscard = Array.isArray(g.actionDiscard) ? [...g.actionDiscard] : [];
 
-    const play = pickBestActionFromHand({ game: g, bot: p, players: latestPlayers || [] });
+    const play = await pickBestActionFromHand({ db, gameId, game: g, bot: p, players: latestPlayers || [] });
+
 
 
     // =========================
