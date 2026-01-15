@@ -212,17 +212,10 @@ function buildBotCtxForHeuristics({
     .map((x) => String(x || "").trim())
     .filter(Boolean);
 
-  // --- next event facts ---
-  const nextId = getNextEventId(game);
-  const nextFacts = nextId ? getEventFacts(nextId) : null;
-
-  const dangerNext = nextFacts
-    ? Math.max(
-        Number(nextFacts.dangerDash || 0),
-        Number(nextFacts.dangerLurk || 0),
-        Number(nextFacts.dangerBurrow || 0)
-      )
-    : 0;
+  // --- next event facts --- BOTS KUNNEN NIET SPIEKEN ---
+  const nextId = nextKnown ? getNextEventId(game) : null;
+const nextFacts = nextId ? getEventFacts(nextId) : null;
+const dangerNext = nextFacts ? Math.max(nextFacts.dangerDash, nextFacts.dangerLurk, nextFacts.dangerBurrow) : 0;
 
   // --- scout knowledge ---
   const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
