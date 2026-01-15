@@ -111,7 +111,8 @@ export const EVENT_DEFS = {
     imageFront: "./assets/card_event_magpie_snitch.png",
     imageBack: CARD_BACK,
     category: "VARIABLE",
-    tags: ["target_lead_fox", "lose_loot", "burrow_protects", "TARGET_LEAD_FOX"],
+    // Target-tags: hou zowel legacy (lowercase) als scoring-tag (UPPERCASE)
+    tags: ["target_lead_fox", "TARGET_LEAD_FOX", "lose_loot", "burrow_protects"],
   },
   PAINT_BOMB_NEST: {
     id: "PAINT_BOMB_NEST",
@@ -167,7 +168,8 @@ export const EVENT_DEFS = {
     imageFront: "./assets/card_event_silent_alarm.png",
     imageBack: CARD_BACK,
     category: "SPECIAL",
-    tags: ["target_lead_fox", "lose_lead_or_loot"],
+    // Target-tags: hou zowel legacy (lowercase) als scoring-tag (UPPERCASE)
+    tags: ["target_lead_fox", "TARGET_LEAD_FOX", "lose_lead_or_loot"],
   },
   BARN_FIRE_DRILL: {
     id: "BARN_FIRE_DRILL",
