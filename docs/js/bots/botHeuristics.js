@@ -202,6 +202,31 @@ function normColor(c) {
 function safeTags(x) {
   return Array.isArray(x) ? x : [];
 }
+
+function normTag(t) {
+  return String(t || "").trim().toUpperCase();
+}
+function hasTag(tags, want) {
+  const w = normTag(want);
+  for (const t of safeTags(tags)) {
+    if (normTag(t) === w) return true;
+  }
+  return false;
+}
+function findKeyInsensitive(obj, key) {
+  if (!obj || !key) return null;
+  const k = String(key);
+  if (Object.prototype.hasOwnProperty.call(obj, k)) return k;
+  const up = k.toUpperCase();
+  if (Object.prototype.hasOwnProperty.call(obj, up)) return up;
+  const lo = k.toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(obj, lo)) return lo;
+  const nk = normTag(k);
+  for (const kk of Object.keys(obj)) {
+    if (normTag(kk) === nk) return kk;
+  }
+  return null;
+}
 function blankScores() {
   return { risk: 0, loot: 0, info: 0, control: 0, tempo: 0 };
 }
@@ -213,12 +238,18 @@ function addInto(out, add, scale = 1) {
 function sumTagScores(tags, map, preset) {
   const out = blankScores();
   const bias = preset?.tagBias || {};
-  for (const t of safeTags(tags)) {
-    const s = map[t];
+
+  for (const rawTag of safeTags(tags)) {
+    const mapKey = findKeyInsensitive(map, rawTag);
+    if (!mapKey) continue;
+    const s = map[mapKey];
     if (!s) continue;
-    const scale = Number.isFinite(bias[t]) ? bias[t] : 1;
+
+    const biasKey = findKeyInsensitive(bias, rawTag) || findKeyInsensitive(bias, mapKey);
+    const scale = biasKey && Number.isFinite(bias[biasKey]) ? bias[biasKey] : 1;
     addInto(out, s, scale);
   }
+
   return out;
 }
 function clamp(n, lo, hi) {
@@ -237,16 +268,20 @@ function normForMatch(s) {
 /* ============================================================
    3) Resolve keys
 ============================================================ */
-function resolveEventKey(input) {
+function resolveEventKey(input, opts = {}) {
   const raw = String(input || "").trim();
   if (!raw) return { id: null, f: null };
-  const fDirect = getEventFacts(raw);
+
+  const fDirect = getEventFactsScoped(raw, opts);
   if (fDirect) return { id: fDirect.id, f: fDirect };
 
   const n = normForMatch(raw);
-  for (const [id, f] of Object.entries(RULES_INDEX?.events || {})) {
-    if (!f) continue;
-    if (normForMatch(f.title) === n) return { id, f };
+  for (const [id, f0] of Object.entries(RULES_INDEX?.events || {})) {
+    if (!f0) continue;
+    if (normForMatch(f0.title) === n) {
+      const f = getEventFactsScoped(id, opts) || f0;
+      return { id, f };
+    }
   }
   return { id: null, f: null };
 }
@@ -278,6 +313,67 @@ function getCtx(opts = {}) {
   return { ctx, game, me };
 }
 
+function computeIsLead(game, me, ctx) {
+  if (ctx && typeof ctx.isLead === "boolean") return ctx.isLead;
+  const leadId = game?.leadFoxId || game?.leadId || game?.leadFox || game?.leadPlayerId || game?.lead || null;
+  if (!leadId || !me?.id) return false;
+  return String(leadId) === String(me.id);
+}
+
+function getScopedDenColor(opts = {}) {
+  const { ctx, me } = getCtx(opts);
+  return normColor(opts?.denColor || ctx?.denColor || me?.denColor || me?.den || me?.color || "");
+}
+
+function getEventFactsScoped(eventKey, opts = {}) {
+  const raw = String(eventKey || "").trim();
+  if (!raw) return null;
+
+  const base = getEventFacts(raw) || null;
+  if (!base) return null;
+
+  const { ctx, game, me } = getCtx(opts);
+  const denColor = getScopedDenColor(opts);
+  const isLead = computeIsLead(game, me, ctx);
+
+  const f = {
+    ...base,
+    tags: Array.isArray(base.tags) ? [...base.tags] : [],
+    dangerNotes: Array.isArray(base.dangerNotes) ? [...base.dangerNotes] : [],
+    lootImpact: base.lootImpact ? { ...base.lootImpact, notes: Array.isArray(base.lootImpact.notes) ? [...base.lootImpact.notes] : [] } : base.lootImpact,
+  };
+
+  const id = String(f.id || raw).trim();
+  const cat = String(f.category || "").trim().toUpperCase();
+
+  // --- DEN events are only dangerous for matching denColor ---
+  if (cat === "DEN" || id.startsWith("DEN_")) {
+    const color = id.split("_")[1] ? id.split("_")[1].toUpperCase() : "";
+    const match = !!(denColor && color && denColor === color);
+    if (!match) {
+      f.dangerDash = 0;
+      f.dangerLurk = 0;
+      f.dangerBurrow = 0;
+      f.tags = f.tags.filter((t) => normTag(t) !== "CATCH_BY_DEN_COLOR");
+      f.dangerNotes.push("DEN event not matching your color: treated as safe.");
+    }
+  }
+
+  // --- Lead-only events should not scare non-leads into mass DASH ---
+  const appliesTo = String(f.lootImpact?.appliesTo || "").trim().toUpperCase();
+  const leadOnly = appliesTo === "LEAD" || hasTag(f.tags, "LEAD_ONLY") || id === "MAGPIE_SNITCH" || id === "SILENT_ALARM";
+  if (leadOnly && !isLead) {
+    f.dangerDash = 0;
+    f.dangerLurk = 0;
+    f.dangerBurrow = 0;
+    const drop = new Set(["LOSE_LOOT", "PAY_LOOT_OR_CAUGHT", "PAY_LOOT", "LEAD_ONLY"]);
+    f.tags = f.tags.filter((t) => !drop.has(normTag(t)));
+    f.dangerNotes.push("Lead-only event: non-lead treated as low immediate risk.");
+  }
+
+  return f;
+}
+
 function guessRound(game) {
   const r = Number(game?.round);
   if (Number.isFinite(r) && r > 0) return r;
@@ -301,7 +397,10 @@ function isEarlyGame(game) {
   return byRound || byTrack;
 }
 
-function getNextEventKey(game) {
+function getNextEventKey(game, ctx) {
+  // noPeek: do not infer next unrevealed card from eventTrack
+  if (game?.flagsRound?.noPeek) return null;
+
   const idx = Number(game?.eventIndex);
   const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
   if (!track.length) return null;
@@ -317,9 +416,9 @@ function getDangerPeakFromFacts(f) {
 function getNextEventFactsFromOpts(opts = {}) {
   const { ctx, game } = getCtx(opts);
   if (ctx?.nextEventFacts) return ctx.nextEventFacts;
-  if (ctx?.nextEventKey) return getEventFacts(ctx.nextEventKey) || null;
-  const k = getNextEventKey(game);
-  return k ? getEventFacts(k) || null : null;
+  if (ctx?.nextEventKey) return getEventFactsScoped(ctx.nextEventKey, opts) || null;
+  const k = getNextEventKey(game, ctx);
+  return k ? getEventFactsScoped(k, opts) || null : null;
 }
 
 function getDangerNext(opts = {}) {
@@ -360,9 +459,9 @@ function computeHandMeta(actionKeys = []) {
     meta.countByActionId[a.id] = (meta.countByActionId[a.id] || 0) + 1;
 
     const tags = safeTags(a.tags);
-    if (a.role === "defense" || tags.includes("DEN_IMMUNITY")) meta.hasDefense = true;
-    if (a.role === "info" || tags.includes("INFO") || tags.includes("PEEK_DECISION") || tags.includes("PREDICT_EVENT")) meta.hasIntel = true;
-    if (a.role === "control" || tags.includes("TRACK_MANIP") || tags.includes("SWAP_MANUAL") || tags.includes("LOCK_EVENTS")) meta.hasTrack = true;
+    if (a.role === "defense" || hasTag(tags, "DEN_IMMUNITY")) meta.hasDefense = true;
+    if (a.role === "info" || hasTag(tags, "INFO") || hasTag(tags, "PEEK_DECISION") || hasTag(tags, "PREDICT_EVENT")) meta.hasIntel = true;
+    if (a.role === "control" || hasTag(tags, "TRACK_MANIP") || hasTag(tags, "SWAP_MANUAL") || hasTag(tags, "LOCK_EVENTS")) meta.hasTrack = true;
   }
 
   return meta;
@@ -394,7 +493,7 @@ function getKnownUpcomingEvents(opts = {}) {
 function actionHasAnyTag(a, wanted = []) {
   if (!a) return false;
   const tags = safeTags(a.tags);
-  return wanted.some((t) => tags.includes(t));
+  return wanted.some((t) => hasTag(tags, t));
 }
 function isIntelAction(a) {
   return a?.role === "info" || actionHasAnyTag(a, ["INFO", "PEEK_DECISION", "PREDICT_EVENT"]);
@@ -411,7 +510,7 @@ function isDangerousEventByFacts(f, threshold = 7) {
   const peak = getDangerPeakFromFacts(f);
   if (peak >= threshold) return true;
   const tags = safeTags(f.tags);
-  if (tags.includes("CATCH_DASHERS") || tags.includes("CATCH_ALL_YARD")) return true;
+  if (hasTag(tags, "CATCH_DASHERS") || hasTag(tags, "CATCH_ALL_YARD")) return true;
   return false;
 }
 
@@ -448,7 +547,7 @@ export function scoreEventFacts(eventKey, opts = {}) {
   const preset = getPreset(opts.presetKey, opts.denColor);
   const w = preset.weights || BOT_WEIGHTS;
 
-  const { f } = resolveEventKey(eventKey);
+  const { f } = resolveEventKey(eventKey, opts);
   if (!f) return null;
 
   const tagScore = sumTagScores(f.tags, EVENT_TAG_SCORES, preset);
@@ -555,7 +654,7 @@ export function scoreActionFacts(actionKey, opts = {}) {
   if (isPackTinker) {
     const lookN = Number(preset?.tagBias?.packTinkerLookahead ?? 4);
     const list = knownUpcoming.slice(0, clamp(lookN, 2, 6));
-    const facts = list.map((k) => getEventFacts(k) || null).filter(Boolean);
+    const facts = list.map((k) => getEventFactsScoped(k, opts) || null).filter(Boolean);
 
     const hasBad = facts.some((f) => isDangerousEventByFacts(f, 7));
     const hasGood = facts.some((f) => getDangerPeakFromFacts(f) <= 3);
@@ -846,10 +945,10 @@ export function recommendDecision(opts = {}) {
   const carry = estimateCarryValue(me);
 
   const knownUpcoming = getKnownUpcomingEvents(opts);
-  const facts = knownUpcoming.map((k) => getEventFacts(k) || null).filter(Boolean);
+  const facts = knownUpcoming.map((k) => getEventFactsScoped(k, opts) || null).filter(Boolean);
   const roostersAhead3 = facts
     .slice(0, 3)
-    .filter((f) => safeTags(f.tags).includes("ROOSTER_TICK") || String(f.id || "").includes("ROOSTER"))
+    .filter((f) => hasTag(f.tags, "ROOSTER_TICK") || String(f.id || "").includes("ROOSTER"))
     .length;
 
   if (carry >= 7) {
