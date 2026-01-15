@@ -230,7 +230,7 @@ function buildBotCtxForHeuristics({
   const noPeek = !!flags.noPeek;
   const nextKnown = !noPeek || knownUpcomingCount > 0;
   const nextId = nextKnown ? (noPeek ? (knownUpcomingEvents[0] || null) : getNextEventId(game)) : null;
-  const isLead = String(game?.leadFoxId || game?.leadFox || \"\") === String(bot?.id || \"\");
+  const isLead = String(game?.leadFoxId || game?.leadFox || "") === String(bot?.id || "");
   const nextFacts = nextId ? getEventFacts(nextId, { game, me: bot, denColor, isLead }) : null;
   const dangerNext = peakDanger(nextFacts);
 
