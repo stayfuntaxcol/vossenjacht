@@ -169,6 +169,27 @@ function deriveEventDanger(ev, ctx) {
     }
   }
 
+  // ---- Targeted events (Lead Fox only) ----
+  // Als een event alleen de Lead raakt: niet-Lead spelers moeten GEEN extra 'danger' krijgen
+  // (anders gaan bots onterecht DASH-bias krijgen).
+  const targetsLead = tags.has("TARGET_LEAD_FOX") || tags.has("target_lead_fox");
+  if (targetsLead) {
+    if (ctx && typeof ctx.isLead === "boolean") {
+      if (!ctx.isLead) {
+        dangerDash = 0;
+        dangerLurk = 0;
+        dangerBurrow = 0;
+        notes.push("TARGET_LEAD_FOX: raakt jou niet (niet-Lead) → danger=0.");
+      } else {
+        notes.push("TARGET_LEAD_FOX: raakt jou (Lead).");
+      }
+    } else if (!ctx) {
+      notes.push("TARGET_LEAD_FOX: context ontbreekt (Lead-check nodig).");
+    } else {
+      notes.push("TARGET_LEAD_FOX: ctx.isLead ontbreekt; baseline danger blijft staan.");
+    }
+  }
+
   return { dangerDash, dangerLurk, dangerBurrow, notes };
 }
 
@@ -199,6 +220,13 @@ function deriveLootImpact(ev) {
     out.appliesTo = "LEAD";
     out.amount = "ALL";
     out.notes.push("Magpie Snitch: Lead Fox kan alle buit verliezen.");
+  }
+
+  if (ev.id === "SILENT_ALARM") {
+    out.kind = "PENALTY";
+    out.appliesTo = "LEAD";
+    out.amount = 2;
+    out.notes.push("Silent Alarm: Lead moet 2 loot afleggen (anders verliest hij lead-status)." );
   }
 
   if (ev.id === "PAINT_BOMB_NEST") {
