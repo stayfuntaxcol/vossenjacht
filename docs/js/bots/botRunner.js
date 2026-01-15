@@ -882,16 +882,6 @@ function pickBestActionFromHand({ game, bot, players }) {
     const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
 
     const discThisRound = disc.filter((x) => Number(x?.round || 0) === roundNum);
-  const ctx = buildBotCtxForHeuristics({
-  game,
-  bot,
-  players: players || [],
-  handNames,
-  handIds: ids,
-  });
-
-const ranked = rankActions(ids, { presetKey, denColor, game, me: bot, ctx }); // hoogste waarde eerst
-    
     const botPlayedThisRound = discThisRound.filter((x) => x?.by === bot.id);
     const actionsPlayedThisRound = botPlayedThisRound.length;
 
