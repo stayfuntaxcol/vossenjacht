@@ -111,7 +111,7 @@ export const EVENT_DEFS = {
     imageFront: "./assets/card_event_magpie_snitch.png",
     imageBack: CARD_BACK,
     category: "VARIABLE",
-    tags: ["target_lead_fox", "lose_loot", "burrow_protects"],
+    tags: ["target_lead_fox", "lose_loot", "burrow_protects", "TARGET_LEAD_FOX"],
   },
   PAINT_BOMB_NEST: {
     id: "PAINT_BOMB_NEST",
