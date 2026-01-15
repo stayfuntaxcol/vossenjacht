@@ -847,17 +847,24 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
 
   return ctx;
 }
-
-function pickBestActionFromHand({ game, bot, players }) {
+// =====================================================
+// Pick best Action Card for BOT (OPS phase)
+// - builds rich ctx for botHeuristics (CORE + strategies)
+// - chooses targets for cards that need it
+// - anti-duplicate (self + global singleton per round)
+// - logs ranked choices to games/{gameId}/actions (BOT_DECISION)
+// =====================================================
+async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
   try {
     const hand = Array.isArray(bot?.hand) ? bot.hand : [];
     if (!hand.length) return null;
 
-    // 1) hand: kaartnaam -> action def (id)
+    // hand contains {name:"Den Signal"} or "Den Signal"
     const handNames = hand
       .map((c) => String(c?.name || c || "").trim())
       .filter(Boolean);
 
+    // map card name -> actionId via cards.js defs
     const entries = handNames
       .map((name) => ({ name, def: getActionDefByName(name) }))
       .filter((x) => x.def?.id);
@@ -868,59 +875,55 @@ function pickBestActionFromHand({ game, bot, players }) {
     const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
     const presetKey = presetFromDenColor(denColor);
 
-    // ---------- helpers ----------
-    const toMillis = (v) => {
-      if (typeof v === "number") return v;
-      if (v && typeof v === "object") {
-        if (typeof v.toMillis === "function") return v.toMillis();
-        if (v.seconds != null) return Number(v.seconds) * 1000;
-      }
-      return 0;
-    };
+    // ---------- round + discard ----------
+    const roundNum = Number.isFinite(Number(game?.round)) ? Number(game.round) : 0;
+    const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
+    const discThisRound = disc.filter((x) => Number(x?.round || 0) === roundNum);
 
-    const toActionId = (maybeNameOrId) => {
-      const raw = String(maybeNameOrId || "").trim();
-      if (!raw) return null;
+    const botPlayedThisRound = discThisRound.filter((x) => x?.by === bot.id);
+    const botPlayedActionIdsThisRound = botPlayedThisRound
+      .map((x) => {
+        const nm = String(x?.name || "").trim();
+        const def = nm ? getActionDefByName(nm) : null;
+        return def?.id ? String(def.id) : null;
+      })
+      .filter(Boolean);
 
-      // als het al op ID lijkt
-      if (/^[A-Z0-9_]+$/.test(raw) && raw.includes("_")) return raw;
+    const actionsPlayedThisRound = botPlayedThisRound.length;
 
-      // anders: probeer te mappen als naam
-      const def = getActionDefByName(raw);
+    // helper: convert discard item -> actionId
+    const toActionId = (x) => {
+      const rawId = String(x?.id || x?.actionId || x?.key || "").trim();
+      if (rawId && /^[A-Z0-9_]+$/.test(rawId) && rawId.includes("_")) return rawId;
+
+      const nm = String(x?.name || "").trim();
+      if (!nm) return null;
+      const def = getActionDefByName(nm);
       return def?.id ? String(def.id) : null;
     };
 
-    const roundNum = Number.isFinite(Number(game?.round)) ? Number(game.round) : 0;
-
-    // actionDiscard heeft bij jou: { name, by, round, at }
-    const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
-
-    const discThisRound = disc.filter((x) => Number(x?.round || 0) === roundNum);
-    const botPlayedThisRound = discThisRound.filter((x) => x?.by === bot.id);
-    const actionsPlayedThisRound = botPlayedThisRound.length;
-
-    const botPlayedActionIdsThisRound = botPlayedThisRound
-      .map((x) => toActionId(x?.name))
-      .filter(Boolean);
-
-    const discardThisRoundActionIds = discThisRound
-      .map((x) => toActionId(x?.name))
-      .filter(Boolean);
+    const discardThisRoundActionIds = discThisRound.map(toActionId).filter(Boolean);
 
     const discardRecentActionIds = [...disc]
-      .sort((a, b) => toMillis(a?.at) - toMillis(b?.at))
+      .sort((a, b) => Number(a?.at || 0) - Number(b?.at || 0))
       .slice(-10)
-      .map((x) => toActionId(x?.name))
+      .map(toActionId)
       .filter(Boolean);
 
     const discardActionIds = [
       ...(Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : []),
       ...disc.map((x) => x?.name),
     ]
-      .map(toActionId)
+      .map((v) => {
+        if (typeof v === "string") {
+          const def = getActionDefByName(v);
+          return def?.id ? String(def.id) : String(v);
+        }
+        return null;
+      })
       .filter(Boolean);
 
-    // ---------- next event / flags / knowledge ----------
+    // ---------- flags / next event / knowledge ----------
     const flags = fillFlags(game?.flagsRound);
     const nextId = nextEventId(game, 0);
     const nextEventFacts = nextId ? getEventFacts(nextId) : null;
@@ -933,12 +936,12 @@ function pickBestActionFromHand({ game, bot, players }) {
         )
       : 0;
 
-    // “nextKnown” volgens jouw bestaande prediction-model
+    // “nextKnown” via predictions (jouw bestaande model)
     const nextKnown = !!(Array.isArray(flags?.predictions) ? flags.predictions : []).some(
       (x) => x?.playerId === bot.id && String(x?.eventId || "") === String(nextId || "")
     );
 
-    // “knownUpcomingEvents” (als je dit al op player-doc opslaat)
+    // “knownUpcomingEvents” if stored on player-doc
     const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
       ? bot.knownUpcomingEvents.filter(Boolean)
       : [];
@@ -953,21 +956,18 @@ function pickBestActionFromHand({ game, bot, players }) {
         ? "SOFT_SCOUT"
         : "NO_SCOUT";
 
-    // ---------- rooster timing (gevaar pas NA reveal #2) ----------
+    // ---------- rooster timing: danger boost only AFTER 2nd rooster REVEALED ----------
     const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
     const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
-    const revealedRoosters = track.reduce((n, id, i) => {
-      if (rev[i] === true && String(id) === "ROOSTER_CROW") return n + 1;
-      return n;
-    }, 0);
 
-    const roosterSeen = Number.isFinite(revealedRoosters) && rev.length ? revealedRoosters
-      : Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen)
-      : 0;
+    let revealedRoosters = 0;
+    for (let i = 0; i < Math.min(track.length, rev.length); i++) {
+      if (rev[i] === true && String(track[i]) === "ROOSTER_CROW") revealedRoosters++;
+    }
+    const roosterSeen = revealedRoosters || (Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0);
+    const postRooster2Window = revealedRoosters >= 2;
 
-    const postRooster2Window = roosterSeen >= 2; // ✅ pas na reveal 2
-
-    // ---------- ranking / behind / last ----------
+    // ---------- score meta (last / behind) ----------
     const list = Array.isArray(players) ? players.filter((x) => x?.id) : [];
     const getVal = (pl) => {
       const s = Number(pl?.score);
@@ -986,8 +986,8 @@ function pickBestActionFromHand({ game, bot, players }) {
 
     // ---------- revealed den events by color ----------
     const revealedDenEventsByColor = {};
-    for (let i = 0; i < track.length; i++) {
-      if (!rev[i]) continue;
+    for (let i = 0; i < Math.min(track.length, rev.length); i++) {
+      if (rev[i] !== true) continue;
       const id = String(track[i] || "");
       if (id.startsWith("DEN_")) {
         const c = normColor(id.split("_")[1] || "");
@@ -1007,20 +1007,19 @@ function pickBestActionFromHand({ game, bot, players }) {
         const sameDen = cDen && cDen === denColor;
         const denRevealed = !!revealedDenEventsByColor[cDen];
 
-        // jouw regel: Follow heeft vooral zin als je next NIET weet
+        // Follow is useful mainly when next is NOT known, and target has aligned/revealed den
         const eligible = !nextKnown && (sameDen || denRevealed);
 
-        // score: sameDen > denRevealed > loot-rich (fallback)
         let score = 0;
         if (sameDen) score += 10;
         if (denRevealed) score += 6;
         if (eligible) score += 4;
 
-        // kleine bonus als target “intel” lijkt te hebben
+        // small bonus if target likely has intel
         const k = Array.isArray(pl?.knownUpcomingEvents) ? pl.knownUpcomingEvents.length : 0;
         score += Math.min(3, k);
 
-        // tie-break: rijkste target
+        // tie-break: richer target
         score += Math.min(5, sumLootPoints(pl) * 0.4);
 
         if (!best || score > best.score) best = { id: pl.id, score, sameDen, denRevealed, eligible };
@@ -1036,7 +1035,7 @@ function pickBestActionFromHand({ game, bot, players }) {
 
     const followPick = pickBestFollowTarget();
 
-    // ---------- ctx voor heuristics/strategies ----------
+    // ---------- ctx for heuristics/strategies ----------
     const ctx = {
       phase: String(game?.phase || ""),
       round: roundNum,
@@ -1055,6 +1054,7 @@ function pickBestActionFromHand({ game, bot, players }) {
       discardThisRoundActionIds,
       discardRecentActionIds,
 
+      nextEventId: nextId,
       nextEventFacts,
       dangerNext,
       nextKnown,
@@ -1075,16 +1075,16 @@ function pickBestActionFromHand({ game, bot, players }) {
       revealedDenEventsByColor,
     };
 
-    // handHas_* flags (handig voor strategies)
+    // handHas_* flags (for actionStrategies)
     for (const id of ids) ctx["handHas_" + id] = true;
 
-    // ---------- pick (nieuw: pickActionOrPass als beschikbaar) ----------
+    // ---------- ranking ----------
     let pick = null;
     if (typeof pickActionOrPass === "function") {
       pick = pickActionOrPass(ids, { presetKey, denColor, game, me: bot, ctx });
     } else {
-      const ranked = rankActions(ids, { presetKey, denColor, game, me: bot, ctx });
-      pick = { play: ranked[0]?.id || null, ranked, reason: "fallback_rankActions" };
+      const rankedTmp = rankActions(ids, { presetKey, denColor, game, me: bot, ctx });
+      pick = { play: rankedTmp[0]?.id || null, ranked: rankedTmp, reason: "fallback_rankActions" };
     }
 
     const ranked = Array.isArray(pick?.ranked)
@@ -1093,7 +1093,7 @@ function pickBestActionFromHand({ game, bot, players }) {
 
     if (!pick?.play) return null;
 
-    // Kandidaten: eerst pick.play, daarna rest ranking
+    // candidates: chosen first, then ranking
     const candidateIds = [
       String(pick.play),
       ...ranked.map((r) => r?.id).filter((x) => x && x !== pick.play),
@@ -1101,30 +1101,26 @@ function pickBestActionFromHand({ game, bot, players }) {
       .map((x) => String(x || "").trim())
       .filter(Boolean);
 
-    // Anti-duplicate: bot zelf niet 2x dezelfde action in dezelfde ronde
+    // Anti-duplicate: bot itself not twice same action in same round
     const botPlayedSet = new Set(botPlayedActionIdsThisRound);
 
-    // Anti-duplicate: “globale” kaarten liever niet 2x in dezelfde round door iedereen
+    // Anti-duplicate: global singleton (bots only)
     const GLOBAL_SINGLETON_ACTIONS = new Set(["KICK_UP_DUST", "PACK_TINKER", "NO_GO_ZONE", "SCATTER"]);
 
     for (const id of candidateIds) {
-      // --- bot-self duplicate guard ---
       if (botPlayedSet.has(id)) continue;
-
-      // --- global duplicate guard (bots only) ---
       if (GLOBAL_SINGLETON_ACTIONS.has(id) && discardThisRoundActionIds.includes(id)) continue;
 
-      // --- legality checks ---
+      // legality checks
       if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
         if (lockEventsActive) continue;
         if (!Array.isArray(game?.eventTrack)) continue;
         if (!Number.isFinite(Number(game?.eventIndex))) continue;
         if (Number(game.eventIndex) >= game.eventTrack.length - 1) continue;
       }
-
       if (id === "HOLD_STILL" && opsLockedActive) continue;
 
-      // --- target selection where needed ---
+      // targets
       let targetId = null;
 
       if (id === "MASK_SWAP" || id === "HOLD_STILL") {
@@ -1138,7 +1134,6 @@ function pickBestActionFromHand({ game, bot, players }) {
       }
 
       if (id === "SCENT_CHECK") {
-        // kies bij voorkeur iemand met intel / anders rijkste
         const intelTarget =
           (players || [])
             .filter((x) => x?.id && x.id !== bot.id && isInYard(x))
@@ -1153,47 +1148,45 @@ function pickBestActionFromHand({ game, bot, players }) {
         if (!targetId) continue;
       }
 
-      // --- terug naar kaartnaam in hand (removeOneCard werkt op naam) ---
-       const entry = entries.find((x) => x.def.id === id);
-  const name = entry?.name || entry?.def?.name || id;
+      // back to original card name (removeOneCard uses name)
+      const entry = entries.find((x) => x.def.id === id);
+      const name = entry?.name || entry?.def?.name || id;
 
-  const chosenId = id; // ✅ hier bestaat hij zeker
-  // targetId bestaat hier ook (null of string)
+      // decision log (OPS only)
+      if (String(game?.phase || "") === "OPS") {
+        await logBotDecision(db, gameId, {
+          phase: ctx?.phase || String(game?.phase || ""),
+          round: Number(game?.round || ctx?.round || 0),
+          opsTurnIndex: Number(game?.opsTurnIndex || 0),
 
-  // ✅ HIER PLAKKEN (vlak vóór return)
-  if (String(game?.phase || "") === "OPS") {
-    await logBotDecision(db, gameId, {
-      phase: ctx?.phase || String(game?.phase || ""),
-      round: Number(game?.round || ctx?.round || 0),
-      opsTurnIndex: Number(game?.opsTurnIndex || 0),
+          by: bot.id,
+          presetKey,
+          denColor,
 
-      by: bot.id,
-      presetKey,
-      denColor,
+          pick: { actionId: id, targetId: targetId || null },
 
-      pick: { actionId: chosenId || null, targetId: targetId || null },
+          rankedTop: (Array.isArray(ranked) ? ranked : []).slice(0, 6).map((r) => ({
+            id: r?.id,
+            total: Number(r?.total || 0),
+            coreDelta: Number(r?.s?.coreDelta || 0),
+            stratDelta: Number(r?.s?.stratDelta || 0),
+          })),
 
-      rankedTop: (Array.isArray(ranked) ? ranked : []).slice(0, 6).map((r) => ({
-        id: r?.id,
-        total: Number(r?.total || 0),
-        coreDelta: Number(r?.s?.coreDelta || 0),
-        stratDelta: Number(r?.s?.stratDelta || 0),
-      })),
+          ctxMini: {
+            nextEventId: ctx?.nextEventId || null,
+            dangerNext: Number(ctx?.dangerNext || 0),
+            scoutTier: ctx?.scoutTier || "NO_SCOUT",
+            nextKnown: !!ctx?.nextKnown,
+            postRooster2Window: !!ctx?.postRooster2Window,
+            actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
+          },
+        });
+      }
 
-      ctxMini: {
-        nextEventId: ctx?.nextEventId || null,
-        dangerNext: Number(ctx?.dangerNext || 0),
-        scoutTier: ctx?.scoutTier || "NO_SCOUT",
-        nextKnown: !!ctx?.nextKnown,
-        postRooster2Window: !!ctx?.postRooster2Window,
-        actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
-      },
-    });
-  }
+      return targetId ? { name, targetId } : { name };
+    }
 
-  return targetId ? { name, targetId } : { name };
-
-    // niets legaals/zinvol -> PASS
+    // nothing legal -> PASS
     return null;
   } catch (err) {
     console.warn("[BOTS] pickBestActionFromHand crashed -> PASS", err);
