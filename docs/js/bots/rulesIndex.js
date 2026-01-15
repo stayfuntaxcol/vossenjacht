@@ -86,8 +86,16 @@ function getActionFactsById(actionId) {
 // Event → danger/lootImpact
 // =============================
 
+function normTag(t) {
+  return String(t || "").trim().toUpperCase();
+}
+
 function tagSet(tags) {
-  return new Set((tags || []).map(String));
+  return new Set((tags || []).map(normTag).filter(Boolean));
+}
+
+function normColor(c) {
+  return String(c || "").trim().toUpperCase();
 }
 
 function deriveEventDanger(ev) {
@@ -99,6 +107,15 @@ function deriveEventDanger(ev) {
   let dangerLurk = 0;
   let dangerBurrow = 0;
   let notes = [];
+
+  // Lead-only events: base facts zijn 'worst-case' (voor de Lead).
+  // In getEventFacts(ctx) nul je dit uit voor non-leads.
+  if (tags.has("TARGET_LEAD_FOX") || tags.has("TARGET_LEAD")) {
+    dangerDash = Math.max(dangerDash, 0);
+    dangerBurrow = Math.max(dangerBurrow, 0);
+    dangerLurk = Math.max(dangerLurk, 8);
+    notes.push("LEAD_ONLY: alleen gevaarlijk voor Lead Fox (anders 0). LURK is dan riskant.");
+  }
 
   // DASH wordt vaak “veilig” bij catch-events (behalve Patrol). :contentReference[oaicite:3]{index=3}
   if (tags.has("CATCH_DASHERS")) {
@@ -117,11 +134,12 @@ function deriveEventDanger(ev) {
   }
 
   if (cat === "DEN") {
-    // Alleen gevaarlijk als jouw denColor matcht + niet immune + niet BURROW/DASH. 
+    // DEN is **alleen** gevaarlijk voor spelers met dezelfde denColor.
+    // Base facts zijn 'worst-case' (voor de target-kleur). In getEventFacts(ctx) nul je dit uit voor non-targets.
     dangerDash = 0;
     dangerBurrow = 0;
-    dangerLurk = Math.max(dangerLurk, 4); // baseline: conditioneel
-    notes.push("DEN: gevaar is conditioneel op jouw Den-kleur.");
+    dangerLurk = Math.max(dangerLurk, 9);
+    notes.push("DEN: alleen gevaarlijk voor spelers met dezelfde Den-kleur (anders 0). LURK is dan riskant.");
   }
 
   if (ev.id === "GATE_TOLL") {
@@ -133,7 +151,11 @@ function deriveEventDanger(ev) {
   }
 
   if (ev.id === "MAGPIE_SNITCH") {
-    notes.push("MAGPIE_SNITCH: target Lead Fox (niet-BURROW, niet-DASH).");
+    // Lead-only punishment: base is 'worst-case for Lead'. In getEventFacts(ctx) nul je dit uit voor non-leads.
+    dangerDash = Math.max(dangerDash, 0);
+    dangerBurrow = Math.max(dangerBurrow, 0);
+    dangerLurk = Math.max(dangerLurk, 9);
+    notes.push("MAGPIE_SNITCH: alleen gevaarlijk voor Lead Fox (LURK riskant; BURROW/DASH veilig). Non-leads: 0.");
   }
 
   return { dangerDash, dangerLurk, dangerBurrow, notes };
@@ -183,6 +205,54 @@ function deriveLootImpact(ev) {
   return out;
 }
 
+function applyEventContext(facts, ctx) {
+  if (!facts) return facts;
+  const use = ctx || {};
+  const game = use.game || null;
+  const me = use.me || use.bot || null;
+
+  const isLead =
+    typeof use.isLead === "boolean"
+      ? use.isLead
+      : !!(me?.id && (game?.leadFoxId === me.id || game?.leadFox === me.id));
+
+  const myDen = normColor(use.denColor || me?.denColor || me?.den || me?.color);
+  const targetDen = normColor(facts.denColor || facts?.meta?.denColor || (facts.id || "").split("DEN_")[1]);
+
+  const tags = tagSet(facts.tags);
+  const leadOnly = tags.has("TARGET_LEAD_FOX") || facts?.lootImpact?.appliesTo === "LEAD";
+  const denOnly = facts.category === "DEN" || tags.has("CATCH_BY_DEN_COLOR") || (facts.id || "").startsWith("DEN_");
+
+  let dangerDash = facts.dangerDash;
+  let dangerLurk = facts.dangerLurk;
+  let dangerBurrow = facts.dangerBurrow;
+  const dangerNotes = Array.isArray(facts.dangerNotes) ? [...facts.dangerNotes] : [];
+
+  if (leadOnly && !isLead) {
+    dangerDash = 0;
+    dangerLurk = 0;
+    dangerBurrow = 0;
+    dangerNotes.push("Context: jij bent niet de Lead → dit event is voor jou veilig.");
+  }
+
+  if (denOnly && targetDen && myDen && myDen !== targetDen) {
+    dangerDash = 0;
+    dangerLurk = 0;
+    dangerBurrow = 0;
+    dangerNotes.push("Context: jouw Den-kleur matcht niet → dit DEN event is voor jou veilig.");
+  }
+
+  return {
+    ...facts,
+    dangerDash,
+    dangerLurk,
+    dangerBurrow,
+    dangerNotes,
+    // Handig voor UI/debug
+    _ctx: { isLead, myDen, targetDen, leadOnly, denOnly },
+  };
+}
+
 function getEventFactsById(eventId) {
   const ev = EVENT_DEFS[eventId] || null;
   if (!ev) return null;
@@ -195,6 +265,7 @@ function getEventFactsById(eventId) {
     title: ev.title,
     category: ev.category || "UNKNOWN",
     tags: Array.isArray(ev.tags) ? ev.tags : [],
+    denColor: ev.denColor || null,
     engineImplemented: isEngineEventImplemented(ev.id),
     dangerDash: danger.dangerDash,
     dangerLurk: danger.dangerLurk,
@@ -225,8 +296,14 @@ export function buildRulesIndex() {
 
 export const RULES_INDEX = buildRulesIndex();
 
-export function getEventFacts(eventId) {
-  return RULES_INDEX.events[eventId] || null;
+// getEventFacts(eventId, ctx?)
+// - zonder ctx: base facts
+// - met ctx: gevaar/impact wordt gefilterd op Lead-only en Den-only events
+// - als ctx ontbreekt maar globalThis.__AI_CTX bestaat, gebruiken we die automatisch
+export function getEventFacts(eventId, ctx) {
+  const base = RULES_INDEX.events[eventId] || null;
+  const autoCtx = ctx || globalThis.__AI_CTX || null;
+  return autoCtx ? applyEventContext(base, autoCtx) : base;
 }
 export function getActionFacts(actionId) {
   return RULES_INDEX.actions[actionId] || null;
