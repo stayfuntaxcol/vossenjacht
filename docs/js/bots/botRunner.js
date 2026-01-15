@@ -150,44 +150,83 @@ function countRevealedRoosters(game) {
   if (c === 0 && Number.isFinite(Number(game?.roosterSeen))) c = Number(game.roosterSeen);
   return c;
 }
-
-function buildBotCtxForHeuristics({ game, bot, players, handNames, handIds }) {
+function buildBotCtxForHeuristics({
+  game,
+  bot,
+  players,
+  handNames,
+  handIds,
+  actionsPlayedThisRoundOverride, // optioneel
+}) {
   const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
   const round = Number.isFinite(Number(game?.round)) ? Number(game.round) : 0;
 
+  // --- discard (zichtbaar) ---
   const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
   const discThisRound = disc.filter((x) => Number(x?.round || 0) === round);
 
-  let actionsPlayedThisRound = botPlayedThisRound.length;
+  const botPlayedThisRound = discThisRound.filter((x) => x?.by === bot?.id);
+  const actionsPlayedThisRound =
+    Number.isFinite(Number(actionsPlayedThisRoundOverride))
+      ? Number(actionsPlayedThisRoundOverride)
+      : botPlayedThisRound.length;
 
-// fallback: als actionDiscard ooit wegvalt / leeg is
-if (actionsPlayedThisRound === 0 && (!Array.isArray(game?.actionDiscard) || game.actionDiscard.length === 0)) {
-  actionsPlayedThisRound = await countBotActionsThisRoundFallback({
-    db,
-    gameId: game?.id || game?.gameId || null,
-    botId: bot.id,
-    roundNum,
-  });
-}
+  // map discard item -> actionId (id als het al lijkt op ACTION_ID, anders via naam)
+  const toActionId = (x) => {
+    const rawId = String(x?.id || x?.actionId || x?.key || "").trim();
+    if (rawId && /^[A-Z0-9_]+$/.test(rawId) && rawId.includes("_")) return rawId;
 
-  // ids van actions die deze ronde al op discard liggen (voor anti-duplicate rules)
-  const discardThisRoundActionIds = discThisRound
-    .map((x) => String(x?.id || x?.actionId || x?.key || ""))
+    const nm = String(x?.name || "").trim();
+    if (!nm) return null;
+    const def = getActionDefByName(nm);
+    return def?.id || null;
+  };
+
+  const discardThisRoundActionIds = discThisRound.map(toActionId).filter(Boolean);
+
+  const discardRecentActionIds = [...disc]
+    .sort((a, b) => Number(a?.at || 0) - Number(b?.at || 0))
+    .slice(-10)
+    .map(toActionId)
     .filter(Boolean);
 
+  const discardActionIds = [
+    ...(Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : []),
+    ...disc.map((x) => x?.name),
+  ]
+    .map((x) => (typeof x === "string" ? (getActionDefByName(x)?.id || x) : x))
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
+
+  // --- next event facts ---
   const nextId = getNextEventId(game);
   const nextFacts = nextId ? getEventFacts(nextId) : null;
 
-  // scout knowledge (als je dit al bijhoudt op player doc)
-  const known = Array.isArray(bot?.knownUpcomingEvents)
+  const dangerNext = nextFacts
+    ? Math.max(
+        Number(nextFacts.dangerDash || 0),
+        Number(nextFacts.dangerLurk || 0),
+        Number(nextFacts.dangerBurrow || 0)
+      )
+    : 0;
+
+  // --- scout knowledge ---
+  const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
     ? bot.knownUpcomingEvents.filter(Boolean)
     : [];
-  const scoutTier = known.length >= 2 ? "FULL_SCOUT" : known.length === 1 ? "PARTIAL_SCOUT" : "NO_SCOUT";
+  const knownUpcomingCount = knownUpcomingEvents.length;
 
-  // rooster reveal window
+  const scoutTier =
+    knownUpcomingCount >= 2
+      ? "HARD_SCOUT"
+      : knownUpcomingCount === 1
+      ? "SOFT_SCOUT"
+      : "NO_SCOUT";
+
+  // --- rooster timing ---
   const revealedRoosters = countRevealedRoosters(game);
 
-  // follow-tail target hints
+  // --- follow-tail hints (v1 simple) ---
   const ps = Array.isArray(players) ? players : [];
   const candidates = ps.filter((pl) => pl?.id && pl.id !== bot?.id && isInYard(pl));
   const sameDenCandidates = candidates.filter(
@@ -201,7 +240,7 @@ if (actionsPlayedThisRound === 0 && (!Array.isArray(game?.actionDiscard) || game
 
   const revealedDenEventsByColor = buildRevealedDenMap(game);
 
-  return {
+  const ctx = {
     round,
     phase: String(game?.phase || ""),
     botId: bot?.id || null,
@@ -212,16 +251,18 @@ if (actionsPlayedThisRound === 0 && (!Array.isArray(game?.actionDiscard) || game
     handSize: Array.isArray(handIds) ? handIds.length : 0,
 
     actionsPlayedThisRound,
+    discardActionIds,
     discardThisRoundActionIds,
+    discardRecentActionIds,
 
     nextEventId: nextId,
     nextEventFacts: nextFacts,
-    dangerNext: peakDanger(nextFacts),
+    dangerNext,
 
     scoutTier,
     nextKnown: scoutTier !== "NO_SCOUT",
 
-    revealedRoosters,
+    roosterSeen: Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : revealedRoosters,
     postRooster2Window: revealedRoosters >= 2,
 
     revealedDenEventsByColor,
@@ -229,11 +270,13 @@ if (actionsPlayedThisRound === 0 && (!Array.isArray(game?.actionDiscard) || game
     hasEligibleFollowTarget: !!bestFollowTarget,
     bestFollowTargetIsSameDen: !!bestFollowTargetDen && bestFollowTargetDen === denColor,
     bestFollowTargetDenRevealed: !!bestFollowTargetDen && revealedDenEventsByColor[bestFollowTargetDen] === true,
-
-    // bot-only anti duplicate (humans niet beperken)
-    avoidDuplicateActionThisRound: true,
-    allowDuplicateForCombo: true,
   };
+
+  // handHas_* flags voor strategies
+  const idsSet = new Set(Array.isArray(handIds) ? handIds : []);
+  for (const id of idsSet) ctx["handHas_" + id] = true;
+
+  return ctx;
 }
 
 // 0..100 (grof, maar werkt goed)
@@ -839,7 +882,16 @@ function pickBestActionFromHand({ game, bot, players }) {
     const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
 
     const discThisRound = disc.filter((x) => Number(x?.round || 0) === roundNum);
+  const ctx = buildBotCtxForHeuristics({
+  game,
+  bot,
+  players: players || [],
+  handNames,
+  handIds: ids,
+  });
 
+const ranked = rankActions(ids, { presetKey, denColor, game, me: bot, ctx }); // hoogste waarde eerst
+    
     const botPlayedThisRound = discThisRound.filter((x) => x?.by === bot.id);
     const actionsPlayedThisRound = botPlayedThisRound.length;
 
