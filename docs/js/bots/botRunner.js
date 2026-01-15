@@ -1154,11 +1154,44 @@ function pickBestActionFromHand({ game, bot, players }) {
       }
 
       // --- terug naar kaartnaam in hand (removeOneCard werkt op naam) ---
-      const entry = entries.find((x) => x.def?.id === id);
-      const name = entry?.name || entry?.def?.name || id;
+       const entry = entries.find((x) => x.def.id === id);
+  const name = entry?.name || entry?.def?.name || id;
 
-      return targetId ? { name, targetId } : { name };
-    }
+  const chosenId = id; // ✅ hier bestaat hij zeker
+  // targetId bestaat hier ook (null of string)
+
+  // ✅ HIER PLAKKEN (vlak vóór return)
+  if (String(game?.phase || "") === "OPS") {
+    await logBotDecision(db, gameId, {
+      phase: ctx?.phase || String(game?.phase || ""),
+      round: Number(game?.round || ctx?.round || 0),
+      opsTurnIndex: Number(game?.opsTurnIndex || 0),
+
+      by: bot.id,
+      presetKey,
+      denColor,
+
+      pick: { actionId: chosenId || null, targetId: targetId || null },
+
+      rankedTop: (Array.isArray(ranked) ? ranked : []).slice(0, 6).map((r) => ({
+        id: r?.id,
+        total: Number(r?.total || 0),
+        coreDelta: Number(r?.s?.coreDelta || 0),
+        stratDelta: Number(r?.s?.stratDelta || 0),
+      })),
+
+      ctxMini: {
+        nextEventId: ctx?.nextEventId || null,
+        dangerNext: Number(ctx?.dangerNext || 0),
+        scoutTier: ctx?.scoutTier || "NO_SCOUT",
+        nextKnown: !!ctx?.nextKnown,
+        postRooster2Window: !!ctx?.postRooster2Window,
+        actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
+      },
+    });
+  }
+
+  return targetId ? { name, targetId } : { name };
 
     // niets legaals/zinvol -> PASS
     return null;
@@ -1168,43 +1201,18 @@ function pickBestActionFromHand({ game, bot, players }) {
   }
 }
 
-// --- BOT DECISION LOG (OPS only, keep small) ---
-if (String(game?.phase || "") === "OPS" && bot?.isBot !== false) {
-  const rankedTop = (Array.isArray(ranked) ? ranked : [])
-    .slice(0, 6)
-    .map((r) => ({
-      id: r?.id,
-      total: Number(r?.total || 0),
-      coreDelta: Number(r?.s?.coreDelta || 0),
-      stratDelta: Number(r?.s?.stratDelta || 0),
-    }));
-
-  await logBotDecision(db, gameId, {
-    phase: String(game?.phase || ""),
-    round: Number(game?.round || 0),
-    opsTurnIndex: Number(game?.opsTurnIndex || 0),
-
-    by: bot.id,
-    presetKey,
-    denColor: String(denColor || ""),
-
-    pick: {
-      actionId: chosenId || null,
-      actionName: chosenName || null,   // als je die hebt; anders weglaten
-      targetId: targetId || null,
-    },
-
-    rankedTop,
-
-    ctxMini: {
-      nextEventId: ctx?.nextEventId || null,
-      dangerNext: Number(ctx?.dangerNext || 0),
-      scoutTier: ctx?.scoutTier || "NO_SCOUT",
-      nextKnown: !!ctx?.nextKnown,
-      postRooster2Window: !!ctx?.postRooster2Window,
-      actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
-    },
-  });
+async function logBotDecision(db, gameId, payload) {
+  try {
+    if (!db || !gameId) return;
+    await addDoc(collection(db, "games", gameId, "actions"), {
+      kind: "BOT_DECISION",
+      at: Date.now(),
+      createdAt: serverTimestamp(),
+      ...payload,
+    });
+  } catch (e) {
+    console.warn("[BOT_LOG] failed", e);
+  }
 }
 
 function getOpsTurnId(game) {
