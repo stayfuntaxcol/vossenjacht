@@ -1194,20 +1194,6 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
   }
 }
 
-async function logBotDecision(db, gameId, payload) {
-  try {
-    if (!db || !gameId) return;
-    await addDoc(collection(db, "games", gameId, "actions"), {
-      kind: "BOT_DECISION",
-      at: Date.now(),
-      createdAt: serverTimestamp(),
-      ...payload,
-    });
-  } catch (e) {
-    console.warn("[BOT_LOG] failed", e);
-  }
-}
-
 function getOpsTurnId(game) {
   if (!game || game.phase !== "ACTIONS") return null;
   const order = Array.isArray(game.opsTurnOrder) ? game.opsTurnOrder : [];
