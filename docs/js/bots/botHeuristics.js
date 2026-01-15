@@ -117,6 +117,29 @@ export function presetFromDenColor(denColor) {
   return "BLUE";
 }
 
+function myDenEventAlreadyRevealed(game, denColor) {
+  const c = String(denColor || "").trim().toUpperCase();
+  if (!c) return null;
+
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
+
+  if (!track.length) return null;
+
+  const denId = `DEN_${c}`;
+
+  if (rev.length) {
+    const n = Math.min(track.length, rev.length);
+    for (let i = 0; i < n; i++) {
+      if (rev[i] === true && String(track[i] || "") === denId) return true;
+    }
+    if (track.some((x) => String(x || "") === denId)) return false;
+    return null;
+  }
+
+  return null;
+}
+
 function getPreset(presetKey, denColor) {
   const key = String(presetKey || "").trim().toUpperCase() || presetFromDenColor(denColor);
   return BOT_PRESETS[key] || BOT_PRESETS.BLUE;
