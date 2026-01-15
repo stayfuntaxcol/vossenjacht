@@ -1653,38 +1653,54 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
       return;
     }
 
-    const cardName = play.name;
+let cardName = String(play?.name || "").trim();
+let removed = removeOneCard(hand, cardName);
 
-    // remove from hand
-    const removed = removeOneCard(hand, cardName);
-    if (!removed) {
-      // fallback to PASS if card missing
-      let nextPasses = passesNow + 1;
-      if (nextPasses > target) nextPasses = target;
+// Fallback: als play.name een ACTION_ID is, map dan terug naar echte kaartnaam uit de hand
+if (!removed) {
+  const wantedId = String(play?.actionId || play?.id || "").trim();
+  if (wantedId) {
+    const match = hand.find((c) => {
+      const nm = String(c?.name || c || "").trim();
+      const def = nm ? getActionDefByName(nm) : null;
+      return String(def?.id || "") === wantedId;
+    });
 
-      const ended = nextPasses >= target;
-
-      tx.update(gRef, {
-        opsTurnIndex: nextIdx,
-        opsConsecutivePasses: nextPasses,
-        ...(ended
-          ? {
-              flagsRound: { ...(g.flagsRound || {}), opsLocked: true }, // ✅ hard stop
-              opsEndedAtMs: Date.now(),
-            }
-          : {}),
-      });
-
-      logPayload = {
-        round: roundNum,
-        phase: "ACTIONS",
-        playerId: botId,
-        playerName: p.name || "BOT",
-        choice: "ACTION_PASS",
-        message: "BOT wilde spelen maar kaart niet gevonden → PASS",
-      };
-      return;
+    if (match) {
+      cardName = String(match?.name || match || "").trim();
+      removed = removeOneCard(hand, cardName);
     }
+  }
+}
+
+if (!removed) {
+  // fallback to PASS if card missing
+  let nextPasses = passesNow + 1;
+  if (nextPasses > target) nextPasses = target;
+
+  const ended = nextPasses >= target;
+
+  tx.update(gRef, {
+    opsTurnIndex: nextIdx,
+    opsConsecutivePasses: nextPasses,
+    ...(ended
+      ? {
+          flagsRound: { ...(g.flagsRound || {}), opsLocked: true },
+          opsEndedAtMs: Date.now(),
+        }
+      : {}),
+  });
+
+  logPayload = {
+    round: roundNum,
+    phase: "ACTIONS",
+    playerId: botId,
+    playerName: p.name || "BOT",
+    choice: "ACTION_PASS",
+    message: `BOT wilde spelen maar kaart niet gevonden → PASS (name="${String(play?.name||"")}", id="${String(play?.actionId||"")}")`,
+  };
+  return;
+}
 
     // discard (face-up): kaart gaat direct op de Discard Pile
     const nowMs = Date.now();
