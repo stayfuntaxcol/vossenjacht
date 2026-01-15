@@ -211,13 +211,6 @@ function buildBotCtxForHeuristics({
     .map((x) => (typeof x === "string" ? (getActionDefByName(x)?.id || x) : x))
     .map((x) => String(x || "").trim())
     .filter(Boolean);
-
-  // --- NEXT EVENT FACTS BOTS KUNNEN VOLGENDE EVENT KAART SPIEKEN ---
-
-const nextId = nextKnown ? getNextEventId(game) : null;
-const nextFacts = nextId ? getEventFacts(nextId) : null;
-const dangerNext = nextFacts ? Math.max(nextFacts.dangerDash, nextFacts.dangerLurk, nextFacts.dangerBurrow) : 0;
-  
   // --- scout knowledge ---
   const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
     ? bot.knownUpcomingEvents.filter(Boolean)
@@ -230,6 +223,16 @@ const dangerNext = nextFacts ? Math.max(nextFacts.dangerDash, nextFacts.dangerLu
       : knownUpcomingCount === 1
       ? "SOFT_SCOUT"
       : "NO_SCOUT";
+
+
+  // --- next event facts (respect noPeek) ---
+  const flags = fillFlags(game?.flagsRound);
+  const noPeek = !!flags.noPeek;
+  const nextKnown = !noPeek || knownUpcomingCount > 0;
+  const nextId = nextKnown ? (noPeek ? (knownUpcomingEvents[0] || null) : getNextEventId(game)) : null;
+  const isLead = String(game?.leadFoxId || game?.leadFox || \"\") === String(bot?.id || \"\");
+  const nextFacts = nextId ? getEventFacts(nextId, { game, me: bot, denColor, isLead }) : null;
+  const dangerNext = peakDanger(nextFacts);
 
   // --- rooster timing ---
   const revealedRoosters = countRevealedRoosters(game);
@@ -268,7 +271,8 @@ const dangerNext = nextFacts ? Math.max(nextFacts.dangerDash, nextFacts.dangerLu
     dangerNext,
 
     scoutTier,
-    nextKnown: scoutTier !== "NO_SCOUT",
+
+    nextKnown,
 
     roosterSeen: Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : revealedRoosters,
     postRooster2Window: revealedRoosters >= 2,
@@ -322,11 +326,14 @@ function computeHandStrength({ game, bot }) {
       (s.tempoScore || 0) -
       (s.riskScore || 0);
   }
-
   // context: als next event gevaarlijk is, wil je liever een sterke hand
-  const nextEvent0 = getNextEventId(game);
-  const f = nextEvent0 ? getEventFacts(nextEvent0) : null;
-  const dangerPeak = f ? Math.max(f.dangerDash ?? 0, f.dangerLurk ?? 0, f.dangerBurrow ?? 0) : 0;
+  const flags0 = fillFlags(game?.flagsRound);
+  const noPeek0 = !!flags0.noPeek;
+  const known0 = Array.isArray(bot?.knownUpcomingEvents) ? bot.knownUpcomingEvents.filter(Boolean) : [];
+  const nextEvent0 = noPeek0 ? (known0[0] || null) : getNextEventId(game);
+  const isLead0 = String(game?.leadFoxId || game?.leadFox || "") === String(bot?.id || "");
+  const f = nextEvent0 ? getEventFacts(nextEvent0, { game, me: bot, denColor, isLead: isLead0 }) : null;
+  const dangerPeak = peakDanger(f);
 
   // schaal en clamp
   let score = Math.round(Math.max(0, Math.min(100, raw * 5)));
@@ -916,11 +923,21 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
         return null;
       })
       .filter(Boolean);
-
     // ---------- flags / next event / knowledge ----------
     const flags = fillFlags(game?.flagsRound);
-    const nextId = nextEventId(game, 0);
-    const nextEventFacts = nextId ? getEventFacts(nextId) : null;
+    const noPeek = !!flags.noPeek;
+
+    const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
+      ? bot.knownUpcomingEvents.filter(Boolean)
+      : [];
+    const knownUpcomingCount = knownUpcomingEvents.length;
+
+    // if noPeek=true: only know next event if you actually SCOUTed (knownUpcomingEvents)
+    const nextKnown = !noPeek || knownUpcomingCount >= 1;
+    const nextId = nextKnown ? (noPeek ? knownUpcomingEvents[0] : nextEventId(game, 0)) : null;
+
+    const isLead = String(game?.leadFoxId || game?.leadFox || "") === String(bot?.id || "");
+    const nextEventFacts = nextId ? getEventFacts(nextId, { game, me: bot, denColor, isLead }) : null;
 
     const dangerNext = nextEventFacts
       ? Math.max(
@@ -930,27 +947,13 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
         )
       : 0;
 
-    // “nextKnown” via predictions (jouw bestaande model)
-    const nextKnown = !!(Array.isArray(flags?.predictions) ? flags.predictions : []).some(
-      (x) => x?.playerId === bot.id && String(x?.eventId || "") === String(nextId || "")
-    );
-
-    // “knownUpcomingEvents” if stored on player-doc
-    const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
-      ? bot.knownUpcomingEvents.filter(Boolean)
-      : [];
-    const knownUpcomingCount = knownUpcomingEvents.length;
-
     const scoutTier =
       knownUpcomingCount >= 2
         ? "HARD_SCOUT"
         : knownUpcomingCount >= 1
         ? "SOFT_SCOUT"
-        : nextKnown
-        ? "SOFT_SCOUT"
         : "NO_SCOUT";
-
-    // ---------- rooster timing: danger boost only AFTER 2nd rooster REVEALED ----------
+// ---------- rooster timing: danger boost only AFTER 2nd rooster REVEALED ----------
     const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
     const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
 
