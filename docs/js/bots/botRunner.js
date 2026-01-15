@@ -78,6 +78,28 @@ function sumLootPoints(p) {
   return loot.reduce((s, c) => s + (Number(c?.v) || 0), 0);
 }
 
+async function countBotActionsThisRoundFallback({ db, gameId, botId, roundNum }) {
+  // Alleen gebruiken als je later game.actionDiscard niet meer bijhoudt
+  if (!db || !gameId || !botId) return 0;
+
+  try {
+    const { collection, getDocs, query, where } = await import(
+      "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js"
+    );
+
+    const q = query(
+      collection(db, "games", gameId, "actions"),
+      where("by", "==", botId),
+      where("round", "==", roundNum)
+    );
+    const snap = await getDocs(q);
+    return snap.size || 0;
+  } catch (e) {
+    console.warn("[BOTS] actions fallback failed:", e);
+    return 0;
+  }
+}
+
 function handToActionIds(hand) {
   const arr = Array.isArray(hand) ? hand : [];
   const names = arr
@@ -136,7 +158,17 @@ function buildBotCtxForHeuristics({ game, bot, players, handNames, handIds }) {
   const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
   const discThisRound = disc.filter((x) => Number(x?.round || 0) === round);
 
-  const actionsPlayedThisRound = discThisRound.filter((x) => x?.by === bot?.id).length;
+  let actionsPlayedThisRound = botPlayedThisRound.length;
+
+// fallback: als actionDiscard ooit wegvalt / leeg is
+if (actionsPlayedThisRound === 0 && (!Array.isArray(game?.actionDiscard) || game.actionDiscard.length === 0)) {
+  actionsPlayedThisRound = await countBotActionsThisRoundFallback({
+    db,
+    gameId: game?.id || game?.gameId || null,
+    botId: bot.id,
+    roundNum,
+  });
+}
 
   // ids van actions die deze ronde al op discard liggen (voor anti-duplicate rules)
   const discardThisRoundActionIds = discThisRound
