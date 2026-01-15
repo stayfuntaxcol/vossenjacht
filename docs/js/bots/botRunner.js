@@ -1183,7 +1183,8 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
         });
       }
 
-      return targetId ? { name, targetId } : { name };
+    return targetId ? { name, actionId: id, targetId } : { name, actionId: id };
+
     }
 
     // nothing legal -> PASS
