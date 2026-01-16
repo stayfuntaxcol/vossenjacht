@@ -33,6 +33,31 @@ function peakDanger(nextEventFacts) {
   );
 }
 
+
+// Danger used for CASHOUT should reflect "stay risk" (best defensive option),
+// not the peak across DASH/LURK/BURROW.
+function stayDanger(nextEventFacts) {
+  if (!nextEventFacts) return 0;
+  const lurk = num(nextEventFacts.dangerLurk, 0);
+  const burrow = num(nextEventFacts.dangerBurrow, 0);
+  const dash = num(nextEventFacts.dangerDash, 0);
+
+  // If both defensive values are 0, fall back to peak (legacy behavior).
+  if (lurk <= 0 && burrow <= 0) {
+    return Math.max(dash, lurk, burrow);
+  }
+
+  // Staying means you can pick the safer of LURK/BURROW.
+  return Math.min(lurk, burrow);
+}
+
+function appliesToMeFromFacts(nextEventFacts) {
+  if (!nextEventFacts) return undefined;
+  if (typeof nextEventFacts.appliesToMe === 'boolean') return nextEventFacts.appliesToMe;
+  if (typeof nextEventFacts._appliesToMe === 'boolean') return nextEventFacts._appliesToMe;
+  return undefined;
+}
+
 // ---------- Defaults ----------
 export const DEFAULT_CORE_CONFIG = {
   COMBO_THRESHOLD: 8,
@@ -46,11 +71,11 @@ export const DEFAULT_CORE_CONFIG = {
   DUP_WINDOW_PENALTY: 2,
   DUP_TRIPLE_PENALTY: 8,
 
-  DANGER_DASH_MIN: 7,
+  DANGER_DASH_MIN: 9,
   HAILMARY_BEHIND: 6,
 
-  CARRY_HIGH: 9,
-  CARRY_EXTREME: 12,
+  CARRY_HIGH: 12,
+  CARRY_EXTREME: 18,
 
   ROOSTER_BONUS: 2,
 
@@ -96,9 +121,19 @@ function computeLateGame(ctx, cfg) {
 }
 
 function computeDangerEffective(ctx, cfg) {
+  // If next event is targeted and does NOT apply to this bot (e.g., DEN_* mismatch, lead-only event),
+  // then it should not push cashout.
+  const applies = appliesToMeFromFacts(ctx?.nextEventFacts);
+  if (applies === false) {
+    return 0;
+  }
+
+  // Prefer explicit dangerNext provided by heuristics; otherwise derive from facts.
+  // IMPORTANT: use stayDanger(), not peakDanger(), to avoid "auto-DASH" on events that are
+  // dangerous only for one DEN color or can be safely mitigated by BURROW/LURK.
   const dangerNext = Number.isFinite(Number(ctx?.dangerNext))
     ? num(ctx.dangerNext, 0)
-    : peakDanger(ctx?.nextEventFacts);
+    : stayDanger(ctx?.nextEventFacts);
 
   const roosterSeen = num(ctx?.roosterSeen, 0);
   const postRooster2Window = bool(ctx?.postRooster2Window);
@@ -277,7 +312,7 @@ export function evaluateCorePolicy(ctx, comboInfo, config) {
           carryValue: num(ctx?.carryValue, 0),
           dangerNext: Number.isFinite(Number(ctx?.dangerNext))
             ? num(ctx?.dangerNext, 0)
-            : peakDanger(ctx?.nextEventFacts),
+            : stayDanger(ctx?.nextEventFacts),
           roosterSeen: num(ctx?.roosterSeen, 0),
           postRooster2Window: bool(ctx?.postRooster2Window),
           comboBest: combo.bestPair,
