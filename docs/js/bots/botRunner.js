@@ -143,6 +143,24 @@ function handToActionIds(hand) {
   }
   return ids;
 }
+
+function computeCarryValue(bot) {
+  const eggs = Number(bot?.eggs || 0);
+  const hens = Number(bot?.hens || 0);
+  const prize = bot?.prize ? 3 : 0;
+
+  const loot = Array.isArray(bot?.loot) ? bot.loot : [];
+  const lootPts = loot.reduce((s, c) => {
+    const v = Number(c?.value ?? c?.points ?? 1);
+    return s + (Number.isFinite(v) ? v : 1);
+  }, 0);
+
+  const HEN_VALUE = 3;   // tweak: 2 of 3 (ik zou 3 doen)
+  const EGG_VALUE = 1;
+
+  return eggs * EGG_VALUE + hens * HEN_VALUE + prize + lootPts;
+}
+
 // ================================
 // Heuristics/Strategies ctx builder
 // ================================
@@ -787,9 +805,7 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
   const opsLockedActive = !!game?.flagsRound?.opsLocked;
 
   // --- carry value (use score if present) ---
-  const carryValue =
-    (Number.isFinite(Number(bot?.score)) ? Number(bot.score) : null) ??
-    (Number(bot?.eggs || 0) + Number(bot?.hens || 0) + (bot?.prize ? 3 : 0));
+ const carryValue = computeCarryValue(bot);
 
   // --- follow target hints (simple v1) ---
   const list = Array.isArray(players) ? players : [];
@@ -1164,6 +1180,26 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
       const entry = entries.find((x) => x.def.id === id);
       const name = entry?.name || entry?.def?.name || id;
 
+      const carryValue = computeCarryValue(bot);
+ctx.carryValue = carryValue; // belangrijk: core gebruikt dit
+
+// Als je core al hebt: gebruik die. Anders 1x berekenen:
+const core = typeof evaluateCorePolicy === "function"
+  ? evaluateCorePolicy(ctx, comboInfo, cfg)
+  : null;
+
+// (optioneel) dangerVec afleiden zonder nextEventId te lekken
+const dangerVec = ctx?.nextEventFacts
+  ? {
+      dash: Number(ctx.nextEventFacts.dangerDash || 0),
+      lurk: Number(ctx.nextEventFacts.dangerLurk || 0),
+      burrow: Number(ctx.nextEventFacts.dangerBurrow || 0),
+    }
+  : null;
+
+const dangerPeak = dangerVec ? Math.max(dangerVec.dash, dangerVec.lurk, dangerVec.burrow) : Number(ctx?.dangerNext || 0);
+const dangerStay = dangerVec ? Math.min(dangerVec.lurk, dangerVec.burrow) : 0;
+
       // decision log (OPS only)
       if (String(game?.phase || "") === "OPS") {
         await logBotDecision(db, gameId, {
@@ -1184,15 +1220,23 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
             stratDelta: Number(r?.s?.stratDelta || 0),
           })),
 
-          ctxMini: {
-            nextEventId: ctx?.nextEventId || null,
-            dangerNext: Number(ctx?.dangerNext || 0),
-            scoutTier: ctx?.scoutTier || "NO_SCOUT",
-            nextKnown: !!ctx?.nextKnown,
-            postRooster2Window: !!ctx?.postRooster2Window,
-            actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
-          },
-        });
+ 
+  carryValue: Number(carryValue || 0),
+
+  dangerNext: Number(ctx?.dangerNext || 0),
+  dangerPeak: Number(dangerPeak || 0),
+  dangerStay: Number(dangerStay || 0),
+  dangerVec: dangerVec || null,
+
+  dangerEffective: Number(core?.dangerEffective ?? 0),
+  cashoutBias: Number(core?.cashoutBias ?? 0),
+
+  scoutTier: ctx?.scoutTier || "NO_SCOUT",
+  nextKnown: !!ctx?.nextKnown,
+  postRooster2Window: !!ctx?.postRooster2Window,
+  actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
+  },
+   });
       }
 
     return targetId ? { name, actionId: id, targetId } : { name, actionId: id };
