@@ -759,42 +759,10 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
       )
     : 0;
 
-  // --- rooster timing (v2: based on revealed events) ---
-const revealed = Array.isArray(game?.eventReveals)
-  ? game.eventReveals
-  : Array.isArray(game?.revealedEvents)
-    ? game.revealedEvents
-    : Array.isArray(game?.eventHistory)
-      ? game.eventHistory
-      : null;
-
-// eventReveals/revealedEvents/eventHistory moeten arrays zijn met eventId's (bv "ROOSTER_CROW")
-const roosterSeen =
-  revealed
-    ? revealed.filter((id) => String(id) === "ROOSTER_CROW").length
-    : (Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0);
-
-// --- rooster timing (v2: based on revealed events) ---
-const revealed = Array.isArray(game?.eventReveals)
-  ? game.eventReveals
-  : Array.isArray(game?.revealedEvents)
-    ? game.revealedEvents
-    : Array.isArray(game?.eventHistory)
-      ? game.eventHistory
-      : null;
-
-// eventReveals/revealedEvents/eventHistory moeten arrays zijn met eventId's (bv "ROOSTER_CROW")
-const roosterSeen =
-  revealed
-    ? revealed.filter((id) => String(id) === "ROOSTER_CROW").length
-    : (Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0);
-
-// Rooster #1 en #2 zijn SAFE → géén rooster-pressure.
-// Pas ná 2 onthulde roosters mag je druk gaan opbouwen richting #3.
-const postRooster2Window = roosterSeen >= 2;
-
-// (optioneel) je kunt deze later echt implementeren, maar hij is niet nodig voor de fix:
-const rooster2JustRevealed = false;
+  // --- rooster timing (v1) ---
+  const roosterSeen = Number.isFinite(game?.roosterSeen) ? game.roosterSeen : 0;
+  const postRooster2Window = roosterSeen >= 2;
+  const rooster2JustRevealed = false; // later netjes als je reveal-moment flagt
 
   // --- flags ---
   const lockEventsActive = !!game?.flagsRound?.lockEvents;
