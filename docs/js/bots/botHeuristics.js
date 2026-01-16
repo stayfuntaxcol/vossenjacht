@@ -413,6 +413,19 @@ function getDangerPeakFromFacts(f) {
   return Math.max(f.dangerDash || 0, f.dangerLurk || 0, f.dangerBurrow || 0);
 }
 
+function getDangerStayFromFacts(f) {
+  if (!f) return 0;
+  const lurk = Number(f.dangerLurk || 0);
+  const burrow = Number(f.dangerBurrow || 0);
+
+  // If both defensive options are 0, treat as safe for cashout purposes.
+  if (lurk <= 0 && burrow <= 0) return 0;
+
+  // Staying means you can pick the safer of LURK/BURROW.
+  return Math.min(lurk, burrow);
+}
+
+
 function getNextEventFactsFromOpts(opts = {}) {
   const { ctx, game } = getCtx(opts);
   if (ctx?.nextEventFacts) return ctx.nextEventFacts;
@@ -804,25 +817,42 @@ export function rankActions(actionKeys = [], opts = {}) {
       me?.id
         ? disc.filter((x) => x?.by === me.id && Number(x?.round || 0) === round).length
         : 0;
-
     const knownUpcomingEvents = Array.isArray(me?.knownUpcomingEvents) ? me.knownUpcomingEvents : [];
     const knownUpcomingCount = knownUpcomingEvents.length;
     const scoutTier = knownUpcomingCount >= 2 ? "HARD_SCOUT" : knownUpcomingCount >= 1 ? "SOFT_SCOUT" : "NO_SCOUT";
 
-    // dangerNext fallback (v1 = 0; later geef je ctx.dangerNext mee vanuit botRunner)
-    const dangerNext = 0;
+    // --- den + lead context ---
+    const denColor = String(opts?.denColor || me?.denColor || me?.den || me?.color || "");
+    const isLead = computeIsLead(game, me, {});
+
+    // --- next event (scoped; respects noPeek) ---
+    const nextEventKey = getNextEventKey(game, {});
+    const nextEventFacts = nextEventKey
+      ? getEventFactsScoped(nextEventKey, { ...opts, game, me, denColor, ctx: { isLead, denColor } })
+      : null;
+
+    // bot knows next card only if its own intel list contains the immediate next key
+    const _knownSet = new Set(
+      (Array.isArray(knownUpcomingEvents) ? knownUpcomingEvents : [])
+        .map((x) => String(x || "").trim())
+        .filter(Boolean)
+    );
+    const nextKnown = !!(nextEventKey && _knownSet.has(String(nextEventKey)));
+
+    // dangerNext for CORE cashout should reflect "stay risk" (best defensive option)
+    const dangerNext = getDangerStayFromFacts(nextEventFacts);
 
     const roosterSeen = Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0;
 
-    const carryValue =
-      (Number.isFinite(Number(me?.score)) ? Number(me.score) : null) ??
-      (Number(me?.eggs || 0) + Number(me?.hens || 0) + (me?.prize ? 3 : 0));
+    // carryValue should reflect carried loot, not total score
+    const carryValue = estimateCarryValue(me);
 
     return {
       phase,
       round,
       botId: me?.id || null,
-      denColor: String(opts?.denColor || me?.denColor || me?.color || ""),
+      denColor,
+      isLead,
       carryValue,
       isLast: !!opts?.isLast,
       scoreBehind: Number(opts?.scoreBehind || 0),
@@ -835,11 +865,12 @@ export function rankActions(actionKeys = [], opts = {}) {
       discardThisRoundActionIds,
       discardRecentActionIds,
 
-      nextKnown: false,
+      nextKnown,
       knownUpcomingEvents,
       knownUpcomingCount,
       scoutTier,
-      nextEventFacts: null,
+      nextEventKey,
+      nextEventFacts,
       dangerNext,
 
       roosterSeen,
@@ -873,7 +904,7 @@ const denySet = new Set([
     .map((id) => {
       if (denySet.has(id)) return null;
 
-      const s = scoreActionFacts(id, { ...opts, presetKey });
+      const s = scoreActionFacts(id, { ...opts, presetKey, ctx });
       if (!s) return null;
 
       const base = totalScore(s);
