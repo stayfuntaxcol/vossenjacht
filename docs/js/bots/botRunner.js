@@ -10,6 +10,7 @@ import {
   presetFromDenColor,
   BOT_PRESETS,
   pickActionOrPass, // ✅ toevoegen
+  recommendDecision,
 } from "./botHeuristics.js";
 
 import {
@@ -76,6 +77,20 @@ function isInYard(p) {
 function sumLootPoints(p) {
   const loot = Array.isArray(p?.loot) ? p.loot : [];
   return loot.reduce((s, c) => s + (Number(c?.v) || 0), 0);
+}
+
+function computeIsLeadForPlayer(game, me, players) {
+  const leadId = String(game?.leadFoxId || "");
+  if (leadId && leadId === String(me?.id || "")) return true;
+
+  const leadName = String(game?.leadFox || "");
+  if (leadName && leadName === String(me?.name || "")) return true;
+
+  const idx = Number.isFinite(Number(game?.leadIndex)) ? Number(game.leadIndex) : null;
+  if (idx === null) return false;
+
+  const ordered = Array.isArray(players) ? [...players].sort((a, b) => (a?.joinOrder ?? 9999) - (b?.joinOrder ?? 9999)) : [];
+  return ordered[idx]?.id === me?.id;
 }
 
 async function logBotDecision(db, gameId, payload) {
@@ -433,15 +448,14 @@ function silentAlarmPenalty({ eventId, decision, isLead, lootPts }) {
   return 1.2; // als je weinig hebt, penalty “lead loss” ≈ minder erg dan 2 loot
 }
 
-function expectedSackShareNow({ game, players, assumeSelfWillDash = true }) {
+function expectedSackShareNow({ game, players }) {
   const sack = Array.isArray(game?.sack) ? game.sack : [];
   const sackValue = sack.reduce((s, c) => s + (Number(c?.v) || 0), 0);
   if (!sack.length) return 0;
 
-  // ✅ Fix: share should scale with the number of DASH decisions *this DECISION phase*,
-  // not with players who already dashed in earlier rounds (those are not in-yard).
-  const dashDecisionsSoFar = countDashDecisions(players || []);
-  const divisor = Math.max(1, dashDecisionsSoFar + (assumeSelfWillDash ? 1 : 0));
+  // grof: deel door (dashersAlready + 1). (Later: betere voorspelling)
+  const dashersAlready = (players || []).filter((pl) => pl?.dashed && pl?.inYard !== false).length;
+  const divisor = Math.max(1, dashersAlready + 1);
   return sackValue / divisor;
 }
 
@@ -538,16 +552,20 @@ function pickDecisionLootMaximizer({ g, p, latestPlayers, gameId }) {
   
   // Rooster pressure: after 2 roosters the next one can end the raid.
   // If you already have loot, prefer to bail out (DASH) instead of risking getting caught.
-  const roosterSeen = countRevealedRoosters(g);
-
-  // ✅ Fix: Lead check must match engine truth (leadFoxId), not leadIndex/joinOrder guessing.
-  const isLead = String(g?.leadFoxId || g?.leadFox || "") === String(p?.id || "");
+  const roosterSeen = Number.isFinite(Number(g?.roosterSeen)) ? Number(g.roosterSeen) : 0;
+const isLead = (() => {
+    const ordered = [...(latestPlayers || [])].sort(
+      (a, b) => (a.joinOrder ?? 9999) - (b.joinOrder ?? 9999)
+    );
+    const idx = Number.isFinite(g?.leadIndex) ? g.leadIndex : 0;
+    return ordered[idx]?.id === p.id;
+  })();
 
   const avgLoot = avgLootValueFromDeck(g?.lootDeck);
   const roundsLeft = estimateRoundsLeft(g);
   const futureGain = roundsLeft * avgLoot;
 
-  const sackShareIfDash = expectedSackShareNow({ game: g, players: latestPlayers || [], assumeSelfWillDash: true });
+  const sackShareIfDash = expectedSackShareNow({ game: g, players: latestPlayers || [] });
   const caughtLoss = lootPts;
 
   let options = ["LURK", "DASH", "BURROW"].filter((d) => d !== "BURROW" || !p.burrowUsed);
@@ -1881,7 +1899,39 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       if (s.exists()) freshPlayers.push({ id: s.id, ...s.data() });
     }
 
-    const decision = pickDecisionLootMaximizer({ g, p, latestPlayers: freshPlayers, gameId });
+    const denColor = normColor(p?.color || p?.den || p?.denColor);
+    const presetKey = presetFromDenColor(denColor);
+    const dashDecisionsSoFar = countDashDecisions(freshPlayers);
+    const isLead = computeIsLeadForPlayer(g, p, freshPlayers);
+
+    const rec = recommendDecision({
+      presetKey,
+      denColor,
+      game: g,
+      me: p,
+      ctx: {
+        round: Number(g.round || 0),
+        isLead,
+        dashDecisionsSoFar,
+        // rooster context
+        roosterSeen: Number.isFinite(Number(g?.roosterSeen)) ? Number(g.roosterSeen) : countRevealedRoosters(g),
+        postRooster2Window: countRevealedRoosters(g) >= 2,
+      },
+    });
+
+    let decision = rec?.decision || "LURK";
+
+    // Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
+    const nextEvent0 = nextEventId(g, 0);
+    if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
+      const picked = pickHiddenNestDashSet({ game: g, gameId, players: freshPlayers || [] });
+      const dashSet = picked?.dashSet || null;
+      if (dashSet && !dashSet.has(p.id)) {
+        // fall back to safest stay
+        if (!p.burrowUsed && rec?.dangerVec && Number(rec.dangerVec.burrow || 0) <= Number(rec.dangerVec.lurk || 0)) decision = "BURROW";
+        else decision = "LURK";
+      }
+    }
     const update = { decision };
 
     if (decision === "BURROW" && !p.burrowUsed) {
@@ -1897,6 +1947,22 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       playerName: p.name || "BOT",
       choice: `DECISION_${decision}`,
       message: `BOT kiest ${decision}`,
+    
+
+      // --- live metrics (for charts) ---
+      nextEventId: rec?.nextEventId || null,
+      carryValue: Number(rec?.carryValue ?? 0),
+      dangerPeak: Number(rec?.dangerPeak ?? 0),
+      dangerStay: Number(rec?.dangerStay ?? 0),
+      dangerEffective: Number(rec?.dangerEffective ?? 0),
+      cashoutBias: Number(rec?.cashoutBias ?? 0),
+      appliesToMe: (typeof rec?.appliesToMe === 'boolean') ? rec.appliesToMe : null,
+      isLead: !!rec?.isLead,
+      dashDecisionsSoFar: Number(rec?.dashDecisionsSoFar ?? 0),
+      dangerVec: rec?.dangerVec || null,
+      at: Date.now(),
+      kind: 'BOT_DECISION',
+
     };
   });
 
