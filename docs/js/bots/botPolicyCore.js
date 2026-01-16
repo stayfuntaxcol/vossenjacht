@@ -1,7 +1,7 @@
 // js/bots/botPolicyCore.js
 // CORE Policy Engine (Spec v1)
 // - Action economy: reserve / saveValue / 2nd action gating via combo
-// - Carry & cashout gating
+// - Carry & cashout gating (CONTINUOUS model)
 // - Rooster timing (danger bonus pas in postRooster2Window)
 // - Anti-duplicate penalties (round + window + triple) met combo-exception
 //
@@ -33,19 +33,16 @@ function peakDanger(nextEventFacts) {
   );
 }
 
-
 // Danger used for CASHOUT should reflect "stay risk" (best defensive option),
 // not the peak across DASH/LURK/BURROW.
 function stayDanger(nextEventFacts) {
   if (!nextEventFacts) return 0;
   const lurk = num(nextEventFacts.dangerLurk, 0);
   const burrow = num(nextEventFacts.dangerBurrow, 0);
-  const dash = num(nextEventFacts.dangerDash, 0);
 
-  // If both defensive values are 0, fall back to peak (legacy behavior).
-  if (lurk <= 0 && burrow <= 0) {
-    return Math.max(dash, lurk, burrow);
-  }
+  // ✅ Fix: if both defensive values are 0, treat as safe for cashout purposes.
+  // This prevents "safe cards" from accidentally pushing cashout due to dash-only danger.
+  if (lurk <= 0 && burrow <= 0) return 0;
 
   // Staying means you can pick the safer of LURK/BURROW.
   return Math.min(lurk, burrow);
@@ -53,8 +50,8 @@ function stayDanger(nextEventFacts) {
 
 function appliesToMeFromFacts(nextEventFacts) {
   if (!nextEventFacts) return undefined;
-  if (typeof nextEventFacts.appliesToMe === 'boolean') return nextEventFacts.appliesToMe;
-  if (typeof nextEventFacts._appliesToMe === 'boolean') return nextEventFacts._appliesToMe;
+  if (typeof nextEventFacts.appliesToMe === "boolean") return nextEventFacts.appliesToMe;
+  if (typeof nextEventFacts._appliesToMe === "boolean") return nextEventFacts._appliesToMe;
   return undefined;
 }
 
@@ -64,27 +61,46 @@ export const DEFAULT_CORE_CONFIG = {
   COMBO_THRESHOLD_HAILMARY: 7,
   SAVE_THRESHOLD: 8,
 
-  RESERVE_EARLY: 5,
-  RESERVE_LATE: 3,
+  // iets minder “hamsteren” dan jouw vorige values (5/3 was erg hoog)
+  RESERVE_EARLY: 4,
+  RESERVE_LATE: 2,
 
   DUP_ROUND_PENALTY: 3,
   DUP_WINDOW_PENALTY: 2,
   DUP_TRIPLE_PENALTY: 8,
 
-  DANGER_DASH_MIN: 12,
+  // (bucket legacy) – blijft bestaan voor fallback, maar continuous model gebruikt dit minder
+  DANGER_DASH_MIN: 8,
   HAILMARY_BEHIND: 8,
 
-  CARRY_HIGH: 15,
-  CARRY_EXTREME: 20,
+  // realistische carry band (jouw 15/20 maakte cashoutBias bijna altijd vlak)
+  CARRY_HIGH: 9,
+  CARRY_EXTREME: 12,
 
-  ROOSTER_BONUS: 3,
+  // rooster bonus klein houden (rooster #1/#2 zijn safe)
+  ROOSTER_BONUS: 1,
 
-  // optional tuning knobs (safe defaults)
+  // optional tuning knobs
   LATE_GAME_ROUND: 5, // vanaf ronde 5 reserveLate
-  RESERVE_PLAY_PENALTY: 2, // penalty op alle actions als spelen onder reserve zou duwen
-  SAVE_PLAY_PENALTY: 3, // penalty als kaart "goud" is maar partner/condities ontbreken
-  SAVE_ONLY_IF_NOT_IN_BESTPAIR: true, // gold-card penalty alleen als kaart niet in bestPair zit
-  DUP_REDUCE_WHEN_COMBO_PRIMED: 0.5, // duplicate penalty factor (0..1) als kaart in bestPair + combo >= threshold
+  RESERVE_PLAY_PENALTY: 2,
+  SAVE_PLAY_PENALTY: 3,
+  SAVE_ONLY_IF_NOT_IN_BESTPAIR: true,
+  DUP_REDUCE_WHEN_COMBO_PRIMED: 0.5,
+
+  // --- CashoutBias (continuous) ---
+  CASHOUT_MODEL: "CONTINUOUS", // "CONTINUOUS" | "BUCKETS"
+
+  CASHOUT_BIAS_MIN: -4,
+  CASHOUT_BIAS_MAX: 10,
+
+  CASHOUT_CARRY_CENTER: 7,   // rond 7 begint “cashout aantrekkelijk”
+  CASHOUT_DANGER_CENTER: 6,  // rond 6 begint “gevaar druk”
+
+  CASHOUT_CARRY_W: 0.9,      // carry is vaak primaire driver
+  CASHOUT_DANGER_W: 0.6,     // danger beïnvloedt, maar niet hysterisch
+
+  CASHOUT_LATE_BONUS: 1,     // kleine extra druk in postRooster2Window
+  CASHOUT_HERD_W: 1.0,       // anti-herd: -1 per geplande dasher (max 3)
 };
 
 function mergeConfig(config) {
@@ -115,22 +131,16 @@ function computeHailMary(ctx, cfg) {
 function computeLateGame(ctx, cfg) {
   const round = num(ctx?.round, 0);
   const lateByRound = round >= num(cfg.LATE_GAME_ROUND, 5);
-  // postRooster2Window voelt als “late pressure”
   const lateByRooster = bool(ctx?.postRooster2Window);
   return lateByRound || lateByRooster;
 }
 
 function computeDangerEffective(ctx, cfg) {
-  // If next event is targeted and does NOT apply to this bot (e.g., DEN_* mismatch, lead-only event),
-  // then it should not push cashout.
   const applies = appliesToMeFromFacts(ctx?.nextEventFacts);
-  if (applies === false) {
-    return 0;
-  }
+  if (applies === false) return 0;
 
   // Prefer explicit dangerNext provided by heuristics; otherwise derive from facts.
-  // IMPORTANT: use stayDanger(), not peakDanger(), to avoid "auto-DASH" on events that are
-  // dangerous only for one DEN color or can be safely mitigated by BURROW/LURK.
+  // Use stayDanger() (best defensive option), not peakDanger(), to avoid "auto-DASH".
   const dangerNext = Number.isFinite(Number(ctx?.dangerNext))
     ? num(ctx.dangerNext, 0)
     : stayDanger(ctx?.nextEventFacts);
@@ -154,7 +164,10 @@ function computeEconomy(ctx, comboInfo, cfg, hailMary, lateGame) {
 
   const reserveTarget = lateGame ? num(cfg.RESERVE_LATE, 2) : num(cfg.RESERVE_EARLY, 3);
 
-  const comboThreshold = hailMary ? num(cfg.COMBO_THRESHOLD_HAILMARY, 7) : num(cfg.COMBO_THRESHOLD, 8);
+  const comboThreshold = hailMary
+    ? num(cfg.COMBO_THRESHOLD_HAILMARY, 7)
+    : num(cfg.COMBO_THRESHOLD, 8);
+
   const bestScore = num(comboInfo?.bestPair?.score, 0);
 
   const maxActionsAllowedThisTurn = bestScore >= comboThreshold ? 2 : 1;
@@ -165,7 +178,6 @@ function computeEconomy(ctx, comboInfo, cfg, hailMary, lateGame) {
   const addToActionTotal = {};
 
   // Reserve penalty: als spelen je onder reserve duwt, penalize ALLE plays.
-  // (botHeuristics kan dan PASS hoger laten eindigen.)
   const wouldDropBelowReserve = (handSize - 1) < reserveTarget;
   if (wouldDropBelowReserve && handActionIds.length) {
     const p = -Math.abs(num(cfg.RESERVE_PLAY_PENALTY, 2));
@@ -182,9 +194,6 @@ function computeEconomy(ctx, comboInfo, cfg, hailMary, lateGame) {
     const saveValue = num(comboInfo?.bestPartnerScoreByActionId?.[id], 0);
     if (saveValue < saveThreshold) continue;
 
-    // Simpele “partner ontbreekt” heuristiek:
-    // - als id niet in bestPair, dan heeft hij blijkbaar nu geen perfecte partner.
-    // - later kun je dit verfijnen met matrix-requires.
     const notInPair = !isInBestPair(id, bestPair);
     if (onlyIfNotInBestPair && !notInPair) continue;
 
@@ -217,28 +226,21 @@ function computeDuplicatePenalties(ctx, comboInfo, cfg, comboThreshold) {
 
   const addToActionTotal = {};
 
-  // last-two for triple detection
   const last2 = discardRecent.slice(-2);
 
   for (const id of handActionIds) {
     let penalty = 0;
 
-    // round duplicate
     if (discardThisRound.includes(id)) penalty += Math.abs(num(cfg.DUP_ROUND_PENALTY, 3));
 
-    // window duplicate (>=2 times in recent window)
     if (countInArray(discardRecent, id) >= 2) penalty += Math.abs(num(cfg.DUP_WINDOW_PENALTY, 2));
 
-    // triple in a row
     if (last2.length === 2 && last2[0] === id && last2[1] === id) {
       penalty += Math.abs(num(cfg.DUP_TRIPLE_PENALTY, 8));
     }
 
     if (penalty <= 0) continue;
 
-    // Combo exception:
-    // - if matrix says duplicates allowed for the active pair, then zero it
-    // - else if combo is primed and this id is part of bestPair, reduce penalty
     const inPair = isInBestPair(id, bestPair);
 
     if (bestPair?.a && bestPair?.b && comboInfo?.allowsDuplicatePair(bestPair.a, bestPair.b, ctx)) {
@@ -254,24 +256,57 @@ function computeDuplicatePenalties(ctx, comboInfo, cfg, comboThreshold) {
   return { addToActionTotal };
 }
 
+// --- CASHOUT (Option A) ---
+// Continuous model (default) + BUCKETS fallback.
 function computeCashoutBias(ctx, dangerEffective, cfg, hailMary) {
   const carry = num(ctx?.carryValue, 0);
-  const isHigh = carry >= num(cfg.CARRY_HIGH, 9);
   const isExtreme = carry >= num(cfg.CARRY_EXTREME, 12);
-  const dangerMin = num(cfg.DANGER_DASH_MIN, 7);
 
-  let bias = 0;
+  // Extreme: always bank (maar hailMary dempt)
+  if (isExtreme) {
+    let b = 10;
+    if (hailMary) b -= 3;
+    return b;
+  }
 
-  // extreme: always bank
-  if (isExtreme) bias += 10;
-  else if (isHigh && dangerEffective >= dangerMin) bias += 5;
-  else if (dangerEffective >= 9 && carry >= (num(cfg.CARRY_HIGH, 9) - 1)) bias += 3;
-  else bias -= 1; // default = liever doorgaan dan meteen dashen
+  const mode = String(cfg?.CASHOUT_MODEL || "CONTINUOUS").toUpperCase();
 
-  // hail-mary: blijf vechten, cashout minder aantrekkelijk
+  // Legacy bucket model (optioneel)
+  if (mode === "BUCKETS") {
+    const isHigh = carry >= num(cfg.CARRY_HIGH, 9);
+    const dangerMin = num(cfg.DANGER_DASH_MIN, 7);
+
+    let bias = 0;
+    if (isHigh && dangerEffective >= dangerMin) bias += 5;
+    else if (dangerEffective >= 9 && carry >= (num(cfg.CARRY_HIGH, 9) - 1)) bias += 3;
+    else bias -= 1;
+
+    if (hailMary) bias -= 3;
+    return bias;
+  }
+
+  // Continuous model
+  const carryCenter = num(cfg.CASHOUT_CARRY_CENTER, 7);
+  const dangerCenter = num(cfg.CASHOUT_DANGER_CENTER, 6);
+  const carryW = num(cfg.CASHOUT_CARRY_W, 0.9);
+  const dangerW = num(cfg.CASHOUT_DANGER_W, 0.6);
+
+  let bias =
+    (carry - carryCenter) * carryW +
+    (dangerEffective - dangerCenter) * dangerW;
+
+  if (bool(ctx?.postRooster2Window)) {
+    bias += num(cfg.CASHOUT_LATE_BONUS, 1);
+  }
+
+  // Anti-herd: geef ctx.dashDecisionsSoFar mee (0..n)
+  const dashersPlanned = num(ctx?.dashersPlanned, num(ctx?.dashDecisionsSoFar, 0));
+  bias -= num(cfg.CASHOUT_HERD_W, 1.0) * clamp(dashersPlanned, 0, 3);
+
   if (hailMary) bias -= 3;
 
-  return bias;
+  bias = clamp(bias, num(cfg.CASHOUT_BIAS_MIN, -4), num(cfg.CASHOUT_BIAS_MAX, 10));
+  return Math.round(bias);
 }
 
 // ---------- Main export ----------
@@ -287,7 +322,6 @@ export function evaluateCorePolicy(ctx, comboInfo, config) {
   const eco = computeEconomy(ctx, combo, cfg, hailMary, lateGame);
   const dup = computeDuplicatePenalties(ctx, combo, cfg, eco.comboThreshold);
 
-  // merge addToActionTotal maps (economy + duplicates)
   const addToActionTotal = {};
   for (const [k, v] of Object.entries(eco.addToActionTotal || {})) addToActionTotal[k] = (addToActionTotal[k] || 0) + num(v, 0);
   for (const [k, v] of Object.entries(dup.addToActionTotal || {})) addToActionTotal[k] = (addToActionTotal[k] || 0) + num(v, 0);
@@ -317,6 +351,7 @@ export function evaluateCorePolicy(ctx, comboInfo, config) {
           postRooster2Window: bool(ctx?.postRooster2Window),
           comboBest: combo.bestPair,
           comboThresholdUsed: eco.comboThreshold,
+          cashoutModel: String(cfg?.CASHOUT_MODEL || "CONTINUOUS"),
         }
       : undefined,
   };
