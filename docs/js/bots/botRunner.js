@@ -433,14 +433,15 @@ function silentAlarmPenalty({ eventId, decision, isLead, lootPts }) {
   return 1.2; // als je weinig hebt, penalty “lead loss” ≈ minder erg dan 2 loot
 }
 
-function expectedSackShareNow({ game, players }) {
+function expectedSackShareNow({ game, players, assumeSelfWillDash = true }) {
   const sack = Array.isArray(game?.sack) ? game.sack : [];
   const sackValue = sack.reduce((s, c) => s + (Number(c?.v) || 0), 0);
   if (!sack.length) return 0;
 
-  // grof: deel door (dashersAlready + 1). (Later: betere voorspelling)
-  const dashersAlready = (players || []).filter((pl) => pl?.dashed && pl?.inYard !== false).length;
-  const divisor = Math.max(1, dashersAlready + 1);
+  // ✅ Fix: share should scale with the number of DASH decisions *this DECISION phase*,
+  // not with players who already dashed in earlier rounds (those are not in-yard).
+  const dashDecisionsSoFar = countDashDecisions(players || []);
+  const divisor = Math.max(1, dashDecisionsSoFar + (assumeSelfWillDash ? 1 : 0));
   return sackValue / divisor;
 }
 
@@ -537,20 +538,16 @@ function pickDecisionLootMaximizer({ g, p, latestPlayers, gameId }) {
   
   // Rooster pressure: after 2 roosters the next one can end the raid.
   // If you already have loot, prefer to bail out (DASH) instead of risking getting caught.
-  const roosterSeen = Number.isFinite(Number(g?.roosterSeen)) ? Number(g.roosterSeen) : 0;
-const isLead = (() => {
-    const ordered = [...(latestPlayers || [])].sort(
-      (a, b) => (a.joinOrder ?? 9999) - (b.joinOrder ?? 9999)
-    );
-    const idx = Number.isFinite(g?.leadIndex) ? g.leadIndex : 0;
-    return ordered[idx]?.id === p.id;
-  })();
+  const roosterSeen = countRevealedRoosters(g);
+
+  // ✅ Fix: Lead check must match engine truth (leadFoxId), not leadIndex/joinOrder guessing.
+  const isLead = String(g?.leadFoxId || g?.leadFox || "") === String(p?.id || "");
 
   const avgLoot = avgLootValueFromDeck(g?.lootDeck);
   const roundsLeft = estimateRoundsLeft(g);
   const futureGain = roundsLeft * avgLoot;
 
-  const sackShareIfDash = expectedSackShareNow({ game: g, players: latestPlayers || [] });
+  const sackShareIfDash = expectedSackShareNow({ game: g, players: latestPlayers || [], assumeSelfWillDash: true });
   const caughtLoss = lootPts;
 
   let options = ["LURK", "DASH", "BURROW"].filter((d) => d !== "BURROW" || !p.burrowUsed);
