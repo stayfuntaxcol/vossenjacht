@@ -1237,10 +1237,8 @@ const dangerStay = dangerVec ? Math.min(dangerVec.lurk, dangerVec.burrow) : 0;
   actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
   },
    });
-      }
 
     return targetId ? { name, actionId: id, targetId } : { name, actionId: id };
-
     }
 
     // nothing legal -> PASS
