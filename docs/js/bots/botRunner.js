@@ -1986,7 +1986,15 @@ if (!removed) {
     };
   });
 
-  if (logPayload) await logBotAction({ db, gameId, addLog: null, payload: logPayload });
+if (logPayload) {
+  await logBotAction({
+    db,
+    gameId,
+    addLog: null,
+    carryValue: logPayload.carryValue,
+    payload: logPayload,
+  });
+ }
 }
 
 /** ===== smarter DECISION ===== */
@@ -2003,6 +2011,7 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
 
     const g = gSnap.data();
     const p = { id: pSnap.id, ...pSnap.data() };
+    const carryNow = Number(computeCarryValue(p) ?? 0);
 
     if (!canBotDecide(g, p)) return;
 
@@ -2081,6 +2090,7 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       isLead: !!rec?.isLead,
       dashDecisionsSoFar: Number(rec?.dashDecisionsSoFar ?? 0),
       dangerVec: rec?.dangerVec || null,
+      
       at: Date.now(),
       kind: 'BOT_DECISION',
 
@@ -2088,8 +2098,8 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
   });
 
   if (logPayload) {
-    await logBotAction({ db, gameId, addLog: null, payload: logPayload });
-  }
+  await logBotDecision(db, gameId, logPayload);
+}
 }
 
 /** ===== exported: start runner (1 action per tick + backoff, no interval storm) ===== */
