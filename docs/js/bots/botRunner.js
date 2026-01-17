@@ -1397,6 +1397,8 @@ async function logBotAction({ db, gameId, addLog, carryValue, payload }) {
 
 async function applyOpsActionAndAdvanceTurn({ db, gameRef, actorId, isPass }) {
   const now = Date.now();
+  
+let carryNow = 0;   // ✅ 1x declareren (buiten tx)
 
   return await runTransaction(db, async (tx) => {
     const snap = await tx.get(gameRef);
@@ -1708,6 +1710,7 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
   const pRef = doc(db, "games", gameId, "players", botId);
 
   let logPayload = null;
+  let carryNow = 0; // ✅ 1x declareren, buiten tx
 
   await runTransaction(db, async (tx) => {
     const gSnap = await tx.get(gRef);
@@ -1727,7 +1730,7 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
 
     const flagsRound = fillFlags(g.flagsRound);
 
-    // ✅ HARD STOP: als OPS al klaar is → niets meer doen (voorkomt eindeloos PASS ophogen)
+    // ✅ HARD STOP: als OPS al klaar is → niets meer doen
     const target = Number(g.opsActiveCount || order.length);
     const passesNow = Number(g.opsConsecutivePasses || 0);
     if (flagsRound.opsLocked || passesNow >= target) return;
@@ -1742,9 +1745,16 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
     const actionDiscard = Array.isArray(g.actionDiscard) ? [...g.actionDiscard] : [];
 
-    const play = await pickBestActionFromHand({ db, gameId, game: g, bot: p, players: latestPlayers || [] });
+    // ✅ carryNow beschikbaar voor PASS + PLAY logs
+    carryNow = Number(computeCarryValue(p) ?? 0);
 
-
+    const play = await pickBestActionFromHand({
+      db,
+      gameId,
+      game: g,
+      bot: p,
+      players: latestPlayers || [],
+    });
 
     // =========================
     // PASS
@@ -1760,7 +1770,7 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
         opsConsecutivePasses: nextPasses,
         ...(ended
           ? {
-              flagsRound: { ...(g.flagsRound || {}), opsLocked: true }, // ✅ hard stop
+              flagsRound: { ...(g.flagsRound || {}), opsLocked: true },
               opsEndedAtMs: Date.now(),
             }
           : {}),
@@ -1779,65 +1789,73 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
       return;
     }
 
-let cardName = String(play?.name || "").trim();
-let removed = removeOneCard(hand, cardName);
+    // =========================
+    // TRY REMOVE CARD FROM HAND
+    // =========================
+    let cardName = String(play?.name || "").trim();
+    let removed = removeOneCard(hand, cardName);
 
-// Fallback: als play.name een ACTION_ID is, map dan terug naar echte kaartnaam uit de hand
-if (!removed) {
-  const wantedId = String(play?.actionId || play?.id || "").trim();
-  if (wantedId) {
-    const match = hand.find((c) => {
-      const nm = String(c?.name || c || "").trim();
-      const def = nm ? getActionDefByName(nm) : null;
-      return String(def?.id || "") === wantedId;
-    });
+    // Fallback: als play.name een ACTION_ID is, map dan terug naar echte kaartnaam uit de hand
+    if (!removed) {
+      const wantedId = String(play?.actionId || play?.id || "").trim();
+      if (wantedId) {
+        const match = hand.find((c) => {
+          const nm = String(c?.name || c || "").trim();
+          const def = nm ? getActionDefByName(nm) : null;
+          return String(def?.id || "") === wantedId;
+        });
 
-    if (match) {
-      cardName = String(match?.name || match || "").trim();
-      removed = removeOneCard(hand, cardName);
-    }
-  }
-}
-
-if (!removed) {
-  // fallback to PASS if card missing
-  let nextPasses = passesNow + 1;
-  if (nextPasses > target) nextPasses = target;
-
-  const ended = nextPasses >= target;
-
-  tx.update(gRef, {
-    opsTurnIndex: nextIdx,
-    opsConsecutivePasses: nextPasses,
-    ...(ended
-      ? {
-          flagsRound: { ...(g.flagsRound || {}), opsLocked: true },
-          opsEndedAtMs: Date.now(),
+        if (match) {
+          cardName = String(match?.name || match || "").trim();
+          removed = removeOneCard(hand, cardName);
         }
-      : {}),
-  });
+      }
+    }
 
-  logPayload = {
-    round: roundNum,
-    phase: "ACTIONS",
-    playerId: botId,
-    playerName: p.name || "BOT",
-    choice: "ACTION_PASS",
-    message: `BOT wilde spelen maar kaart niet gevonden → PASS (name="${String(play?.name||"")}", id="${String(play?.actionId||"")}")`,
-  };
-  return;
-}
+    // =========================
+    // CARD MISSING -> PASS
+    // =========================
+    if (!removed) {
+      let nextPasses = passesNow + 1;
+      if (nextPasses > target) nextPasses = target;
 
-    // discard (face-up): kaart gaat direct op de Discard Pile
+      const ended = nextPasses >= target;
+
+      tx.update(gRef, {
+        opsTurnIndex: nextIdx,
+        opsConsecutivePasses: nextPasses,
+        ...(ended
+          ? {
+              flagsRound: { ...(g.flagsRound || {}), opsLocked: true },
+              opsEndedAtMs: Date.now(),
+            }
+          : {}),
+      });
+
+      logPayload = {
+        round: roundNum,
+        phase: "ACTIONS",
+        playerId: botId,
+        playerName: p.name || "BOT",
+        choice: "ACTION_PASS",
+        message: `BOT wilde spelen maar kaart niet gevonden → PASS (name="${String(
+          play?.name || ""
+        )}", id="${String(play?.actionId || play?.id || "")}")`,
+        carryValue: carryNow,
+        ctxMini: { carryValue: carryNow },
+      };
+      return;
+    }
+
+    // =========================
+    // DISCARD + EFFECTS
+    // =========================
     const nowMs = Date.now();
     actionDiscard.push({ name: cardName, by: botId, round: roundNum, at: nowMs });
-    // keep discard pile bounded
     if (actionDiscard.length > 30) actionDiscard.splice(0, actionDiscard.length - 30);
 
     const extraGameUpdates = {
-      // host/board kan hiermee de top-discard tonen
       lastActionPlayed: { name: cardName, by: botId, round: roundNum, at: nowMs },
-      // bots wachten zodat de kaart minimaal 3s zichtbaar is
       opsHoldUntilMs: nowMs + OPS_DISCARD_VISIBLE_MS,
     };
 
@@ -1851,7 +1869,7 @@ if (!removed) {
 
     if (cardName === "No-Go Zone") {
       flagsRound.opsLocked = true;
-      extraGameUpdates.opsConsecutivePasses = target; // ✅ einde OPS (past bij PhaseGate)
+      extraGameUpdates.opsConsecutivePasses = target;
       extraGameUpdates.opsEndedAtMs = Date.now();
     }
 
@@ -1886,8 +1904,6 @@ if (!removed) {
         }
       }
     }
-
-    // Alpha Call: effect is only lead change (no draw in OPS)
 
     if (cardName === "Burrow Beacon") {
       flagsRound.lockEvents = true;
@@ -1952,7 +1968,7 @@ if (!removed) {
       actionDiscard,
       flagsRound,
       opsTurnIndex: nextIdx,
-      opsConsecutivePasses: 0, // reset on play
+      opsConsecutivePasses: 0,
       ...extraGameUpdates,
     });
 
@@ -1986,15 +2002,15 @@ if (!removed) {
     };
   });
 
-if (logPayload) {
-  await logBotAction({
-    db,
-    gameId,
-    addLog: null,
-    carryValue: logPayload.carryValue,
-    payload: logPayload,
-  });
- }
+  if (logPayload) {
+    await logBotAction({
+      db,
+      gameId,
+      addLog: null,
+      carryValue: logPayload.carryValue,
+      payload: logPayload,
+    });
+  }
 }
 
 /** ===== smarter DECISION ===== */
