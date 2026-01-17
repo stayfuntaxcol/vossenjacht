@@ -98,27 +98,6 @@ function computeIsLeadForPlayer(game, me, players) {
   return ordered[idx]?.id === me?.id;
 }
 
-async function logBotDecision(db, gameId, payload) {
-  try {
-    if (!db || !gameId) return;
-
-    const cv = Number(payload?.carryValue ?? payload?.ctxMini?.carryValue ?? 0);
-
-    await addDoc(collection(db, "games", gameId, "actions"), {
-      kind: "BOT_DECISION",
-      at: Date.now(),
-      createdAt: serverTimestamp(),
-
-      // ✅ altijd top-level carryValue
-      carryValue: Number.isFinite(cv) ? cv : 0,
-
-      ...payload,
-    });
-  } catch (e) {
-    console.warn("[BOT_LOG] failed", e);
-  }
-}
-
 async function countBotActionsThisRoundFallback({ db, gameId, botId, roundNum }) {
   // Alleen gebruiken als je later game.actionDiscard niet meer bijhoudt
   if (!db || !gameId || !botId) return 0;
@@ -1229,7 +1208,7 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
         if (!targetId) continue;
       }
 
-      // ---- metrics voor logging (vlak vóór logBotDecision) ----
+      // ---- metrics voor logging ----
       const carryNow = computeCarryValue(bot);
       ctx.carryValue = carryNow; // core gebruikt dit
 
@@ -1277,18 +1256,9 @@ if (String(game?.phase ?? "") === "OPS") {
   // debug (haal later weer weg)
   // console.log("carry from", bot?.id, carryValue);
 
-  await logBotDecision(db, gameId, {
-    phase,
-    round,
-    opsTurnIndex,
+await logBotAction({ db, gameId, payload: logPayload });
 
-    by: bot?.id ?? null,
-    presetKey,
-    denColor,
-
-    pick: { actionId: id, targetId: targetId ?? null },
-
-    // handig om direct te filteren in Firestore op carryValue
+  // handig om direct te filteren in Firestore op carryValue
     carryValue,
 
     rankedTop,
@@ -2112,7 +2082,8 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
   });
 
   if (logPayload) {
-    await logBotDecision(db, gameId, logPayload);
+    await logBotAction({ db, gameId, payload: logPayload });
+
   }
 }
 
