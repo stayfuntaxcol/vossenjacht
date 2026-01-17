@@ -1723,48 +1723,53 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
       bot: p,
       players: latestPlayers || [],
     });
+// =========================
+// PASS
+// =========================
+if (!play) {
+  let nextPasses = passesNow + 1;
+  if (nextPasses > target) nextPasses = target;
 
-    // =========================
-    // PASS
-    // =========================
-    if (!play) {
-      let nextPasses = passesNow + 1;
-      if (nextPasses > target) nextPasses = target;
+  const ended = nextPasses >= target;
 
-      const ended = nextPasses >= target;
-
-      tx.update(gRef, {
-        opsTurnIndex: nextIdx,
-        opsConsecutivePasses: nextPasses,
-        ...(ended
-          ? {
-              flagsRound: { ...(g.flagsRound || {}), opsLocked: true },
-              opsEndedAtMs: Date.now(),
-            }
-          : {}),
-      });
-
-const pAfter = { ...p, hand, color: p.color, den: p.color };
-
-const metrics = computeDangerMetrics({
-  game: { ...g, flagsRound },     // ✅ geen extraGameUpdates hier
-  player: pAfter,
-  players: latestPlayers || [],
-  flagsRound,
-  intel: { knownUpcomingEvents: Array.isArray(pAfter.knownUpcomingEvents) ? pAfter.knownUpcomingEvents : [] },
-});
-
-logPayload = {
-  round: roundNum,
-  phase: "ACTIONS",
-  playerId: botId,
-  playerName: p.name || "BOT",
-  choice: "OPS_PASS",
-  message: "BOT past (OPS)",
-  metrics,
-  };
+  tx.update(gRef, {
+    opsTurnIndex: nextIdx,
+    opsConsecutivePasses: nextPasses,
+    ...(ended
+      ? {
+          flagsRound: { ...(g.flagsRound || {}), opsLocked: true },
+          opsEndedAtMs: Date.now(),
+        }
+      : {}),
   });
 
+  const pAfter = { ...p, hand, color: p.color, den: p.color };
+
+  const metrics = computeDangerMetrics({
+    game: { ...g, flagsRound }, // ✅ geen extraGameUpdates hier
+    player: pAfter,
+    players: latestPlayers || [],
+    flagsRound,
+    intel: {
+      knownUpcomingEvents: Array.isArray(pAfter.knownUpcomingEvents)
+        ? pAfter.knownUpcomingEvents
+        : [],
+    },
+  });
+
+  logPayload = {
+    round: roundNum,
+    phase: "ACTIONS",
+    playerId: botId,
+    playerName: p.name || "BOT",
+    choice: "OPS_PASS",
+    message: "BOT past (OPS)",
+    metrics,
+  };
+
+  return; // ✅ stop tx branch hier
+} 
+    
 if (logPayload) {
   await logBotAction({ db, gameId, addLog: null, payload: logPayload });
 }
