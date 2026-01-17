@@ -71,29 +71,6 @@ function synthFactsFromMetrics(metrics) {
   };
 }
 
-// =====================================================
-// Firestore action logger (NOOIT callen binnen runTransaction)
-// =====================================================
-async function logBotAction({ db, gameId, payload, addLog = null }) {
-  if (!db || !gameId || !payload) return;
-  try {
-    const colRef = collection(db, "games", gameId, "actions");
-    const docData = {
-      ...payload,
-      createdAt: payload.createdAt || serverTimestamp(),
-      at: Number(payload.at || Date.now()),
-    };
-    await addDoc(colRef, docData);
-
-    // optioneel: UI hook
-    if (typeof addLog === "function") {
-      try { addLog(docData); } catch (_) {}
-    }
-  } catch (err) {
-    console.warn("[BOTS] logBotAction failed", err);
-  }
-}
-
 /** ===== small helpers ===== */
 function normColor(c) {
   return String(c || "").trim().toUpperCase();
