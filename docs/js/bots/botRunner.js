@@ -905,312 +905,148 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
 // Pick best Action Card for BOT (OPS phase)
 async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
   try {
-    const hand = Array.isArray(bot?.hand) ? bot.hand : [];
+    const g = game;
+    const p = bot;
+
+    const hand = Array.isArray(p?.hand) ? [...p.hand] : [];
     if (!hand.length) return null;
 
-    // hand contains {name:"Den Signal"} or "Den Signal"
+    // hand names -> action ids
     const handNames = hand
       .map((c) => String(c?.name || c || "").trim())
       .filter(Boolean);
 
-    // map card name -> actionId via cards.js defs
-    const entries = handNames
-      .map((name) => ({ name, def: getActionDefByName(name) }))
-      .filter((x) => x.def?.id);
+    const handActionIds = handNames
+      .map((nm) => getActionDefByName(nm)?.id)
+      .filter(Boolean);
 
-    const ids = entries.map((x) => String(x.def.id || "").trim()).filter(Boolean);
-    if (!ids.length) return null;
+    if (!handActionIds.length) return null;
 
-    const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
+    const flags = fillFlags(g?.flagsRound);
+    if (flags.opsLocked) return null;
+
+    const denColor = normColor(p?.color || p?.den || p?.denColor);
     const presetKey = presetFromDenColor(denColor);
 
-    // ---------- round + discard ----------
-    const roundNum = Number.isFinite(Number(game?.round)) ? Number(game.round) : 0;
-    const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
-    const discThisRound = disc.filter((x) => Number(x?.round || 0) === roundNum);
-
-    const botPlayedThisRound = discThisRound.filter((x) => x?.by === bot.id);
-    const botPlayedActionIdsThisRound = botPlayedThisRound
-      .map((x) => {
-        const nm = String(x?.name || "").trim();
-        const def = nm ? getActionDefByName(nm) : null;
-        return def?.id ? String(def.id) : null;
-      })
-      .filter(Boolean);
-
-    const actionsPlayedThisRound = botPlayedThisRound.length;
-
-    // helper: convert discard item -> actionId
-    const toActionId = (x) => {
-      const rawId = String(x?.id || x?.actionId || x?.key || "").trim();
-      if (rawId && /^[A-Z0-9_]+$/.test(rawId) && rawId.includes("_")) return rawId;
-
-      const nm = String(x?.name || "").trim();
-      if (!nm) return null;
-      const def = getActionDefByName(nm);
-      return def?.id ? String(def.id) : null;
-    };
-
-    const discardThisRoundActionIds = discThisRound.map(toActionId).filter(Boolean);
-
-    const discardRecentActionIds = [...disc]
-      .sort((a, b) => Number(a?.at || 0) - Number(b?.at || 0))
-      .slice(-10)
-      .map(toActionId)
-      .filter(Boolean);
-
-    const discardActionIds = [
-      ...(Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : []),
-      ...disc.map((x) => x?.name),
-    ]
-      .map((v) => {
-        if (typeof v === "string") {
-          const def = getActionDefByName(v);
-          return def?.id ? String(def.id) : String(v);
-        }
-        return null;
-      })
-      .filter(Boolean);
-
-    // ---------- flags / next event / knowledge ----------
-    const flags = fillFlags(game?.flagsRound);
-    const noPeek = !!flags.noPeek;
-
-    const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
-      ? bot.knownUpcomingEvents.filter(Boolean)
-      : [];
-    const knownUpcomingCount = knownUpcomingEvents.length;
-
-    // if noPeek=true: only know next event if you actually SCOUTed (knownUpcomingEvents)
-    const nextKnown = !noPeek || knownUpcomingCount >= 1;
-    const nextId = nextKnown ? (noPeek ? knownUpcomingEvents[0] : nextEventId(game, 0)) : null;
-
-    const isLead = String(game?.leadFoxId || game?.leadFox || "") === String(bot?.id || "");
-    const nextEventFacts = nextId ? getEventFacts(nextId, { game, me: bot, denColor, isLead }) : null;
-
-    const dangerNext = nextEventFacts
-      ? Math.max(
-          Number(nextEventFacts.dangerDash || 0),
-          Number(nextEventFacts.dangerLurk || 0),
-          Number(nextEventFacts.dangerBurrow || 0)
-        )
-      : 0;
-
-    const scoutTier =
-      knownUpcomingCount >= 2
-        ? "HARD_SCOUT"
-        : knownUpcomingCount >= 1
-        ? "SOFT_SCOUT"
-        : "NO_SCOUT";
-
-    // ---------- rooster timing: danger boost only AFTER 2nd rooster REVEALED ----------
-    const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
-    const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
-
-    let revealedRoosters = 0;
-    for (let i = 0; i < Math.min(track.length, rev.length); i++) {
-      if (rev[i] === true && String(track[i]) === "ROOSTER_CROW") revealedRoosters++;
-    }
-    const roosterSeen = revealedRoosters || (Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0);
-    const postRooster2Window = revealedRoosters >= 2;
-
-    // ---------- score meta (last / behind) ----------
-    const list = Array.isArray(players) ? players.filter((x) => x?.id) : [];
-    const getVal = (pl) => {
-      const s = Number(pl?.score);
-      if (Number.isFinite(s)) return s;
-      return sumLootPoints(pl);
-    };
-    const sorted = [...list].sort((a, b) => getVal(b) - getVal(a));
-    const leaderVal = sorted.length ? getVal(sorted[0]) : 0;
-    const myVal = getVal(bot);
-    const myRank = sorted.findIndex((x) => x.id === bot.id);
-    const isLast = myRank >= 0 ? myRank === sorted.length - 1 : false;
-    const scoreBehind = Math.max(0, leaderVal - myVal);
-
-    const lockEventsActive = !!flags?.lockEvents;
-    const opsLockedActive = !!flags?.opsLocked;
-
-    // ---------- revealed den events by color ----------
-    const revealedDenEventsByColor = {};
-    for (let i = 0; i < Math.min(track.length, rev.length); i++) {
-      if (rev[i] !== true) continue;
-      const id = String(track[i] || "");
-      if (id.startsWith("DEN_")) {
-        const c = normColor(id.split("_")[1] || "");
-        if (c) revealedDenEventsByColor[c] = true;
-      }
-    }
-
-    // ---------- Follow target selection (basis) ----------
+    // ---- helper: pick best Follow-the-Tail target (cheap + robust)
     function pickBestFollowTarget() {
-      const candidates = (players || []).filter((x) => x?.id && x.id !== bot.id && isInYard(x));
-      if (!candidates.length) return { targetId: null, sameDen: false, denRevealed: false, eligible: false };
+      const meId = p?.id;
+      const list = Array.isArray(players) ? players : [];
+      let best = { targetId: null, eligible: false, sameDen: false, denRevealed: false };
 
-      let best = null;
-      for (const pl of candidates) {
-        const cDen = normColor(pl?.color || pl?.den || pl?.denColor);
-
-        const sameDen = cDen && cDen === denColor;
-        const denRevealed = !!revealedDenEventsByColor[cDen];
-
-        // Follow is useful mainly when next is NOT known, and target has aligned/revealed den
-        const eligible = !nextKnown && (sameDen || denRevealed);
-
-        let score = 0;
-        if (sameDen) score += 10;
-        if (denRevealed) score += 6;
-        if (eligible) score += 4;
-
-        // small bonus if target likely has intel
-        const k = Array.isArray(pl?.knownUpcomingEvents) ? pl.knownUpcomingEvents.length : 0;
-        score += Math.min(3, k);
-
-        // tie-break: richer target
-        score += Math.min(5, sumLootPoints(pl) * 0.4);
-
-        if (!best || score > best.score) best = { id: pl.id, score, sameDen, denRevealed, eligible };
+      // prefer richest in YARD (if rule applies), else richest overall
+      const richest = pickRichestTarget(list, meId);
+      if (richest) {
+        const t = list.find((x) => x?.id === richest);
+        best.targetId = richest;
+        best.eligible = true;
+        best.sameDen = normColor(t?.color) === normColor(p?.color);
+        best.denRevealed = !!t?.denRevealed;
       }
-
-      return {
-        targetId: best?.id || null,
-        sameDen: !!best?.sameDen,
-        denRevealed: !!best?.denRevealed,
-        eligible: !!best?.eligible,
-      };
+      return best;
     }
 
     const followPick = pickBestFollowTarget();
 
-    // ---------- ctx for heuristics/strategies ----------
-    const ctx = {
-      phase: String(game?.phase || ""),
-      round: roundNum,
-      botId: bot?.id || null,
-      denColor,
+    // ---- minimal ctx for heuristics
+    const nextId = getNextEventId(g);
+    const nextFacts = nextId ? getEventFacts(nextId) : null;
 
-      carryValue: myVal,
-      isLast,
-      scoreBehind,
+    const ctx = buildBotCtxForHeuristics({
+      game: g,
+      bot: p,
+      players: Array.isArray(players) ? players : [],
+      handNames,
+      handIds: handActionIds,
+      actionsPlayedThisRoundOverride: null,
+    });
 
-      handActionIds: ids,
-      handSize: ids.length,
-
-      actionsPlayedThisRound,
-      discardActionIds,
-      discardThisRoundActionIds,
-      discardRecentActionIds,
-
-      nextEventId: nextId,
-      nextEventFacts,
-      dangerNext,
-      nextKnown,
-      knownUpcomingEvents,
-      knownUpcomingCount,
-      scoutTier,
-
-      roosterSeen,
-      postRooster2Window,
-
-      lockEventsActive,
-      opsLockedActive,
-
-      hasEligibleFollowTarget: followPick.eligible && !!followPick.targetId,
-      bestFollowTargetIsSameDen: followPick.sameDen,
-      bestFollowTargetDenRevealed: followPick.denRevealed,
-
-      revealedDenEventsByColor,
-    };
-
-    // handHas_* flags (for actionStrategies)
-    for (const id of ids) ctx["handHas_" + id] = true;
-
-    // ---------- ranking ----------
-    let pick = null;
+    // ---- ask heuristics to pick, but we will still validate legality below
+    let rankedActionIds = [];
     if (typeof pickActionOrPass === "function") {
-      pick = pickActionOrPass(ids, { presetKey, denColor, game, me: bot, ctx });
-    } else {
-      const rankedTmp = rankActions(ids, { presetKey, denColor, game, me: bot, ctx });
-      pick = { play: rankedTmp[0]?.id || null, ranked: rankedTmp, reason: "fallback_rankActions" };
+      const res = pickActionOrPass(handActionIds, {
+        presetKey,
+        denColor,
+        game: g,
+        me: p,
+        ctx,
+      });
+      rankedActionIds = Array.isArray(res?.rankedActionIds) ? res.rankedActionIds : [];
+      if (res?.play === null) return null; // explicit PASS
     }
 
-    const ranked = Array.isArray(pick?.ranked)
-      ? pick.ranked
-      : rankActions(ids, { presetKey, denColor, game, me: bot, ctx });
+    if (!rankedActionIds.length && typeof rankActions === "function") {
+      rankedActionIds = rankActions(handActionIds, {
+        presetKey,
+        denColor,
+        game: g,
+        me: p,
+        ctx,
+      }) || [];
+    }
 
-    if (!pick?.play) return null;
+    if (!rankedActionIds.length) rankedActionIds = [...handActionIds];
 
-    // candidates: chosen first, then ranking
-    const candidateIds = [
-      String(pick.play),
-      ...ranked.map((r) => r?.id).filter((x) => x && x !== pick.play),
-    ]
-      .map((x) => String(x || "").trim())
+    // prevent spamming “global singleton” actions if already played this round
+    const roundNum = Number(g?.round || 0);
+    const disc = Array.isArray(g?.actionDiscard) ? g.actionDiscard : [];
+    const discardThisRoundActionIds = disc
+      .filter((x) => Number(x?.round || 0) === roundNum)
+      .map((x) => toActionId(x?.name))
       .filter(Boolean);
 
-    // Anti-duplicate: bot itself not twice same action in same round
-    const botPlayedSet = new Set(botPlayedActionIdsThisRound);
-
-    // Anti-duplicate: global singleton (bots only)
     const GLOBAL_SINGLETON_ACTIONS = new Set([
       "KICK_UP_DUST",
       "PACK_TINKER",
+      "BURROW_BEACON",
       "NO_GO_ZONE",
+      "DEN_SIGNAL",
       "SCATTER",
     ]);
 
-    for (const id of candidateIds) {
-      if (botPlayedSet.has(id)) continue;
+    // ---- legality + target selection
+    for (const id of rankedActionIds) {
+      if (!id) continue;
+
       if (GLOBAL_SINGLETON_ACTIONS.has(id) && discardThisRoundActionIds.includes(id)) continue;
 
-      // legality checks
-      if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
-        if (lockEventsActive) continue;
-        if (!Array.isArray(game?.eventTrack)) continue;
-        if (!Number.isFinite(Number(game?.eventIndex))) continue;
-        if (Number(game.eventIndex) >= game.eventTrack.length - 1) continue;
-      }
-      if (id === "HOLD_STILL" && opsLockedActive) continue;
+      const def = ACTION_DEFS[id] || null;
+      const nmFromHand = handNames.find((nm) => String(getActionDefByName(nm)?.id || "") === String(id));
+      const name = nmFromHand || def?.name || null;
+      if (!name) continue;
 
-      // targets
+      // lockEvents blocks track manipulation
+      if (flags.lockEvents && (id === "KICK_UP_DUST" || id === "PACK_TINKER")) continue;
+
+      // If track is too short, don't allow Pack Tinker
+      if (id === "PACK_TINKER") {
+        const track = Array.isArray(g?.eventTrack) ? g.eventTrack : [];
+        const idx = getNextEventIndex(g);
+        if (!track.length || idx >= track.length - 1) continue;
+      }
+
+      // choose target if needed
       let targetId = null;
 
-      if (id === "MASK_SWAP" || id === "HOLD_STILL") {
-        targetId = pickRichestTarget(players || [], bot.id);
+      if (id === "HOLD_STILL") {
+        targetId = pickRichestTarget(players || [], p.id);
+        if (!targetId) continue;
+      }
+
+      if (id === "MASK_SWAP") {
+        targetId = pickRichestTarget(players || [], p.id);
         if (!targetId) continue;
       }
 
       if (id === "FOLLOW_THE_TAIL") {
-        targetId = followPick.targetId || pickRichestTarget(players || [], bot.id);
+        targetId = followPick.targetId || pickRichestTarget(players || [], p.id);
         if (!targetId) continue;
       }
 
-      if (id === "SCENT_CHECK") {
-        const intelTarget =
-          (players || [])
-            .filter((x) => x?.id && x.id !== bot.id && isInYard(x))
-            .map((x) => ({
-              id: x.id,
-              k: Array.isArray(x?.knownUpcomingEvents) ? x.knownUpcomingEvents.length : 0,
-              loot: sumLootPoints(x),
-            }))
-            .sort((a, b) => (b.k - a.k) || (b.loot - a.loot))[0]?.id || null;
-
-        targetId = intelTarget || pickRichestTarget(players || [], bot.id);
-        if (!targetId) continue;
-      }
-
-      // ✅ IMPORTANT: actually return the playable card
-      const chosenName =
-        entries.find((e) => String(e.def?.id || "").trim() === String(id).trim())?.name ||
-        null;
-
-      if (!chosenName) continue;
-
-      return { name: chosenName, actionId: id, targetId: targetId || null };
+      // ok
+      return { name, actionId: id, targetId };
     }
 
-    // nothing legal -> PASS
     return null;
   } catch (err) {
     console.warn("[BOTS] pickBestActionFromHand crashed -> PASS", err);
@@ -1539,89 +1375,115 @@ function chooseBotOpsPlay({ game, bot, players }) {
   const p = bot;
 
   const flags = fillFlags(g.flagsRound);
+  if (flags.opsLocked) return null;
+
+  const hand = Array.isArray(p.hand) ? p.hand : [];
+  if (!hand.length) return null;
+
+  const roundNum = Number(g.round || 0);
+  const reserve = roundNum <= 1 ? 2 : 1;
+
+  const disc = Array.isArray(g.actionDiscard) ? g.actionDiscard : [];
+  const alreadyPlayedThisRound = disc.some((x) => x?.by === p.id && Number(x?.round || 0) === roundNum);
+
   const myColor = normColor(p.color);
   const immune = !!flags.denImmune?.[myColor];
 
-  const upcoming = classifyEvent(nextEventId(g, 0));
-  const hand = Array.isArray(p.hand) ? p.hand : [];
+  // --- compute danger snapshot (pure)
+  const isLead = computeIsLeadForPlayer(g, p, Array.isArray(players) ? players : []);
+  const metricsNow = computeDangerMetrics({
+    game: g,
+    player: p,
+    players: Array.isArray(players) ? players : [],
+    flagsRound: flags,
+    intel: {
+      isLead,
+      knownUpcomingEvents: Array.isArray(p.knownUpcomingEvents) ? p.knownUpcomingEvents : [],
+    },
+  });
 
-  const roundNum = Number(g.round || 0);
+  const dv = metricsNow?.dangerVec || {};
+  const dDash = Number(dv.dash ?? 0);
+  const dLurk = Number(dv.lurk ?? 0);
+  const dBurrow = p.burrowUsed ? 10 : Number(dv.burrow ?? 0);
+  const stayMin = Math.min(dLurk, dBurrow);
 
-  // If OPS locked: must pass (caller will handle)
-  if (flags.opsLocked) return null;
+  const nextIdUsed = String(metricsNow?.nextEventIdUsed || nextEventId(g, 0) || "");
+  const upcoming = classifyEvent(nextIdUsed);
 
-  // -------------------------
-  // Conserve rules (hand/deck sparen)
-  // -------------------------
-
-  // reserve: early game 2 kaarten houden, later 1
-  const reserve = roundNum <= 1 ? 2 : 1;
-
-  // heeft bot deze ronde al een action gespeeld?
-  const disc = Array.isArray(g.actionDiscard) ? g.actionDiscard : [];
-  const alreadyPlayedThisRound = disc.some(
-    (x) => x?.by === p.id && Number(x?.round || 0) === roundNum
-  );
-
-  // gevaar waarvoor Den Signal echt relevant is (DOG of DEN van jouw kleur)
   const dangerSoonDogDen =
     upcoming.type === "DOG" ||
     (upcoming.type === "DEN" && normColor(upcoming.color) === myColor);
 
-  const urgentDefense = dangerSoonDogDen && !immune && hasCard(hand, "Den Signal");
+  // "urgent" = geen veilige choice meer (of BURROW al verbruikt)
+  const urgent = (stayMin >= 7) || (p.burrowUsed && dLurk >= 7) || (Number(metricsNow?.dangerPeak ?? 0) >= 8);
 
-  // - als hand te klein is: alleen noodrem spelen
-  if (hand.length <= reserve && !urgentDefense) return null;
+  // conserve: small hand / already played -> only if urgent
+  if ((hand.length <= reserve || alreadyPlayedThisRound) && !urgent) return null;
 
-  // - als bot deze ronde al speelde: alleen noodrem spelen
-  if (alreadyPlayedThisRound && !urgentDefense) return null;
-
-  // -------------------------
-  // 1) Survival first: Den Signal
-  // -------------------------
-  if (!immune && hasCard(hand, "Den Signal")) {
-    if (upcoming.type === "DOG") return { name: "Den Signal" };
-    if (upcoming.type === "DEN" && normColor(upcoming.color) === myColor) return { name: "Den Signal" };
+  // 1) Den Signal only when it actually matters
+  if (!immune && hasCard(hand, "Den Signal") && dangerSoonDogDen) {
+    return { name: "Den Signal" };
   }
 
-  // -------------------------
-  // 2) Danger management: push danger away (track-manip / mask swap)
-  // -------------------------
-  if (dangerSoonDogDen && !immune && !flags.lockEvents) {
-    if (hasCard(hand, "Kick Up Dust")) return { name: "Kick Up Dust" };
-    if (hasCard(hand, "Pack Tinker")) return { name: "Pack Tinker" };
-    if (hasCard(hand, "Mask Swap")) {
-      const targetId = pickRichestTarget(players, p.id);
-      if (targetId) return { name: "Mask Swap", targetId };
+  // 2) If urgent and track can be manipulated: prefer action that *reduces* dangerPeak
+  if (urgent && !flags.lockEvents) {
+    let best = null;
+
+    if (hasCard(hand, "Pack Tinker")) {
+      const pair = pickPackTinkerSwap(g);
+      if (pair) {
+        const [i1, i2] = pair;
+        const trackNow = Array.isArray(g.eventTrack) ? [...g.eventTrack] : [];
+        if (trackNow[i1] && trackNow[i2]) {
+          [trackNow[i1], trackNow[i2]] = [trackNow[i2], trackNow[i1]];
+          const m2 = computeDangerMetrics({
+            game: { ...g, eventTrack: trackNow },
+            player: p,
+            players: Array.isArray(players) ? players : [],
+            flagsRound: flags,
+            intel: { isLead, knownUpcomingEvents: Array.isArray(p.knownUpcomingEvents) ? p.knownUpcomingEvents : [] },
+          });
+
+          best = {
+            name: "Pack Tinker",
+            score: Number(m2?.dangerPeak ?? 0),
+          };
+        }
+      }
     }
+
+    if (hasCard(hand, "Kick Up Dust")) {
+      const newTrack = shuffleFutureTrack(g);
+      if (newTrack) {
+        const m2 = computeDangerMetrics({
+          game: { ...g, eventTrack: newTrack },
+          player: p,
+          players: Array.isArray(players) ? players : [],
+          flagsRound: flags,
+          intel: { isLead, knownUpcomingEvents: Array.isArray(p.knownUpcomingEvents) ? p.knownUpcomingEvents : [] },
+        });
+
+        const cand = { name: "Kick Up Dust", score: Number(m2?.dangerPeak ?? 0) };
+        if (!best || cand.score < best.score) best = cand;
+      }
+    }
+
+    if (best) return { name: best.name };
   }
 
-  // -------------------------
-  // 3) Tactical: Hold Still op rijkste target
-  // -------------------------
-  if (hasCard(hand, "Hold Still")) {
+  // 3) Offensive utility only when you’re relatively safe (otherwise save cards)
+  if (stayMin <= 3 && hasCard(hand, "Hold Still")) {
     const targetId = pickRichestTarget(players, p.id);
     if (targetId) return { name: "Hold Still", targetId };
   }
 
-  // -------------------------
-  // 4) Utility: Alpha Call (alleen als deck nog heeft + hand niet huge)
-  // -------------------------
+  // 4) Deck utility
   const actionDeckLen = Array.isArray(g.actionDeck) ? g.actionDeck.length : 0;
   if (actionDeckLen > 0 && hasCard(hand, "Alpha Call") && hand.length < 4) {
     return { name: "Alpha Call" };
   }
 
-  // -------------------------
-  // 5) End OPS faster: No-Go Zone als veel al gepasst is
-  // -------------------------
-  const orderLen = Array.isArray(g.opsTurnOrder) ? g.opsTurnOrder.length : 0;
-  const passes = Number(g.opsConsecutivePasses || 0);
-  if (orderLen >= 2 && passes >= Math.floor(orderLen * 0.6) && hasCard(hand, "No-Go Zone")) {
-    return { name: "No-Go Zone" };
-  }
-
-  // Otherwise: pass
   return null;
 }
 
@@ -1680,8 +1542,10 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     if (!isActiveRaidStatus(g.status) || g.phase !== "ACTIONS") return;
 
     const order = Array.isArray(g.opsTurnOrder) ? g.opsTurnOrder : [];
-    const idx = Number.isFinite(g.opsTurnIndex) ? g.opsTurnIndex : 0;
-    if (!order.length || order[idx] !== botId) return;
+    if (!order.length) return;
+
+    const idx = Number(g.opsTurnIndex || 0);
+    if (order[idx] !== botId) return;
 
     const roundNum = Number(g.round || 0);
     const flagsRound = fillFlags(g.flagsRound);
@@ -1699,13 +1563,16 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
 
     const carryNow = Number(computeCarryValue(p) ?? 0);
 
-    const play = await pickBestActionFromHand({
-      db,
-      gameId,
-      game: g,
-      bot: p,
-      players: latestPlayers || [],
-    });
+    // ✅ danger-aware pick first
+    const play =
+      chooseBotOpsPlay({ game: g, bot: { ...p, hand }, players: latestPlayers || [] }) ||
+      (await pickBestActionFromHand({
+        db,
+        gameId,
+        game: g,
+        bot: { ...p, hand },
+        players: latestPlayers || [],
+      }));
 
     // =========================
     // PASS
@@ -1751,10 +1618,6 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
       };
       return;
     }
-    
-if (logPayload) {
-  await logBotAction({ db, gameId, payload: logPayload });
-}
 
     // =========================
     // TRY REMOVE CARD FROM HAND
@@ -1778,9 +1641,7 @@ if (logPayload) {
       }
     }
 
-    // =========================
     // CARD MISSING -> PASS
-    // =========================
     if (!removed) {
       const nextIdx = (idx + 1) % order.length;
       let nextPasses = passesNow + 1;
@@ -1820,11 +1681,7 @@ if (logPayload) {
         metrics,
       };
       return;
-    };
-  
-    if (logPayload) {
-  await logBotAction({ db, gameId, payload: logPayload });
-}
+    }
 
     // =========================
     // DISCARD + EFFECTS
@@ -1964,16 +1821,23 @@ if (logPayload) {
   });
 
   if (logPayload) {
-    await logBotAction({ db, gameId, addLog: null, carryValue: logPayload.carryValue, payload: logPayload });
+    await logBotAction({ db, gameId, payload: logPayload });
   }
 }
 
-/** ===== smarter DECISION ===== */
+/** ===== smarter DECISION (uses danger metrics) ===== */
 async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
   const gRef = doc(db, "games", gameId);
   const pRef = doc(db, "games", gameId, "players", botId);
 
   let logPayload = null;
+
+  // tiny helpers (local, so copy/paste safe)
+  const n = (x, d = 0) => {
+    const v = Number(x);
+    return Number.isFinite(v) ? v : d;
+  };
+  const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
   await runTransaction(db, async (tx) => {
     const gSnap = await tx.get(gRef);
@@ -1985,7 +1849,7 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
 
     if (!canBotDecide(g, p)) return;
 
-    // fresh decisions (anti-herding)
+    // ---- fresh players in-tx (anti-herding + lead calc) ----
     const ids = (latestPlayers || []).map((x) => x?.id).filter(Boolean);
     const freshPlayers = [];
     for (const id of ids) {
@@ -1993,26 +1857,93 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       if (s.exists()) freshPlayers.push({ id: s.id, ...s.data() });
     }
 
+    const flagsRound = fillFlags(g.flagsRound);
     const denColor = normColor(p?.color || p?.den || p?.denColor);
     const presetKey = presetFromDenColor(denColor);
+    const preset = BOT_PRESETS?.[presetKey] || BOT_PRESETS?.BLUE || {};
+    const riskW = n(preset?.weights?.risk, 1);
+
     const dashDecisionsSoFar = countDashDecisions(freshPlayers);
     const isLead = computeIsLeadForPlayer(g, p, freshPlayers);
 
-    const rec = recommendDecision({
-      presetKey,
-      denColor,
+    // ---- compute danger metrics BEFORE choosing decision ----
+    const carryValueNow = n(computeCarryValue(p) ?? 0, 0);
+
+    const metricsBefore = computeDangerMetrics({
       game: g,
-      me: p,
-      ctx: {
-        round: Number(g.round || 0),
+      player: p,
+      players: freshPlayers,
+      flagsRound,
+      intel: {
         isLead,
-        dashDecisionsSoFar,
-        roosterSeen: Number.isFinite(Number(g?.roosterSeen)) ? Number(g.roosterSeen) : countRevealedRoosters(g),
-        postRooster2Window: countRevealedRoosters(g) >= 2,
+        knownUpcomingEvents: Array.isArray(p.knownUpcomingEvents) ? p.knownUpcomingEvents : [],
       },
     });
 
-    let decision = rec?.decision || "LURK";
+    const dv = metricsBefore?.dangerVec || { dash: 0, lurk: 0, burrow: 0 };
+    const dDash = n(dv.dash, 0);
+    const dLurk = n(dv.lurk, 0);
+    const dBurrow = n(dv.burrow, 0);
+
+    const canBurrow = !p?.burrowUsed;
+
+    // ---- tuning knobs (per preset via riskW) ----
+    // lager = vaker "safety override" -> DASH/BURROW
+    const SAFE_STAY_MAX = clamp(6.0 - (riskW - 1) * 1.2, 5.0, 7.0);
+
+    // vanaf deze carry pushen we DASH als het niet veel gevaarlijker is dan blijven
+    const CARRY_DASH_THRESHOLD = clamp(7.0 - (riskW - 1) * 1.5, 5.5, 8.5);
+
+    // ---- stay option (best defensive) ----
+    const stayChoice = (canBurrow && (dBurrow > 0 || dLurk > 0) && (dBurrow <= dLurk || dLurk <= 0))
+      ? "BURROW"
+      : "LURK";
+    const stayRisk = stayChoice === "BURROW" ? dBurrow : dLurk;
+
+    // ---- forced effects ----
+    const forcedHoldStill = !!flagsRound?.holdStill?.[botId];
+
+    // ---- choose decision ----
+    let decision = stayChoice;
+    let reason = "stay_default";
+
+    if (forcedHoldStill) {
+      decision = "LURK";
+      reason = "forced_holdStill";
+    } else {
+      // 1) Safety override: if staying is "too dangerous", pick safest between DASH/BURROW
+      if (stayRisk >= SAFE_STAY_MAX) {
+        // pick min-risk among available survival actions
+        if (canBurrow) {
+          // if carry high and DASH is almost as safe, prefer DASH to cash out / escape
+          const dashCloseToBurrow = dDash <= (dBurrow + 0.7);
+          if (carryValueNow >= CARRY_DASH_THRESHOLD && dashCloseToBurrow) {
+            decision = "DASH";
+            reason = "safety_override_dash";
+          } else {
+            decision = (dBurrow <= dDash) ? "BURROW" : "DASH";
+            reason = (decision === "BURROW") ? "safety_override_burrow" : "safety_override_dash";
+          }
+        } else {
+          decision = "DASH";
+          reason = "safety_override_dash_no_burrow";
+        }
+      } else {
+        // 2) Cashout push: if carry high, DASH when not much worse than staying
+        if (carryValueNow >= CARRY_DASH_THRESHOLD && dDash <= (stayRisk + 1.0)) {
+          decision = "DASH";
+          reason = "carry_push_dash";
+        } else {
+          decision = stayChoice;
+          reason = "stay_ok";
+        }
+      }
+
+      if (decision === "BURROW" && !canBurrow) {
+        decision = "LURK";
+        reason = "burrow_unavailable_fallback_lurk";
+      }
+    }
 
     // Hidden Nest dash-slot limiting (als je dit gebruikt)
     const nextEvent0 = nextEventId(g, 0);
@@ -2021,26 +1952,37 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       const dashSet = picked?.dashSet || null;
       if (dashSet && !dashSet.has(p.id)) {
         decision = (!p.burrowUsed ? "BURROW" : "LURK");
+        reason = "hidden_nest_dash_slot_blocked";
       }
     }
 
+    // ---- apply decision ----
     const update = { decision };
     if (decision === "BURROW" && !p.burrowUsed) update.burrowUsed = true;
     tx.update(pRef, update);
 
-    const pAfterDecision = { ...p, ...update };
-    const carryValue = Number(computeCarryValue(pAfterDecision) ?? 0);
-
-    const metrics = computeDangerMetrics({
-      game: g,
-      player: pAfterDecision,
-      players: freshPlayers,
-      flagsRound: fillFlags(g.flagsRound),
-      intel: {
-        isLead,
-        knownUpcomingEvents: Array.isArray(pAfterDecision.knownUpcomingEvents) ? pAfterDecision.knownUpcomingEvents : [],
+    // ---- log (use metricsBefore as the decision basis) ----
+    const metrics = {
+      ...(metricsBefore || {}),
+      decisionMeta: {
+        decision,
+        reason,
+        thresholds: {
+          SAFE_STAY_MAX,
+          CARRY_DASH_THRESHOLD,
+        },
+        inputs: {
+          carryValueNow,
+          dDash,
+          dLurk,
+          dBurrow,
+          stayChoice,
+          stayRisk,
+          canBurrow,
+          riskW,
+        },
       },
-    });
+    };
 
     logPayload = {
       round: Number(g.round || 0),
@@ -2048,8 +1990,8 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       playerId: botId,
       playerName: p.name || "BOT",
       choice: `DECISION_${decision}`,
-      message: `BOT kiest ${decision}`,
-      carryValue,
+      message: `BOT kiest ${decision} (${reason})`,
+      carryValue: carryValueNow,
       metrics,
       isLead,
       dashDecisionsSoFar,
@@ -2060,7 +2002,6 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
 
   if (logPayload) {
     await logBotAction({ db, gameId, payload: logPayload });
-
   }
 }
 
