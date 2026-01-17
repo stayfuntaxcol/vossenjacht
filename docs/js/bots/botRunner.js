@@ -1826,18 +1826,12 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
 }
 
 /** ===== smarter DECISION (uses danger metrics) ===== */
+/** ===== smarter DECISION (danger-integrated) ===== */
 async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
   const gRef = doc(db, "games", gameId);
   const pRef = doc(db, "games", gameId, "players", botId);
 
   let logPayload = null;
-
-  // tiny helpers (local, so copy/paste safe)
-  const n = (x, d = 0) => {
-    const v = Number(x);
-    return Number.isFinite(v) ? v : d;
-  };
-  const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 
   await runTransaction(db, async (tx) => {
     const gSnap = await tx.get(gRef);
@@ -1849,7 +1843,7 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
 
     if (!canBotDecide(g, p)) return;
 
-    // ---- fresh players in-tx (anti-herding + lead calc) ----
+    // ---- fresh players inside tx (prevents herding on HIDDEN_NEST)
     const ids = (latestPlayers || []).map((x) => x?.id).filter(Boolean);
     const freshPlayers = [];
     for (const id of ids) {
@@ -1860,16 +1854,15 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
     const flagsRound = fillFlags(g.flagsRound);
     const denColor = normColor(p?.color || p?.den || p?.denColor);
     const presetKey = presetFromDenColor(denColor);
-    const preset = BOT_PRESETS?.[presetKey] || BOT_PRESETS?.BLUE || {};
-    const riskW = n(preset?.weights?.risk, 1);
 
-    const dashDecisionsSoFar = countDashDecisions(freshPlayers);
     const isLead = computeIsLeadForPlayer(g, p, freshPlayers);
+    const dashDecisionsSoFar = countDashDecisions(freshPlayers);
 
-    // ---- compute danger metrics BEFORE choosing decision ----
-    const carryValueNow = n(computeCarryValue(p) ?? 0, 0);
+    const carryNow = Number(computeCarryValue(p) ?? 0);
+    const lootPts = sumLootPoints(p);
 
-    const metricsBefore = computeDangerMetrics({
+    // ---- danger metrics (source of truth)
+    const metrics = computeDangerMetrics({
       game: g,
       player: p,
       players: freshPlayers,
@@ -1880,128 +1873,176 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       },
     });
 
-    const dv = metricsBefore?.dangerVec || { dash: 0, lurk: 0, burrow: 0 };
-    const dDash = n(dv.dash, 0);
-    const dLurk = n(dv.lurk, 0);
-    const dBurrow = n(dv.burrow, 0);
+    // dangerVec expected 0..10
+    const dv = metrics?.dangerVec || {};
+    const dDash0 = Number(dv.dash ?? 0);
+    const dLurk0 = Number(dv.lurk ?? 0);
+    const dBurrow0 = Number(dv.burrow ?? 0);
 
-    const canBurrow = !p?.burrowUsed;
+    // if BURROW already used -> treat as not available
+    const dBurrow = p.burrowUsed ? 999 : dBurrow0;
+    const dLurk = dLurk0;
+    let dDash = dDash0;
 
-    // ---- tuning knobs (per preset via riskW) ----
-    // lager = vaker "safety override" -> DASH/BURROW
-    const SAFE_STAY_MAX = clamp(6.0 - (riskW - 1) * 1.2, 5.0, 7.0);
+    const stayMin = Math.min(dLurk, dBurrow);
 
-    // vanaf deze carry pushen we DASH als het niet veel gevaarlijker is dan blijven
-    const CARRY_DASH_THRESHOLD = clamp(7.0 - (riskW - 1) * 1.5, 5.5, 8.5);
+    // ---- event constraints (belt + suspenders)
+    const nextIdUsed = String(metrics?.nextEventIdUsed || nextEventId(g, 0) || "");
+    const upcoming = classifyEvent(nextIdUsed);
 
-    // ---- stay option (best defensive) ----
-    const stayChoice = (canBurrow && (dBurrow > 0 || dLurk > 0) && (dBurrow <= dLurk || dLurk <= 0))
-      ? "BURROW"
-      : "LURK";
-    const stayRisk = stayChoice === "BURROW" ? dBurrow : dLurk;
+    // NO_DASH events: PATROL kills dashers -> force stay
+    if (upcoming.type === "NO_DASH") dDash = 999;
 
-    // ---- forced effects ----
-    const forcedHoldStill = !!flagsRound?.holdStill?.[botId];
-
-    // ---- choose decision ----
-    let decision = stayChoice;
-    let reason = "stay_default";
-
-    if (forcedHoldStill) {
-      decision = "LURK";
-      reason = "forced_holdStill";
-    } else {
-      // 1) Safety override: if staying is "too dangerous", pick safest between DASH/BURROW
-      if (stayRisk >= SAFE_STAY_MAX) {
-        // pick min-risk among available survival actions
-        if (canBurrow) {
-          // if carry high and DASH is almost as safe, prefer DASH to cash out / escape
-          const dashCloseToBurrow = dDash <= (dBurrow + 0.7);
-          if (carryValueNow >= CARRY_DASH_THRESHOLD && dashCloseToBurrow) {
-            decision = "DASH";
-            reason = "safety_override_dash";
-          } else {
-            decision = (dBurrow <= dDash) ? "BURROW" : "DASH";
-            reason = (decision === "BURROW") ? "safety_override_burrow" : "safety_override_dash";
-          }
-        } else {
-          decision = "DASH";
-          reason = "safety_override_dash_no_burrow";
-        }
-      } else {
-        // 2) Cashout push: if carry high, DASH when not much worse than staying
-        if (carryValueNow >= CARRY_DASH_THRESHOLD && dDash <= (stayRisk + 1.0)) {
-          decision = "DASH";
-          reason = "carry_push_dash";
-        } else {
-          decision = stayChoice;
-          reason = "stay_ok";
-        }
-      }
-
-      if (decision === "BURROW" && !canBurrow) {
-        decision = "LURK";
-        reason = "burrow_unavailable_fallback_lurk";
+    // Gate Toll: if you have 0 loot and you stay, you often get punished -> prefer DASH (if allowed)
+    if (upcoming.type === "TOLL" && lootPts <= 0) {
+      // only if dash isn't forbidden
+      if (dDash < 999) {
+        const decision = "DASH";
+        tx.update(pRef, { decision });
+        logPayload = {
+          round: Number(g.round || 0),
+          phase: "DECISION",
+          playerId: botId,
+          playerName: p.name || "BOT",
+          choice: `DECISION_${decision}`,
+          message: `BOT kiest ${decision} (Gate Toll + 0 loot)`,
+          kind: "BOT_DECISION",
+          at: Date.now(),
+          carryValue: carryNow,
+          isLead,
+          dashDecisionsSoFar,
+          metrics,
+          presetKey,
+          denColor,
+        };
+        return;
       }
     }
 
-    // Hidden Nest dash-slot limiting (als je dit gebruikt)
+    // ---- baseline recommendation (optional)
+    let decision = null;
+    try {
+      if (typeof recommendDecision === "function") {
+        const rec = recommendDecision({
+          presetKey,
+          denColor,
+          game: g,
+          me: p,
+          ctx: {
+            round: Number(g.round || 0),
+            isLead,
+            dashDecisionsSoFar,
+            // use real danger numbers so heuristics can't "ignore" danger
+            dangerVec: { dash: dDash, lurk: dLurk, burrow: dBurrow === 999 ? 10 : dBurrow },
+            dangerPeak: Number(metrics?.dangerPeak ?? Math.max(dDash, dLurk, dBurrow === 999 ? 10 : dBurrow)),
+            dangerStay: Number(metrics?.dangerStay ?? stayMin),
+            carryValue: carryNow,
+            postRooster2Window: !!metrics?.postRooster2Window,
+          },
+        });
+
+        if (rec?.decision) decision = String(rec.decision);
+      }
+    } catch {
+      // ignore
+    }
+
+    // ---- HARD SAFETY OVERRIDE (this is what prevents mass-catches)
+    // If staying is dangerous, pick the safest option (or DASH if it's safer).
+    const HIGH_STAY = 7;
+
+    const safePick = (() => {
+      const opts = [
+        { k: "LURK", d: dLurk },
+        { k: "BURROW", d: dBurrow },
+        { k: "DASH", d: dDash },
+      ].filter((x) => x.d < 999);
+
+      opts.sort((a, b) => a.d - b.d);
+
+      // tie-break: BURROW > DASH > LURK (safer feel)
+      const best = opts[0]?.k || "LURK";
+      const bestD = opts[0]?.d ?? 10;
+
+      // if stay is very dangerous, and DASH is meaningfully safer -> DASH
+      if (stayMin >= HIGH_STAY && dDash < stayMin) return "DASH";
+
+      // if DASH is forbidden (NO_DASH), choose best stay
+      if (dDash >= 999) return (dBurrow < dLurk ? "BURROW" : "LURK");
+
+      return best;
+    })();
+
+    // if heuristics chose something unsafe, override
+    const dChosen =
+      decision === "DASH" ? dDash :
+      decision === "BURROW" ? dBurrow :
+      dLurk;
+
+    if (!decision || dChosen >= HIGH_STAY) {
+      decision = safePick;
+    }
+
+    // ---- CASH-OUT PUSH (only if not unsafe)
+    // If carry is high, prefer DASH when it isn't riskier than staying.
+    const CARRY_DASH = 6;
+    const roosterSeen = Number.isFinite(Number(g?.roosterSeen)) ? Number(g.roosterSeen) : 0;
+
+    if (decision !== "DASH" && dDash < 999) {
+      const dashNotWorse = dDash <= (stayMin + 1);
+
+      // late-rooster: bail harder
+      const roosterPush = (roosterSeen >= 2 && carryNow > 0 && dDash <= stayMin);
+
+      if ((carryNow >= CARRY_DASH && dashNotWorse) || roosterPush) {
+        decision = "DASH";
+      }
+    }
+
+    // ---- HIDDEN_NEST anti-herding (limit DASH slots)
     const nextEvent0 = nextEventId(g, 0);
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
-      const picked = pickHiddenNestDashSet({ game: g, gameId, players: freshPlayers || [] });
+      const picked = pickHiddenNestDashSet({ game: g, gameId, players: freshPlayers });
       const dashSet = picked?.dashSet || null;
+
       if (dashSet && !dashSet.has(p.id)) {
-        decision = (!p.burrowUsed ? "BURROW" : "LURK");
-        reason = "hidden_nest_dash_slot_blocked";
+        // fallback: safest stay
+        if (!p.burrowUsed && dBurrow0 <= dLurk0) decision = "BURROW";
+        else decision = "LURK";
       }
     }
 
-    // ---- apply decision ----
+    // ---- apply
     const update = { decision };
     if (decision === "BURROW" && !p.burrowUsed) update.burrowUsed = true;
+
     tx.update(pRef, update);
 
-    // ---- log (use metricsBefore as the decision basis) ----
-    const metrics = {
-      ...(metricsBefore || {}),
-      decisionMeta: {
-        decision,
-        reason,
-        thresholds: {
-          SAFE_STAY_MAX,
-          CARRY_DASH_THRESHOLD,
-        },
-        inputs: {
-          carryValueNow,
-          dDash,
-          dLurk,
-          dBurrow,
-          stayChoice,
-          stayRisk,
-          canBurrow,
-          riskW,
-        },
-      },
-    };
-
+    // ---- log (outside tx via outer scope)
     logPayload = {
       round: Number(g.round || 0),
       phase: "DECISION",
       playerId: botId,
       playerName: p.name || "BOT",
       choice: `DECISION_${decision}`,
-      message: `BOT kiest ${decision} (${reason})`,
-      carryValue: carryValueNow,
-      metrics,
+      message: `BOT kiest ${decision}`,
+
+      kind: "BOT_DECISION",
+      at: Date.now(),
+
+      carryValue: carryNow,
       isLead,
       dashDecisionsSoFar,
-      at: Date.now(),
-      kind: "BOT_DECISION",
+      presetKey,
+      denColor,
+
+      // keep full metrics object (dangerScore/dangerVec/etc)
+      metrics,
     };
   });
 
   if (logPayload) {
-    await logBotAction({ db, gameId, payload: logPayload });
+    await logBotDecision(db, gameId, logPayload);
   }
 }
 
