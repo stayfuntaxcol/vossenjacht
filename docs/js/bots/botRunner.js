@@ -76,7 +76,11 @@ function isInYard(p) {
 
 function sumLootPoints(p) {
   const loot = Array.isArray(p?.loot) ? p.loot : [];
-  return loot.reduce((s, c) => s + (Number(c?.v) || 0), 0);
+  return loot.reduce((s, c) => {
+    const raw = c?.v ?? c?.value ?? c?.points ?? c?.pts ?? 0;
+    const n = Number(raw);
+    return s + (Number.isFinite(n) ? n : 0);
+  }, 0);
 }
 
 function computeIsLeadForPlayer(game, me, players) {
@@ -144,7 +148,7 @@ function handToActionIds(hand) {
   return ids;
 }
 
-function computeCarryValue(bot) {
+function computeCarryValue(p) {
   const eggs = Number(bot?.eggs || 0);
   const hens = Number(bot?.hens || 0);
   const prize = bot?.prize ? 3 : 0;
@@ -806,7 +810,7 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
   const opsLockedActive = !!game?.flagsRound?.opsLocked;
 
   // --- carry value (use score if present) ---
- const carryValue = computeCarryValue(bot);
+ const carryValue = computeCarryValue(p);
 
   // --- follow target hints (simple v1) ---
   const list = Array.isArray(players) ? players : [];
@@ -1188,7 +1192,7 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
       }
 
       // ---- metrics voor logging (vlak vóór logBotDecision) ----
-      const carryNow = computeCarryValue(bot);
+      const carryNow = computeCarryValue(p);
       ctx.carryValue = carryNow; // core gebruikt dit
 
       let core = null;
