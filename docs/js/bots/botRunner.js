@@ -903,11 +903,6 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
 }
 // =====================================================
 // Pick best Action Card for BOT (OPS phase)
-// - builds rich ctx for botHeuristics (CORE + strategies)
-// - chooses targets for cards that need it
-// - anti-duplicate (self + global singleton per round)
-// - logs ranked choices to games/{gameId}/actions (BOT_DECISION)
-// =====================================================
 async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
   try {
     const hand = Array.isArray(bot?.hand) ? bot.hand : [];
@@ -976,6 +971,7 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
         return null;
       })
       .filter(Boolean);
+
     // ---------- flags / next event / knowledge ----------
     const flags = fillFlags(game?.flagsRound);
     const noPeek = !!flags.noPeek;
@@ -1006,7 +1002,8 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
         : knownUpcomingCount >= 1
         ? "SOFT_SCOUT"
         : "NO_SCOUT";
-// ---------- rooster timing: danger boost only AFTER 2nd rooster REVEALED ----------
+
+    // ---------- rooster timing: danger boost only AFTER 2nd rooster REVEALED ----------
     const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
     const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
 
@@ -1162,11 +1159,6 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
       "SCATTER",
     ]);
 
-    // ✅ safe defaults for optional core logging (prevents ReferenceError if core logger exists)
-    const cfg =
-      (BOT_PRESETS && presetKey && BOT_PRESETS[presetKey]) ? BOT_PRESETS[presetKey] : null;
-    const comboInfo = null;
-
     for (const id of candidateIds) {
       if (botPlayedSet.has(id)) continue;
       if (GLOBAL_SINGLETON_ACTIONS.has(id) && discardThisRoundActionIds.includes(id)) continue;
@@ -1207,87 +1199,6 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
         targetId = intelTarget || pickRichestTarget(players || [], bot.id);
         if (!targetId) continue;
       }
-
-      // ---- metrics voor logging ----
-      const carryNow = computeCarryValue(bot);
-      ctx.carryValue = carryNow; // core gebruikt dit
-
-      let core = null;
-      try {
-        if (typeof evaluateCorePolicy === "function") {
-          core = evaluateCorePolicy(ctx, comboInfo, cfg);
-        }
-      } catch (e) {
-        core = null;
-      }
-
-      const dangerVec = ctx?.nextEventFacts
-        ? {
-            dash: Number(ctx.nextEventFacts.dangerDash || 0),
-            lurk: Number(ctx.nextEventFacts.dangerLurk || 0),
-            burrow: Number(ctx.nextEventFacts.dangerBurrow || 0),
-          }
-        : null;
-
-      const dangerPeak = dangerVec
-        ? Math.max(dangerVec.dash, dangerVec.lurk, dangerVec.burrow)
-        : Number(ctx?.dangerNext || 0);
-
-      const dangerStay = dangerVec ? Math.min(dangerVec.lurk, dangerVec.burrow) : 0;
-
-// ---- decision log (OPS only) ----
-if (String(game?.phase ?? "") === "OPS") {
-  const phase = String(ctx?.phase ?? game?.phase ?? "");
-  const round = Number(game?.round ?? ctx?.round ?? 0);
-  const opsTurnIndex = Number(game?.opsTurnIndex ?? 0);
-
-  // gebruik carryNow als die al berekend is; anders fallback naar computeCarryValue(bot)
-  const carryValue = Number(carryNow ?? computeCarryValue(bot) ?? 0);
-
-  const rankedTop = (Array.isArray(ranked) ? ranked : [])
-    .slice(0, 6)
-    .map((r) => ({
-      id: r?.id ?? null,
-      total: Number(r?.total ?? 0),
-      coreDelta: Number(r?.s?.coreDelta ?? 0),
-      stratDelta: Number(r?.s?.stratDelta ?? 0),
-    }));
-
-  // debug (haal later weer weg)
-  // console.log("carry from", bot?.id, carryValue);
-
-await logBotAction({ db, gameId, payload: logPayload });
-
-  // handig om direct te filteren in Firestore op carryValue
-    carryValue,
-
-    rankedTop,
-
-    ctxMini: {
-      carryValue,
-      carryDebug: {
-        eggs: Number(bot?.eggs ?? 0),
-        hens: Number(bot?.hens ?? 0),
-        prize: !!bot?.prize,
-        lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
-        lootSample: Array.isArray(bot?.loot) ? bot?.loot?.[0] ?? null : null,
-      },
-
-      dangerNext: Number(ctx?.dangerNext ?? 0),
-      dangerPeak: Number(dangerPeak ?? 0),
-      dangerStay: Number(dangerStay ?? 0),
-      dangerVec: dangerVec ?? null,
-
-      dangerEffective: Number(core?.dangerEffective ?? 0),
-      cashoutBias: Number(core?.cashoutBias ?? 0),
-
-      scoutTier: ctx?.scoutTier ?? "NO_SCOUT",
-      nextKnown: !!ctx?.nextKnown,
-      postRooster2Window: !!ctx?.postRooster2Window,
-      actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound ?? 0),
-    },
-  });
-}
 
       // ✅ IMPORTANT: actually return the playable card
       const chosenName =
@@ -1431,6 +1342,65 @@ let carryNow = 0;   // ✅ 1x declareren (buiten tx)
       nextIdx,
     };
   });
+}
+/** ===== logging (single writer to games/{gameId}/actions) ===== */
+function stripUndefinedShallow(obj) {
+  if (!obj || typeof obj !== "object") return obj;
+  const out = Array.isArray(obj) ? [] : {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (v === undefined) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+async function logBotAction({ db, gameId, payload }) {
+  try {
+    if (!db || !gameId) {
+      console.warn("[BOT_LOG] skip: missing db/gameId", { hasDb: !!db, gameId });
+      return;
+    }
+
+    const p = payload && typeof payload === "object" ? payload : {};
+
+    // carryValue blijft top-level (tijdelijk altijd aanwezig)
+    const cvRaw =
+      p.carryValue ??
+      p?.metrics?.carryValue ??      // fallback (als iemand het toch in metrics stopt)
+      p?.ctxMini?.carryValue ??      // legacy fallback
+      0;
+
+    const carryValue = Number(cvRaw);
+    const safeCarry = Number.isFinite(carryValue) ? carryValue : 0;
+
+    // Firestore faalt op undefined → shallow cleanup
+    const safePayload = stripUndefinedShallow(p);
+
+    // metrics ook shallow cleanen (en voorkomen dat carryValue dubbel staat)
+    let metrics = null;
+    if (safePayload.metrics && typeof safePayload.metrics === "object") {
+      metrics = stripUndefinedShallow(safePayload.metrics);
+      if ("carryValue" in metrics) delete metrics.carryValue; // carryValue alleen top-level
+    }
+
+    await addDoc(collection(db, "games", gameId, "actions"), {
+      // vaste meta
+      kind: safePayload.kind || "BOT_ACTION",
+      at: Number(safePayload.at || Date.now()),
+      createdAt: serverTimestamp(),
+
+      // baseline
+      carryValue: safeCarry,
+
+      // rest
+      ...safePayload,
+
+      // force our cleaned metrics (so no undefined/carryValue inside)
+      ...(metrics ? { metrics } : { metrics: safePayload.metrics ?? null }),
+    });
+  } catch (e) {
+    console.error("[BOT_LOG] addDoc failed", e, payload);
+  }
 }
 
 /** ===== lock (one bot-runner active per game) ===== */
@@ -1780,7 +1750,11 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
         metrics,
       };
       return;
-    }
+    });
+    
+if (logPayload) {
+  await logBotAction({ db, gameId, payload: logPayload });
+}
 
     // =========================
     // TRY REMOVE CARD FROM HAND
@@ -1846,7 +1820,11 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
         metrics,
       };
       return;
-    }
+    });
+  
+    if (logPayload) {
+  await logBotAction({ db, gameId, payload: logPayload });
+}
 
     // =========================
     // DISCARD + EFFECTS
@@ -1990,7 +1968,6 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
   }
 }
 
-/** ===== smarter DECISION ===== */
 /** ===== smarter DECISION ===== */
 async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
   const gRef = doc(db, "games", gameId);
