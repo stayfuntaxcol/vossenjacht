@@ -1496,6 +1496,7 @@ async function botDoMove({ db, gameId, botId }) {
 
     const g = gSnap.data();
     const p = { id: pSnap.id, ...pSnap.data() };
+    const carryNow = Number(computeCarryValue(p) ?? 0);
     if (!canBotMove(g, p)) return;
 
     const moved = Array.isArray(g.movedPlayerIds) ? [...g.movedPlayerIds] : [];
@@ -1772,6 +1773,8 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
         playerName: p.name || "BOT",
         choice: "ACTION_PASS",
         message: "BOT kiest PASS",
+        carryValue: carryNow,
+        ctxMini: { carryValue: carryNow },
       };
       return;
     }
@@ -1978,6 +1981,8 @@ if (!removed) {
       playerName: p.name || "BOT",
       choice: `ACTION_${cardName}`,
       message: msg,
+      carryValue: carryNow,
+      ctxMini: { carryValue: carryNow },
     };
   });
 
@@ -2050,6 +2055,10 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
 
     tx.update(pRef, update);
 
+    const carryNow = Number(computeCarryValue(p) ?? 0);
+    const carryRec = Number(rec?.carryValue ?? 0); // optioneel bewaren
+
+    
     logPayload = {
       round: Number(g.round || 0),
       phase: "DECISION",
@@ -2061,7 +2070,9 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
 
       // --- live metrics (for charts) ---
       nextEventId: rec?.nextEventId || null,
-      carryValue: Number(rec?.carryValue ?? 0),
+      carryValue: carryNow,
+      carryValueRec: carryRec, // optioneel (handig om te vergelijken)
+      ctxMini: { carryValue: carryNow },
       dangerPeak: Number(rec?.dangerPeak ?? 0),
       dangerStay: Number(rec?.dangerStay ?? 0),
       dangerEffective: Number(rec?.dangerEffective ?? 0),
