@@ -2029,7 +2029,6 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
 
     const g = gSnap.data();
     const p = { id: pSnap.id, ...pSnap.data() };
-    const carryNow = Number(computeCarryValue(p) ?? 0);
 
     if (!canBotDecide(g, p)) return;
 
@@ -2070,21 +2069,27 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       const dashSet = picked?.dashSet || null;
       if (dashSet && !dashSet.has(p.id)) {
         // fall back to safest stay
-        if (!p.burrowUsed && rec?.dangerVec && Number(rec.dangerVec.burrow || 0) <= Number(rec.dangerVec.lurk || 0)) decision = "BURROW";
-        else decision = "LURK";
+        if (
+          !p.burrowUsed &&
+          rec?.dangerVec &&
+          Number(rec.dangerVec.burrow || 0) <= Number(rec.dangerVec.lurk || 0)
+        ) {
+          decision = "BURROW";
+        } else {
+          decision = "LURK";
+        }
       }
     }
-    const update = { decision };
 
-    if (decision === "BURROW" && !p.burrowUsed) {
-      update.burrowUsed = true;
-    }
+    const update = { decision };
+    if (decision === "BURROW" && !p.burrowUsed) update.burrowUsed = true;
 
     tx.update(pRef, update);
 
+    // ✅ compute AFTER update (still based on current p-state; decision doesn't change carry)
     carryNow = Number(computeCarryValue(p) ?? 0);
     carryRec = Number(rec?.carryValue ?? 0);
-    
+
     logPayload = {
       round: Number(g.round || 0),
       phase: "DECISION",
@@ -2092,31 +2097,29 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       playerName: p.name || "BOT",
       choice: `DECISION_${decision}`,
       message: `BOT kiest ${decision}`,
-    
 
       // --- live metrics (for charts) ---
       nextEventId: rec?.nextEventId || null,
       carryValue: carryNow,
-      carryValueRec: carryRec, // optioneel (handig om te vergelijken)
+      carryValueRec: carryRec,
       ctxMini: { carryValue: carryNow },
       dangerPeak: Number(rec?.dangerPeak ?? 0),
       dangerStay: Number(rec?.dangerStay ?? 0),
       dangerEffective: Number(rec?.dangerEffective ?? 0),
       cashoutBias: Number(rec?.cashoutBias ?? 0),
-      appliesToMe: (typeof rec?.appliesToMe === 'boolean') ? rec.appliesToMe : null,
+      appliesToMe: typeof rec?.appliesToMe === "boolean" ? rec.appliesToMe : null,
       isLead: !!rec?.isLead,
       dashDecisionsSoFar: Number(rec?.dashDecisionsSoFar ?? 0),
       dangerVec: rec?.dangerVec || null,
-      
-      at: Date.now(),
-      kind: 'BOT_DECISION',
 
+      at: Date.now(),
+      kind: "BOT_DECISION",
     };
   });
 
   if (logPayload) {
-  await logBotDecision(db, gameId, logPayload);
-}
+    await logBotDecision(db, gameId, logPayload);
+  }
 }
 
 /** ===== exported: start runner (1 action per tick + backoff, no interval storm) ===== */
