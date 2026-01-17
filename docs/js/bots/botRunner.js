@@ -1487,6 +1487,7 @@ async function botDoMove({ db, gameId, botId }) {
   const pRef = doc(db, "games", gameId, "players", botId);
 
   let logPayload = null;
+  let carryValue = null;
 
   await runTransaction(db, async (tx) => {
     const gSnap = await tx.get(gRef);
@@ -1509,24 +1510,19 @@ async function botDoMove({ db, gameId, botId }) {
     const upcoming = classifyEvent(nextEventId(g, 0));
     const lootPts = sumLootPoints({ loot });
 
-    // Priorities:
-    // 1) If Gate Toll soon and no loot: grab loot
-    const mustHaveLoot = upcoming.type === "TOLL";
-    // 2) If danger soon and no Den Signal in hand: forage to fish for defense
-    const dangerSoon =
-      upcoming.type === "DOG" || (upcoming.type === "DEN" && normColor(upcoming.color) === myColor);
-    const needsDefense = dangerSoon && !immune && !hasCard(hand, "Den Signal");
-
-    // Choose MOVE
+    // --- jouw bestaande move-keuze (SNATCH/FORAGE) blijft hetzelfde ---
     let did = null;
 
-    if (mustHaveLoot && lootPts <= 0) {
+    if (upcoming.type === "TOLL" && lootPts <= 0) {
       if (!lootDeck.length) return;
       const card = lootDeck.pop();
       loot.push(card);
       did = { kind: "SNATCH", detail: `${card.t || "Loot"} ${card.v ?? ""}` };
-    } else if (needsDefense && actionDeck.length) {
-      // draw up to 2
+    } else if (
+      (upcoming.type === "DOG" || (upcoming.type === "DEN" && normColor(upcoming.color) === myColor)) &&
+      !immune && !hasCard(hand, "Den Signal") &&
+      actionDeck.length
+    ) {
       let drawn = 0;
       for (let i = 0; i < 2; i++) {
         if (!actionDeck.length) break;
@@ -1549,9 +1545,15 @@ async function botDoMove({ db, gameId, botId }) {
       did = { kind: "SNATCH", detail: `${card.t || "Loot"} ${card.v ?? ""}` };
     }
 
+    // ✅ updates
     tx.update(pRef, { hand, loot });
     tx.update(gRef, { actionDeck, lootDeck, movedPlayerIds: [...new Set([...moved, botId])] });
 
+    // ✅ carryValue NA mutaties
+    const pAfter = { ...p, hand, loot };
+    carryValue = Number(computeCarryValue(pAfter) ?? 0);
+
+    // ✅ logPayload met carryValue
     logPayload = {
       round: Number(g.round || 0),
       phase: "MOVE",
@@ -1559,10 +1561,15 @@ async function botDoMove({ db, gameId, botId }) {
       playerName: p.name || "BOT",
       choice: `MOVE_${did.kind}`,
       message: `BOT deed ${did.kind} (${did.detail})`,
+      carryValue,
+      ctxMini: { carryValue },
     };
   });
 
-  if (logPayload) await logBotAction({ db, gameId, addLog: null, payload: logPayload });
+  // ✅ carryValue ook meegeven aan logger (handig als je logger die preferreert)
+  if (logPayload) {
+    await logBotAction({ db, gameId, addLog: null, carryValue, payload: logPayload });
+  }
 }
 
 /** ===== smarter OPS ===== */
