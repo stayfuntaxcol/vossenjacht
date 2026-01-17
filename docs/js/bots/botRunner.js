@@ -151,11 +151,13 @@ function computeCarryValue(bot) {
 
   const loot = Array.isArray(bot?.loot) ? bot.loot : [];
   const lootPts = loot.reduce((s, c) => {
-    const v = Number(c?.value ?? c?.points ?? 1);
-    return s + (Number.isFinite(v) ? v : 1);
+    // support: v, value, points, pts
+    const raw = c?.v ?? c?.value ?? c?.points ?? c?.pts ?? 1;
+    const n = Number(raw);
+    return s + (Number.isFinite(n) ? n : 1);
   }, 0);
 
-  const HEN_VALUE = 3;   // tweak: 2 of 3 (ik zou 3 doen)
+  const HEN_VALUE = 3;
   const EGG_VALUE = 1;
 
   return eggs * EGG_VALUE + hens * HEN_VALUE + prize + lootPts;
@@ -1235,7 +1237,13 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
 
           ctxMini: {
             carryValue: Number(carryNow || 0),
-
+            carryDebug: {
+                eggs: Number(bot?.eggs || 0),
+                hens: Number(bot?.hens || 0),
+                prize: !!bot?.prize,
+                lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
+                lootSample: Array.isArray(bot?.loot) ? bot.loot[0] : null,
+              }
             dangerNext: Number(ctx?.dangerNext || 0),
             dangerPeak: Number(dangerPeak || 0),
             dangerStay: Number(dangerStay || 0),
