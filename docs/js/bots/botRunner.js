@@ -940,9 +940,34 @@ async function pickBestActionFromHand({
     const p = bot;
     const listPlayers = Array.isArray(players) ? players : [];
     const hand = Array.isArray(p?.hand) ? p.hand : [];
+// Pak hand uit meerdere mogelijke velden (hand / actionHand / actionCards)
+const handRaw =
+  (Array.isArray(p?.hand) && p.hand) ||
+  (Array.isArray(p?.actionHand) && p.actionHand) ||
+  (Array.isArray(p?.actionCards) && p.actionCards) ||
+  [];
 
-    if (!g || !p || !hand.length) return null;
+// Normaliseer entries naar een bruikbare key (string)
+const handKeys = handRaw
+  .map((x) => {
+    if (typeof x === "string") return x.trim();
+    if (x && typeof x === "object") return String(x.name || x.title || x.id || "").trim();
+    return "";
+  })
+  .filter(Boolean);
 
+if (!g || !p || !handKeys.length) return null;
+
+// Resolve naar echte defs (probeer eerst naam, dan id-achtige keys)
+const handDefs = handKeys
+  .map((k) => getActionDefByName(k) || getActionDefByName(k.toUpperCase()) || getActionDefByName(k.replace(/\s+/g, " ")))
+  .filter(Boolean);
+
+if (!handDefs.length) {
+  console.warn("[BOTS] No action defs matched hand", { handRaw, handKeys });
+  return null;
+}
+    
     // --- build metrics-driven "next event" signal (works even with noPeek / unknown next) ---
     const intel = {
       knownUpcomingEvents: Array.isArray(p?.knownUpcomingEvents) ? p.knownUpcomingEvents : [],
