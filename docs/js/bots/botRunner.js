@@ -1241,14 +1241,6 @@ if (String(game?.phase || "") === "OPS") {
     },
   });
 }
-      
-    // nothing legal -> PASS
-    return null;
-  } catch (err) {
-    console.warn("[BOTS] pickBestActionFromHand crashed -> PASS", err);
-    return null;
-  }
-}
 
 function getOpsTurnId(game) {
   if (!game || game.phase !== "ACTIONS") return null;
