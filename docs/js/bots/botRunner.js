@@ -149,16 +149,11 @@ function handToActionIds(hand) {
 }
 
 function computeCarryValue(p) {
-  const eggs = Number(p?.eggs || 0);
-  const hens = Number(p?.hens || 0);
+  const eggs = Number(p?.eggs ?? 0);
+  const hens = Number(p?.hens ?? 0);
   const prize = p?.prize ? 3 : 0;
-
-  const lootPts = sumLootPoints(p); // gebruikt p.loot
-
-  const HEN_VALUE = 3;
-  const EGG_VALUE = 1;
-
-  return eggs * EGG_VALUE + hens * HEN_VALUE + prize + lootPts;
+  const lootPts = sumLootPoints(p);
+  return eggs * 1 + hens * 3 + prize + lootPts;
 }
 
 // ================================
@@ -1214,32 +1209,39 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
       const dangerStay = dangerVec ? Math.min(dangerVec.lurk, dangerVec.burrow) : 0;
 
 // ---- decision log (OPS only) ----
-if (String(game?.phase || "") === "OPS") {
-  const phase = String(ctx?.phase || game?.phase || "");
+if (String(game?.phase ?? "") === "OPS") {
+  const phase = String(ctx?.phase ?? game?.phase ?? "");
   const round = Number(game?.round ?? ctx?.round ?? 0);
   const opsTurnIndex = Number(game?.opsTurnIndex ?? 0);
 
-  const carryValue = Number(carryNow ?? 0);
+  // gebruik carryNow als die al berekend is; anders fallback naar computeCarryValue(bot)
+  const carryValue = Number(carryNow ?? computeCarryValue(bot) ?? 0);
 
   const rankedTop = (Array.isArray(ranked) ? ranked : [])
     .slice(0, 6)
     .map((r) => ({
-      id: r?.id,
+      id: r?.id ?? null,
       total: Number(r?.total ?? 0),
       coreDelta: Number(r?.s?.coreDelta ?? 0),
       stratDelta: Number(r?.s?.stratDelta ?? 0),
     }));
+
+  // debug (haal later weer weg)
+  // console.log("carry from", bot?.id, carryValue);
 
   await logBotDecision(db, gameId, {
     phase,
     round,
     opsTurnIndex,
 
-    by: bot.id,
+    by: bot?.id ?? null,
     presetKey,
     denColor,
 
     pick: { actionId: id, targetId: targetId ?? null },
+
+    // handig om direct te filteren in Firestore op carryValue
+    carryValue,
 
     rankedTop,
 
@@ -1250,7 +1252,7 @@ if (String(game?.phase || "") === "OPS") {
         hens: Number(bot?.hens ?? 0),
         prize: !!bot?.prize,
         lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
-        lootSample: Array.isArray(bot?.loot) ? bot.loot[0] : null,
+        lootSample: Array.isArray(bot?.loot) ? bot?.loot?.[0] ?? null : null,
       },
 
       dangerNext: Number(ctx?.dangerNext ?? 0),
