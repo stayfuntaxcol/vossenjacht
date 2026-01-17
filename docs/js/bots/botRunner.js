@@ -1820,7 +1820,7 @@ if (logPayload) {
         metrics,
       };
       return;
-    });
+    };
   
     if (logPayload) {
   await logBotAction({ db, gameId, payload: logPayload });
