@@ -1135,6 +1135,22 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
     // Anti-duplicate: global singleton (bots only)
     const GLOBAL_SINGLETON_ACTIONS = new Set(["KICK_UP_DUST", "PACK_TINKER", "NO_GO_ZONE", "SCATTER"]);
 
+       // Anti-duplicate: bot itself not twice same action in same round
+    const botPlayedSet = new Set(botPlayedActionIdsThisRound);
+
+    // Anti-duplicate: global singleton (bots only)
+    const GLOBAL_SINGLETON_ACTIONS = new Set([
+      "KICK_UP_DUST",
+      "PACK_TINKER",
+      "NO_GO_ZONE",
+      "SCATTER",
+    ]);
+
+    // ✅ safe defaults for optional core logging (prevents ReferenceError if core logger exists)
+    const cfg =
+      (BOT_PRESETS && presetKey && BOT_PRESETS[presetKey]) ? BOT_PRESETS[presetKey] : null;
+    const comboInfo = null;
+
     for (const id of candidateIds) {
       if (botPlayedSet.has(id)) continue;
       if (GLOBAL_SINGLETON_ACTIONS.has(id) && discardThisRoundActionIds.includes(id)) continue;
@@ -1176,70 +1192,88 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
         if (!targetId) continue;
       }
 
-// ---- metrics voor logging (vlak vóór logBotDecision) ----
-const carryNow = computeCarryValue(bot);
-ctx.carryValue = carryNow; // core gebruikt dit
+      // ---- metrics voor logging (vlak vóór logBotDecision) ----
+      const carryNow = computeCarryValue(bot);
+      ctx.carryValue = carryNow; // core gebruikt dit
 
-const core =
-  typeof evaluateCorePolicy === "function"
-    ? evaluateCorePolicy(ctx, comboInfo, cfg)
-    : null;
+      let core = null;
+      try {
+        if (typeof evaluateCorePolicy === "function") {
+          core = evaluateCorePolicy(ctx, comboInfo, cfg);
+        }
+      } catch (e) {
+        core = null;
+      }
 
-const dangerVec = ctx?.nextEventFacts
-  ? {
-      dash: Number(ctx.nextEventFacts.dangerDash || 0),
-      lurk: Number(ctx.nextEventFacts.dangerLurk || 0),
-      burrow: Number(ctx.nextEventFacts.dangerBurrow || 0),
+      const dangerVec = ctx?.nextEventFacts
+        ? {
+            dash: Number(ctx.nextEventFacts.dangerDash || 0),
+            lurk: Number(ctx.nextEventFacts.dangerLurk || 0),
+            burrow: Number(ctx.nextEventFacts.dangerBurrow || 0),
+          }
+        : null;
+
+      const dangerPeak = dangerVec
+        ? Math.max(dangerVec.dash, dangerVec.lurk, dangerVec.burrow)
+        : Number(ctx?.dangerNext || 0);
+
+      const dangerStay = dangerVec ? Math.min(dangerVec.lurk, dangerVec.burrow) : 0;
+
+      // ---- decision log (OPS only) ----
+      if (String(game?.phase || "") === "OPS") {
+        await logBotDecision(db, gameId, {
+          phase: ctx?.phase || String(game?.phase || ""),
+          round: Number(game?.round || ctx?.round || 0),
+          opsTurnIndex: Number(game?.opsTurnIndex || 0),
+
+          by: bot.id,
+          presetKey,
+          denColor,
+
+          pick: { actionId: id, targetId: targetId || null },
+
+          rankedTop: (Array.isArray(ranked) ? ranked : []).slice(0, 6).map((r) => ({
+            id: r?.id,
+            total: Number(r?.total || 0),
+            coreDelta: Number(r?.s?.coreDelta || 0),
+            stratDelta: Number(r?.s?.stratDelta || 0),
+          })),
+
+          ctxMini: {
+            carryValue: Number(carryNow || 0),
+
+            dangerNext: Number(ctx?.dangerNext || 0),
+            dangerPeak: Number(dangerPeak || 0),
+            dangerStay: Number(dangerStay || 0),
+            dangerVec: dangerVec || null,
+
+            dangerEffective: Number(core?.dangerEffective ?? 0),
+            cashoutBias: Number(core?.cashoutBias ?? 0),
+
+            scoutTier: ctx?.scoutTier || "NO_SCOUT",
+            nextKnown: !!ctx?.nextKnown,
+            postRooster2Window: !!ctx?.postRooster2Window,
+            actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
+          },
+        });
+      }
+
+      // ✅ IMPORTANT: actually return the playable card
+      const chosenName =
+        entries.find((e) => String(e.def?.id || "").trim() === String(id).trim())?.name ||
+        null;
+
+      if (!chosenName) continue;
+
+      return { name: chosenName, actionId: id, targetId: targetId || null };
     }
-  : null;
 
-const dangerPeak = dangerVec
-  ? Math.max(dangerVec.dash, dangerVec.lurk, dangerVec.burrow)
-  : Number(ctx?.dangerNext || 0);
-
-const dangerStay = dangerVec
-  ? Math.min(dangerVec.lurk, dangerVec.burrow)
-  : 0;
-
-// ---- decision log (OPS only) ----
-if (String(game?.phase || "") === "OPS") {
-  await logBotDecision(db, gameId, {
-    phase: ctx?.phase || String(game?.phase || ""),
-    round: Number(game?.round || ctx?.round || 0),
-    opsTurnIndex: Number(game?.opsTurnIndex || 0),
-
-    by: bot.id,
-    presetKey,
-    denColor,
-
-    pick: { actionId: id, targetId: targetId || null },
-
-    rankedTop: (Array.isArray(ranked) ? ranked : []).slice(0, 6).map((r) => ({
-      id: r?.id,
-      total: Number(r?.total || 0),
-      coreDelta: Number(r?.s?.coreDelta || 0),
-      stratDelta: Number(r?.s?.stratDelta || 0),
-    })),
-
-    // ✅ alles wat jij erbij wilde, netjes in ctxMini
-    ctxMini: {
-      // nextEventId: ctx?.nextEventId || null, // <- liever UIT laten (info-lek)
-      carryValue: Number(carryNow || 0),
-
-      dangerNext: Number(ctx?.dangerNext || 0),
-      dangerPeak: Number(dangerPeak || 0),
-      dangerStay: Number(dangerStay || 0),
-      dangerVec: dangerVec || null,
-
-      dangerEffective: Number(core?.dangerEffective ?? 0),
-      cashoutBias: Number(core?.cashoutBias ?? 0),
-
-      scoutTier: ctx?.scoutTier || "NO_SCOUT",
-      nextKnown: !!ctx?.nextKnown,
-      postRooster2Window: !!ctx?.postRooster2Window,
-      actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
-    },
-  });
+    // nothing legal -> PASS
+    return null;
+  } catch (err) {
+    console.warn("[BOTS] pickBestActionFromHand crashed -> PASS", err);
+    return null;
+  }
 }
 
 function getOpsTurnId(game) {
