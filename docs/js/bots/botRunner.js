@@ -100,18 +100,10 @@ function computeIsLeadForPlayer(game, me, players) {
 async function logBotDecision(db, gameId, payload) {
   try {
     if (!db || !gameId) return;
-
-    const playerId = payload?.playerId || payload?.by || null;
-    const playerName = payload?.playerName || payload?.name || null;
-
     await addDoc(collection(db, "games", gameId, "actions"), {
       kind: "BOT_DECISION",
       at: Date.now(),
       createdAt: serverTimestamp(),
-
-      playerId,
-      playerName,
-
       ...payload,
     });
   } catch (e) {
@@ -817,9 +809,8 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
   const lockEventsActive = !!game?.flagsRound?.lockEvents;
   const opsLockedActive = !!game?.flagsRound?.opsLocked;
 
-// --- carry value (loot-based; use fresh 'p' from tx) ---
-const carryValue = computeCarryValue(p);
-ctx.carryValue = carryValue;
+  // --- carry value (use score if present) ---
+ const carryValue = computeCarryValue(p);
 
   // --- follow target hints (simple v1) ---
   const list = Array.isArray(players) ? players : [];
@@ -1247,35 +1238,28 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
             stratDelta: Number(r?.s?.stratDelta || 0),
           })),
 
-         ctxMini: {
-  carryValue: Number(carryNow || 0),
-  carryDebug: {
-    eggs: Number(p?.eggs || 0),
-    hens: Number(p?.hens || 0),
-    prize: !!p?.prize,
-    lootLen: Array.isArray(p?.loot) ? p.loot.length : 0,
-    lootSample: Array.isArray(p?.loot) ? p.loot[0] : null,
-  },
+          ctxMini: {
+            carryValue: Number(carryNow || 0),
+            carryDebug: {
+                eggs: Number(bot?.eggs || 0),
+                hens: Number(bot?.hens || 0),
+                prize: !!bot?.prize,
+                lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
+                lootSample: Array.isArray(bot?.loot) ? bot.loot[0] : null,
+              },
+            dangerNext: Number(ctx?.dangerNext || 0),
+            dangerPeak: Number(dangerPeak || 0),
+            dangerStay: Number(dangerStay || 0),
+            dangerVec: dangerVec || null,
 
-  // als je compare wilt, doe alleen p (bot bestaat hier niet)
-  carryCompare: {
-    pLootLen: Array.isArray(p?.loot) ? p.loot.length : 0,
-    pCarry: computeCarryValue(p),
-  },
+            dangerEffective: Number(core?.dangerEffective ?? 0),
+            cashoutBias: Number(core?.cashoutBias ?? 0),
 
-  dangerNext: Number(ctx?.dangerNext || 0),
-  dangerPeak: Number(dangerPeak || 0),
-  dangerStay: Number(dangerStay || 0),
-  dangerVec: dangerVec || null,
-
-  dangerEffective: Number(core?.dangerEffective ?? 0),
-  cashoutBias: Number(core?.cashoutBias ?? 0),
-
-  scoutTier: ctx?.scoutTier || "NO_SCOUT",
-  nextKnown: !!ctx?.nextKnown,
-  postRooster2Window: !!ctx?.postRooster2Window,
-  actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
-      },
+            scoutTier: ctx?.scoutTier || "NO_SCOUT",
+            nextKnown: !!ctx?.nextKnown,
+            postRooster2Window: !!ctx?.postRooster2Window,
+            actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
+          },
         });
       }
 
@@ -1543,7 +1527,7 @@ async function botDoMove({ db, gameId, botId }) {
       round: Number(g.round || 0),
       phase: "MOVE",
       playerId: botId,
-      playerName: bot.name || "BOT",
+      playerName: p.name || "BOT",
       choice: `MOVE_${did.kind}`,
       message: `BOT deed ${did.kind} (${did.detail})`,
     };
