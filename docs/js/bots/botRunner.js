@@ -1750,7 +1750,7 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
         metrics,
       };
       return;
-    });
+    }
     
 if (logPayload) {
   await logBotAction({ db, gameId, payload: logPayload });
