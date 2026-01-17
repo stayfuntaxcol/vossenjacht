@@ -100,10 +100,18 @@ function computeIsLeadForPlayer(game, me, players) {
 async function logBotDecision(db, gameId, payload) {
   try {
     if (!db || !gameId) return;
+
+    const playerId = payload?.playerId || payload?.by || null;
+    const playerName = payload?.playerName || payload?.name || null;
+
     await addDoc(collection(db, "games", gameId, "actions"), {
       kind: "BOT_DECISION",
       at: Date.now(),
       createdAt: serverTimestamp(),
+
+      playerId,
+      playerName,
+
       ...payload,
     });
   } catch (e) {
@@ -809,8 +817,9 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
   const lockEventsActive = !!game?.flagsRound?.lockEvents;
   const opsLockedActive = !!game?.flagsRound?.opsLocked;
 
-  // --- carry value (use score if present) ---
- const carryValue = computeCarryValue(p);
+// --- carry value (loot-based; use fresh 'p' from tx) ---
+const carryValue = computeCarryValue(p);
+ctx.carryValue = carryValue;
 
   // --- follow target hints (simple v1) ---
   const list = Array.isArray(players) ? players : [];
@@ -1251,7 +1260,12 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
             dangerPeak: Number(dangerPeak || 0),
             dangerStay: Number(dangerStay || 0),
             dangerVec: dangerVec || null,
-
+            carryCompare: {
+                botLootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
+                pLootLen: Array.isArray(p?.loot) ? p.loot.length : 0,
+                botCarry: computeCarryValue(bot),
+                pCarry: computeCarryValue(p),
+                },
             dangerEffective: Number(core?.dangerEffective ?? 0),
             cashoutBias: Number(core?.cashoutBias ?? 0),
 
@@ -1527,7 +1541,7 @@ async function botDoMove({ db, gameId, botId }) {
       round: Number(g.round || 0),
       phase: "MOVE",
       playerId: botId,
-      playerName: p.name || "BOT",
+      playerName: bot.name || "BOT",
       choice: `MOVE_${did.kind}`,
       message: `BOT deed ${did.kind} (${did.detail})`,
     };
