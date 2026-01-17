@@ -1762,8 +1762,8 @@ async function botDoDecision({ db, gameId, botId }) {
   });
 
   if (logPayload) {
-    // jij wilde decision apart:
-    await logBotDecision({ db, gameId, payload: logPayload });
+    
+    await logBotAction({ db, gameId, payload: logPayload });
   }
 }
 
