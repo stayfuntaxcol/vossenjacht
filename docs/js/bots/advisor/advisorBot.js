@@ -326,13 +326,26 @@ function extractDenColorFromEventId(eventId) {
 // ------------------------------
 // Loot helpers
 // ------------------------------
+// ------------------------------
 function getLootPoints(p) {
   const loot = Array.isArray(p?.loot) ? p.loot : [];
-  return loot.reduce((sum, c) => sum + (Number(c?.v) || 0), 0);
+  return loot.reduce((sum, c) => {
+    const raw = c?.v ?? c?.value ?? c?.points ?? c?.pts ?? 0;
+    const n = Number(raw);
+    return sum + (Number.isFinite(n) ? n : 0);
+  }, 0);
 }
+
 function getLootCount(p) {
   const loot = Array.isArray(p?.loot) ? p.loot : [];
   return loot.length;
+}
+
+function computeCarryValue(p) {
+  const eggs = Number(p?.eggs ?? 0);
+  const hens = Number(p?.hens ?? 0);
+  const prize = p?.prize ? 3 : 0;
+  return eggs * 1 + hens * 3 + prize + getLootPoints(p);
 }
 
 // ------------------------------
