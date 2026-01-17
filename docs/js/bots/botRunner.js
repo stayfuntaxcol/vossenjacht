@@ -151,7 +151,6 @@ function computeCarryValue(bot) {
 
   const loot = Array.isArray(bot?.loot) ? bot.loot : [];
   const lootPts = loot.reduce((s, c) => {
-    // support: v, value, points, pts
     const raw = c?.v ?? c?.value ?? c?.points ?? c?.pts ?? 1;
     const n = Number(raw);
     return s + (Number.isFinite(n) ? n : 1);
