@@ -1213,55 +1213,6 @@ function stripUndefinedShallow(obj) {
   return out;
 }
 
-async function logBotAction({ db, gameId, payload }) {
-  try {
-    if (!db || !gameId) {
-      console.warn("[BOT_LOG] skip: missing db/gameId", { hasDb: !!db, gameId });
-      return;
-    }
-
-    const p = payload && typeof payload === "object" ? payload : {};
-
-    // carryValue blijft top-level (tijdelijk altijd aanwezig)
-    const cvRaw =
-      p.carryValue ??
-      p?.metrics?.carryValue ??      // fallback (als iemand het toch in metrics stopt)
-      p?.ctxMini?.carryValue ??      // legacy fallback
-      0;
-
-    const carryValue = Number(cvRaw);
-    const safeCarry = Number.isFinite(carryValue) ? carryValue : 0;
-
-    // Firestore faalt op undefined → shallow cleanup
-    const safePayload = stripUndefinedShallow(p);
-
-    // metrics ook shallow cleanen (en voorkomen dat carryValue dubbel staat)
-    let metrics = null;
-    if (safePayload.metrics && typeof safePayload.metrics === "object") {
-      metrics = stripUndefinedShallow(safePayload.metrics);
-      if ("carryValue" in metrics) delete metrics.carryValue; // carryValue alleen top-level
-    }
-
-    await addDoc(collection(db, "games", gameId, "actions"), {
-      // vaste meta
-      kind: safePayload.kind || "BOT_ACTION",
-      at: Number(safePayload.at || Date.now()),
-      createdAt: serverTimestamp(),
-
-      // baseline
-      carryValue: safeCarry,
-
-      // rest
-      ...safePayload,
-
-      // force our cleaned metrics (so no undefined/carryValue inside)
-      ...(metrics ? { metrics } : { metrics: safePayload.metrics ?? null }),
-    });
-  } catch (e) {
-    console.error("[BOT_LOG] addDoc failed", e, payload);
-  }
-}
-
 /** ===== lock (one bot-runner active per game) ===== */
 async function acquireBotLock({ db, gameId, gameRef, runnerKey }) {
   const now = Date.now();
