@@ -1176,19 +1176,15 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
         if (!targetId) continue;
       }
 
-      // back to original card name (removeOneCard uses name)
-      const entry = entries.find((x) => x.def.id === id);
-      const name = entry?.name || entry?.def?.name || id;
+// ---- metrics voor logging (vlak vóór logBotDecision) ----
+const carryNow = computeCarryValue(bot);
+ctx.carryValue = carryNow; // core gebruikt dit
 
-      const carryValue = computeCarryValue(bot);
-ctx.carryValue = carryValue; // belangrijk: core gebruikt dit
+const core =
+  typeof evaluateCorePolicy === "function"
+    ? evaluateCorePolicy(ctx, comboInfo, cfg)
+    : null;
 
-// Als je core al hebt: gebruik die. Anders 1x berekenen:
-const core = typeof evaluateCorePolicy === "function"
-  ? evaluateCorePolicy(ctx, comboInfo, cfg)
-  : null;
-
-// (optioneel) dangerVec afleiden zonder nextEventId te lekken
 const dangerVec = ctx?.nextEventFacts
   ? {
       dash: Number(ctx.nextEventFacts.dangerDash || 0),
@@ -1197,50 +1193,55 @@ const dangerVec = ctx?.nextEventFacts
     }
   : null;
 
-const dangerPeak = dangerVec ? Math.max(dangerVec.dash, dangerVec.lurk, dangerVec.burrow) : Number(ctx?.dangerNext || 0);
-const dangerStay = dangerVec ? Math.min(dangerVec.lurk, dangerVec.burrow) : 0;
+const dangerPeak = dangerVec
+  ? Math.max(dangerVec.dash, dangerVec.lurk, dangerVec.burrow)
+  : Number(ctx?.dangerNext || 0);
 
-      // decision log (OPS only)
-      if (String(game?.phase || "") === "OPS") {
-        await logBotDecision(db, gameId, {
-          phase: ctx?.phase || String(game?.phase || ""),
-          round: Number(game?.round || ctx?.round || 0),
-          opsTurnIndex: Number(game?.opsTurnIndex || 0),
+const dangerStay = dangerVec
+  ? Math.min(dangerVec.lurk, dangerVec.burrow)
+  : 0;
 
-          by: bot.id,
-          presetKey,
-          denColor,
+// ---- decision log (OPS only) ----
+if (String(game?.phase || "") === "OPS") {
+  await logBotDecision(db, gameId, {
+    phase: ctx?.phase || String(game?.phase || ""),
+    round: Number(game?.round || ctx?.round || 0),
+    opsTurnIndex: Number(game?.opsTurnIndex || 0),
 
-          pick: { actionId: id, targetId: targetId || null },
+    by: bot.id,
+    presetKey,
+    denColor,
 
-          rankedTop: (Array.isArray(ranked) ? ranked : []).slice(0, 6).map((r) => ({
-            id: r?.id,
-            total: Number(r?.total || 0),
-            coreDelta: Number(r?.s?.coreDelta || 0),
-            stratDelta: Number(r?.s?.stratDelta || 0),
-          })),
+    pick: { actionId: id, targetId: targetId || null },
 
- 
-  carryValue: Number(carryValue || 0),
+    rankedTop: (Array.isArray(ranked) ? ranked : []).slice(0, 6).map((r) => ({
+      id: r?.id,
+      total: Number(r?.total || 0),
+      coreDelta: Number(r?.s?.coreDelta || 0),
+      stratDelta: Number(r?.s?.stratDelta || 0),
+    })),
 
-  dangerNext: Number(ctx?.dangerNext || 0),
-  dangerPeak: Number(dangerPeak || 0),
-  dangerStay: Number(dangerStay || 0),
-  dangerVec: dangerVec || null,
+    // ✅ alles wat jij erbij wilde, netjes in ctxMini
+    ctxMini: {
+      // nextEventId: ctx?.nextEventId || null, // <- liever UIT laten (info-lek)
+      carryValue: Number(carryNow || 0),
 
-  dangerEffective: Number(core?.dangerEffective ?? 0),
-  cashoutBias: Number(core?.cashoutBias ?? 0),
+      dangerNext: Number(ctx?.dangerNext || 0),
+      dangerPeak: Number(dangerPeak || 0),
+      dangerStay: Number(dangerStay || 0),
+      dangerVec: dangerVec || null,
 
-  scoutTier: ctx?.scoutTier || "NO_SCOUT",
-  nextKnown: !!ctx?.nextKnown,
-  postRooster2Window: !!ctx?.postRooster2Window,
-  actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
-  },
-   });
+      dangerEffective: Number(core?.dangerEffective ?? 0),
+      cashoutBias: Number(core?.cashoutBias ?? 0),
 
-    return targetId ? { name, actionId: id, targetId } : { name, actionId: id };
-    }
-
+      scoutTier: ctx?.scoutTier || "NO_SCOUT",
+      nextKnown: !!ctx?.nextKnown,
+      postRooster2Window: !!ctx?.postRooster2Window,
+      actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
+    },
+  });
+}
+      
     // nothing legal -> PASS
     return null;
   } catch (err) {
