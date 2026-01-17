@@ -711,6 +711,36 @@ function fillFlags(flagsRound) {
   };
 }
 
+function buildLogMetricsSafe({ game, player, players, flagsRound }) {
+  const carryValue = Number(computeCarryValue(player) ?? 0);
+
+  let metrics = null;
+  try {
+    const raw = computeDangerMetrics({
+      game,
+      player,
+      players: Array.isArray(players) ? players : [],
+      flagsRound: flagsRound || {},
+      intel: {
+        knownUpcomingEvents: Array.isArray(player?.knownUpcomingEvents)
+          ? player.knownUpcomingEvents.filter(Boolean)
+          : [],
+      },
+    });
+
+    if (raw && typeof raw === "object") {
+      metrics = { ...raw };
+      // voorkom dubbele waarheid
+      if ("carryValue" in metrics) delete metrics.carryValue;
+    }
+  } catch (e) {
+    console.warn("[BOTS] computeDangerMetrics failed (keeping carryValue)", e);
+    metrics = null;
+  }
+
+  return { carryValue, metrics };
+}
+
 function getNextEventId(game) {
   if (Array.isArray(game.eventTrack) && typeof game.eventIndex === "number") {
     return game.eventTrack[game.eventIndex] || null;
@@ -1463,12 +1493,12 @@ async function acquireBotLock({ db, gameId, gameRef, runnerKey }) {
 }
 
 /** ===== smarter MOVE ===== */
+/** ===== smarter MOVE ===== */
 async function botDoMove({ db, gameId, botId }) {
   const gRef = doc(db, "games", gameId);
   const pRef = doc(db, "games", gameId, "players", botId);
 
   let logPayload = null;
-  let carryValue = null;
 
   await runTransaction(db, async (tx) => {
     const gSnap = await tx.get(gRef);
@@ -1477,7 +1507,6 @@ async function botDoMove({ db, gameId, botId }) {
 
     const g = gSnap.data();
     const p = { id: pSnap.id, ...pSnap.data() };
-    const carryNow = Number(computeCarryValue(p) ?? 0);
     if (!canBotMove(g, p)) return;
 
     const moved = Array.isArray(g.movedPlayerIds) ? [...g.movedPlayerIds] : [];
@@ -1501,8 +1530,10 @@ async function botDoMove({ db, gameId, botId }) {
       loot.push(card);
       did = { kind: "SNATCH", detail: `${card.t || "Loot"} ${card.v ?? ""}` };
     } else if (
-      (upcoming.type === "DOG" || (upcoming.type === "DEN" && normColor(upcoming.color) === myColor)) &&
-      !immune && !hasCard(hand, "Den Signal") &&
+      (upcoming.type === "DOG" ||
+        (upcoming.type === "DEN" && normColor(upcoming.color) === myColor)) &&
+      !immune &&
+      !hasCard(hand, "Den Signal") &&
       actionDeck.length
     ) {
       let drawn = 0;
@@ -1529,35 +1560,57 @@ async function botDoMove({ db, gameId, botId }) {
 
     // ✅ updates
     tx.update(pRef, { hand, loot });
-    tx.update(gRef, { actionDeck, lootDeck, movedPlayerIds: [...new Set([...moved, botId])] });
+    tx.update(gRef, {
+      actionDeck,
+      lootDeck,
+      movedPlayerIds: [...new Set([...moved, botId])],
+    });
 
-    // ✅ carryValue NA mutaties
+    // ✅ metrics + carryValue (na mutaties)
     const pAfter = { ...p, hand, loot };
-const metrics = computeDangerMetrics({
-  game: g,
-  player: pAfter,
-  players: [], // move heeft vaak geen freshPlayers; is ok
-  flagsRound: flags,
-  intel: {
-    knownUpcomingEvents: Array.isArray(pAfter.knownUpcomingEvents) ? pAfter.knownUpcomingEvents : [],
-    // noInfer: zet alleen als je echt track wil “blinderen”
-  },
-});
+    const gAfter = {
+      ...g,
+      actionDeck,
+      lootDeck,
+      movedPlayerIds: [...new Set([...moved, botId])],
+      flagsRound: flags,
+    };
 
-logPayload = {
-  round: Number(g.round || 0),
-  phase: "MOVE",
-  playerId: botId,
-  playerName: p.name || "BOT",
-  choice: `MOVE_${did.kind}`,
-  message: `BOT deed ${did.kind} (${did.detail})`,
-  metrics,
-};
+    const { carryValue, metrics } = buildLogMetricsSafe({
+      game: gAfter,
+      player: pAfter,
+      players: [], // MOVE heeft vaak geen freshPlayers; ok
+      flagsRound: flags,
+    });
 
+    logPayload = {
+      round: Number(g.round || 0),
+      phase: "MOVE",
+      playerId: botId,
+      playerName: p.name || "BOT",
+      choice: `MOVE_${did.kind}`,
+      message: `BOT deed ${did.kind} (${did.detail})`,
+
+      // ✅ blijft tijdelijk top-level
+      carryValue,
+
+      // ✅ danger registratie staat hier
+      metrics,
+
+      // optioneel (laat staan als je UI dit nog gebruikt)
+      ctxMini: { carryValue },
+    };
   });
 
+  // ✅ Firestore write NA transaction
   if (logPayload) {
-   await logBotAction({ db, gameId, addLog: null, payload: logPayload });
+    await logBotAction({
+      db,
+      gameId,
+      addLog: null,
+      carryValue: logPayload.carryValue,
+      payload: logPayload,
+    });
   }
 }
 
@@ -1696,7 +1749,6 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
   const pRef = doc(db, "games", gameId, "players", botId);
 
   let logPayload = null;
-  let carryNow = 0; // ✅ 1x declareren, buiten tx
 
   await runTransaction(db, async (tx) => {
     const gSnap = await tx.get(gRef);
@@ -1721,18 +1773,15 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     const passesNow = Number(g.opsConsecutivePasses || 0);
     if (flagsRound.opsLocked || passesNow >= target) return;
 
-    // ⏳ UI pacing: wacht tot de vorige gespeelde kaart minimaal zichtbaar was
+    // ⏳ UI pacing
     const holdUntil = Number(g.opsHoldUntilMs || 0);
     if (holdUntil && Date.now() < holdUntil) return;
 
-    const nextIdx = (idx + 1) % order.length;
+    const nextTurnIdx = (idx + 1) % order.length;
 
     const hand = Array.isArray(p.hand) ? [...p.hand] : [];
     const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
     const actionDiscard = Array.isArray(g.actionDiscard) ? [...g.actionDiscard] : [];
-
-    // ✅ carryNow beschikbaar voor PASS + PLAY logs
-    carryNow = Number(computeCarryValue(p) ?? 0);
 
     const play = await pickBestActionFromHand({
       db,
@@ -1741,56 +1790,58 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
       bot: p,
       players: latestPlayers || [],
     });
-// =========================
-// PASS
-// =========================
-if (!play) {
-  let nextPasses = passesNow + 1;
-  if (nextPasses > target) nextPasses = target;
 
-  const ended = nextPasses >= target;
+    // =========================
+    // PASS
+    // =========================
+    if (!play) {
+      let nextPasses = passesNow + 1;
+      if (nextPasses > target) nextPasses = target;
 
-  tx.update(gRef, {
-    opsTurnIndex: nextIdx,
-    opsConsecutivePasses: nextPasses,
-    ...(ended
-      ? {
-          flagsRound: { ...(g.flagsRound || {}), opsLocked: true },
-          opsEndedAtMs: Date.now(),
-        }
-      : {}),
-  });
+      const ended = nextPasses >= target;
 
-  const pAfter = { ...p, hand, color: p.color, den: p.color };
+      const flagsAfter = ended
+        ? { ...(g.flagsRound || {}), opsLocked: true }
+        : (g.flagsRound || {});
 
-  const metrics = computeDangerMetrics({
-    game: { ...g, flagsRound }, // ✅ geen extraGameUpdates hier
-    player: pAfter,
-    players: latestPlayers || [],
-    flagsRound,
-    intel: {
-      knownUpcomingEvents: Array.isArray(pAfter.knownUpcomingEvents)
-        ? pAfter.knownUpcomingEvents
-        : [],
-    },
-  });
+      tx.update(gRef, {
+        opsTurnIndex: nextTurnIdx,
+        opsConsecutivePasses: nextPasses,
+        ...(ended
+          ? { flagsRound: flagsAfter, opsEndedAtMs: Date.now() }
+          : {}),
+      });
 
-  logPayload = {
-    round: roundNum,
-    phase: "ACTIONS",
-    playerId: botId,
-    playerName: p.name || "BOT",
-    choice: "OPS_PASS",
-    message: "BOT past (OPS)",
-    metrics,
-  };
+      const pAfter = { ...p, hand, color: p.color, den: p.color };
+      const gAfter = {
+        ...g,
+        opsTurnIndex: nextTurnIdx,
+        opsConsecutivePasses: nextPasses,
+        ...(ended ? { flagsRound: flagsAfter, opsEndedAtMs: Date.now() } : {}),
+      };
 
-  return; // ✅ stop tx branch hier
-} 
-    
-if (logPayload) {
-  await logBotAction({ db, gameId, addLog: null, payload: logPayload });
-}
+      const { carryValue, metrics } = buildLogMetricsSafe({
+        game: gAfter,
+        player: pAfter,
+        players: latestPlayers || [],
+        flagsRound: fillFlags(flagsAfter),
+      });
+
+      logPayload = {
+        round: roundNum,
+        phase: "ACTIONS",
+        playerId: botId,
+        playerName: p.name || "BOT",
+        choice: "OPS_PASS",
+        message: "BOT past (OPS)",
+
+        carryValue,
+        metrics,
+        ctxMini: { carryValue },
+      };
+      return;
+    }
+
     // =========================
     // TRY REMOVE CARD FROM HAND
     // =========================
@@ -1823,15 +1874,31 @@ if (logPayload) {
 
       const ended = nextPasses >= target;
 
+      const flagsAfter = ended
+        ? { ...(g.flagsRound || {}), opsLocked: true }
+        : (g.flagsRound || {});
+
       tx.update(gRef, {
-        opsTurnIndex: nextIdx,
+        opsTurnIndex: nextTurnIdx,
         opsConsecutivePasses: nextPasses,
         ...(ended
-          ? {
-              flagsRound: { ...(g.flagsRound || {}), opsLocked: true },
-              opsEndedAtMs: Date.now(),
-            }
+          ? { flagsRound: flagsAfter, opsEndedAtMs: Date.now() }
           : {}),
+      });
+
+      const pAfter = { ...p, hand, color: p.color, den: p.color };
+      const gAfter = {
+        ...g,
+        opsTurnIndex: nextTurnIdx,
+        opsConsecutivePasses: nextPasses,
+        ...(ended ? { flagsRound: flagsAfter, opsEndedAtMs: Date.now() } : {}),
+      };
+
+      const { carryValue, metrics } = buildLogMetricsSafe({
+        game: gAfter,
+        player: pAfter,
+        players: latestPlayers || [],
+        flagsRound: fillFlags(flagsAfter),
       });
 
       logPayload = {
@@ -1839,12 +1906,14 @@ if (logPayload) {
         phase: "ACTIONS",
         playerId: botId,
         playerName: p.name || "BOT",
-        choice: "ACTION_PASS",
+        choice: "OPS_PASS",
         message: `BOT wilde spelen maar kaart niet gevonden → PASS (name="${String(
           play?.name || ""
         )}", id="${String(play?.actionId || play?.id || "")}")`,
-        carryValue: carryNow,
-        ctxMini: { carryValue: carryNow },
+
+        carryValue,
+        metrics,
+        ctxMini: { carryValue },
       };
       return;
     }
@@ -1869,16 +1938,12 @@ if (logPayload) {
       flagsRound.denImmune = denImmune;
     }
 
-   if (cardName === "No-Go Zone") {
-  // kies een positie om te blocken (simpel: nextIndex of nextIndex+1)
-  const trackLen = Array.isArray(g.eventTrack) ? g.eventTrack.length : 0;
-  const nextIdx = getNextEventIndex(g); // jouw helper in botRunner bestaat al
-  const pos = Math.max(0, Math.min(trackLen - 1, nextIdx + 1));
-
-  const arr = Array.isArray(flagsRound.noPeek) ? [...flagsRound.noPeek] : [];
-  if (!arr.includes(pos)) arr.push(pos);
-  flagsRound.noPeek = arr;
-}
+    if (cardName === "No-Go Zone") {
+      // oude, veilige betekenis: OPS meteen klaar
+      flagsRound.opsLocked = true;
+      extraGameUpdates.opsConsecutivePasses = target;
+      extraGameUpdates.opsEndedAtMs = Date.now();
+    }
 
     if (cardName === "Hold Still") {
       const targetId = play.targetId;
@@ -1886,7 +1951,12 @@ if (logPayload) {
         const hs = { ...(flagsRound.holdStill || {}) };
         hs[targetId] = true;
         flagsRound.holdStill = hs;
-        extraGameUpdates.lastHoldStill = { by: botId, targetId, round: roundNum, at: Date.now() };
+        extraGameUpdates.lastHoldStill = {
+          by: botId,
+          targetId,
+          round: roundNum,
+          at: Date.now(),
+        };
       }
     }
 
@@ -1906,7 +1976,13 @@ if (logPayload) {
           if (trackNow[i1] && trackNow[i2]) {
             [trackNow[i1], trackNow[i2]] = [trackNow[i2], trackNow[i1]];
             extraGameUpdates.eventTrack = trackNow;
-            extraGameUpdates.lastPackTinker = { by: botId, i1, i2, round: roundNum, at: Date.now() };
+            extraGameUpdates.lastPackTinker = {
+              by: botId,
+              i1,
+              i2,
+              round: roundNum,
+              at: Date.now(),
+            };
           }
         }
       }
@@ -1936,6 +2012,10 @@ if (logPayload) {
       }
     }
 
+    if (cardName === "Molting Mask") {
+      flagsRound.noPeek = true;
+    }
+
     if (cardName === "Nose for Trouble") {
       const eventId = nextEventId(g, 0) || nextEventId(g, 1);
       if (eventId) {
@@ -1958,7 +2038,14 @@ if (logPayload) {
           if (a && b && a !== b) {
             tx.update(tRef, { color: a, den: a });
             p.color = b;
-            extraGameUpdates.lastMaskSwap = { by: botId, targetId, a, b, round: roundNum, at: Date.now() };
+            extraGameUpdates.lastMaskSwap = {
+              by: botId,
+              targetId,
+              a,
+              b,
+              round: roundNum,
+              at: Date.now(),
+            };
           }
         }
       }
@@ -1970,7 +2057,7 @@ if (logPayload) {
       actionDeck,
       actionDiscard,
       flagsRound,
-      opsTurnIndex: nextIdx,
+      opsTurnIndex: nextTurnIdx,
       opsConsecutivePasses: 0,
       ...extraGameUpdates,
     });
@@ -1993,6 +2080,24 @@ if (logPayload) {
       msg = "BOT speelt No-Go Zone (OPS locked)";
     }
 
+    const pAfter = { ...p, hand, color: p.color, den: p.color };
+    const gAfter = {
+      ...g,
+      actionDeck,
+      actionDiscard,
+      flagsRound,
+      opsTurnIndex: nextTurnIdx,
+      opsConsecutivePasses: 0,
+      ...extraGameUpdates,
+    };
+
+    const { carryValue, metrics } = buildLogMetricsSafe({
+      game: gAfter,
+      player: pAfter,
+      players: latestPlayers || [],
+      flagsRound,
+    });
+
     logPayload = {
       round: roundNum,
       phase: "ACTIONS",
@@ -2000,11 +2105,14 @@ if (logPayload) {
       playerName: p.name || "BOT",
       choice: `ACTION_${cardName}`,
       message: msg,
-      carryValue: carryNow,
-      ctxMini: { carryValue: carryNow },
+
+      carryValue,
+      metrics,
+      ctxMini: { carryValue },
     };
   });
 
+  // ✅ Firestore write NA transaction
   if (logPayload) {
     await logBotAction({
       db,
@@ -2022,8 +2130,6 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
   const pRef = doc(db, "games", gameId, "players", botId);
 
   let logPayload = null;
-  let carryNow = 0;
-  let carryRec = 0;
 
   await runTransaction(db, async (tx) => {
     const gSnap = await tx.get(gRef);
@@ -2032,10 +2138,9 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
 
     const g = gSnap.data();
     const p = { id: pSnap.id, ...pSnap.data() };
-
     if (!canBotDecide(g, p)) return;
 
-    // Read latest decisions fresh inside the transaction (prevents herding on HIDDEN_NEST)
+    // Read latest decisions fresh inside tx (prevents herding on HIDDEN_NEST)
     const ids = (latestPlayers || []).map((x) => x?.id).filter(Boolean);
     const freshPlayers = [];
     for (const id of ids) {
@@ -2057,56 +2162,22 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
         round: Number(g.round || 0),
         isLead,
         dashDecisionsSoFar,
-        // rooster context
-        roosterSeen: Number.isFinite(Number(g?.roosterSeen)) ? Number(g.roosterSeen) : countRevealedRoosters(g),
+        roosterSeen: Number.isFinite(Number(g?.roosterSeen))
+          ? Number(g.roosterSeen)
+          : countRevealedRoosters(g),
         postRooster2Window: countRevealedRoosters(g) >= 2,
       },
     });
 
     let decision = rec?.decision || "LURK";
-const metrics = computeDangerMetrics({
-  game: g,
-  player: p,
-  players: freshPlayers || [],
-  flagsRound: g.flagsRound,
-  intel: {
-    knownUpcomingEvents: Array.isArray(p.knownUpcomingEvents) ? p.knownUpcomingEvents : [],
-  },
-});
 
-logPayload = {
-  round: Number(g.round || 0),
-  phase: "DECISION",
-  playerId: botId,
-  playerName: p.name || "BOT",
-  choice: `DECISION_${decision}`,
-  message: `BOT kiest ${decision}`,
-  kind: "BOT_DECISION",
-  at: Date.now(),
-
-  metrics,
-
-  // (optioneel) puur debug: wat adviseerde heuristic?
-  // recDecision: rec?.decision || null,
-  // cashoutBias: Number(rec?.cashoutBias ?? 0),
-};
-    
-    // Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
+    // Anti-herding: HIDDEN_NEST dash slots limiter
     const nextEvent0 = nextEventId(g, 0);
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
       const picked = pickHiddenNestDashSet({ game: g, gameId, players: freshPlayers || [] });
       const dashSet = picked?.dashSet || null;
       if (dashSet && !dashSet.has(p.id)) {
-        // fall back to safest stay
-        if (
-          !p.burrowUsed &&
-          rec?.dangerVec &&
-          Number(rec.dangerVec.burrow || 0) <= Number(rec.dangerVec.lurk || 0)
-        ) {
-          decision = "BURROW";
-        } else {
-          decision = "LURK";
-        }
+        decision = (!p.burrowUsed) ? "BURROW" : "LURK";
       }
     }
 
@@ -2115,9 +2186,15 @@ logPayload = {
 
     tx.update(pRef, update);
 
-    // ✅ compute AFTER update (still based on current p-state; decision doesn't change carry)
-    carryNow = Number(computeCarryValue(p) ?? 0);
-    carryRec = Number(rec?.carryValue ?? 0);
+    // metrics + carryValue (decision verandert carry meestal niet, maar consistent loggen)
+    const flagsRound = fillFlags(g.flagsRound);
+    const pAfter = { ...p, ...update };
+    const { carryValue, metrics } = buildLogMetricsSafe({
+      game: g,
+      player: pAfter,
+      players: freshPlayers || [],
+      flagsRound,
+    });
 
     logPayload = {
       round: Number(g.round || 0),
@@ -2127,27 +2204,24 @@ logPayload = {
       choice: `DECISION_${decision}`,
       message: `BOT kiest ${decision}`,
 
-      // --- live metrics (for charts) ---
-      nextEventId: rec?.nextEventId || null,
-      carryValue: carryNow,
-      carryValueRec: carryRec,
-      ctxMini: { carryValue: carryNow },
-      dangerPeak: Number(rec?.dangerPeak ?? 0),
-      dangerStay: Number(rec?.dangerStay ?? 0),
-      dangerEffective: Number(rec?.dangerEffective ?? 0),
-      cashoutBias: Number(rec?.cashoutBias ?? 0),
-      appliesToMe: typeof rec?.appliesToMe === "boolean" ? rec.appliesToMe : null,
-      isLead: !!rec?.isLead,
-      dashDecisionsSoFar: Number(rec?.dashDecisionsSoFar ?? 0),
-      dangerVec: rec?.dangerVec || null,
+      carryValue,
+      metrics,
+      ctxMini: { carryValue },
 
       at: Date.now(),
       kind: "BOT_DECISION",
     };
   });
 
+  // ✅ Firestore write NA transaction
   if (logPayload) {
-    await logBotDecision(db, gameId, logPayload);
+    await logBotAction({
+      db,
+      gameId,
+      addLog: null,
+      carryValue: logPayload.carryValue,
+      payload: logPayload,
+    });
   }
 }
 
