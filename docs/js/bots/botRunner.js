@@ -100,10 +100,17 @@ function computeIsLeadForPlayer(game, me, players) {
 async function logBotDecision(db, gameId, payload) {
   try {
     if (!db || !gameId) return;
+
+    const cv = Number(payload?.carryValue ?? payload?.ctxMini?.carryValue ?? 0);
+
     await addDoc(collection(db, "games", gameId, "actions"), {
       kind: "BOT_DECISION",
       at: Date.now(),
       createdAt: serverTimestamp(),
+
+      // ✅ altijd top-level carryValue
+      carryValue: Number.isFinite(cv) ? cv : 0,
+
       ...payload,
     });
   } catch (e) {
@@ -152,9 +159,17 @@ function computeCarryValue(p) {
   const eggs = Number(p?.eggs ?? 0);
   const hens = Number(p?.hens ?? 0);
   const prize = p?.prize ? 3 : 0;
-  const lootPts = sumLootPoints(p);
+
+  const loot = Array.isArray(p?.loot) ? p.loot : [];
+  const lootPts = loot.reduce((s, c) => {
+    const raw = c?.v ?? c?.value ?? c?.points ?? c?.pts ?? 0;
+    const n = Number(raw);
+    return s + (Number.isFinite(n) ? n : 0);
+  }, 0);
+
   return eggs * 1 + hens * 3 + prize + lootPts;
 }
+
 
 // ================================
 // Heuristics/Strategies ctx builder
@@ -1355,21 +1370,27 @@ function getRunnerId() {
 }
 
 /** ===== logging ===== */
-async function logBotAction({ db, gameId, addLog, payload }) {
-  // games/{game}/actions
+async function logBotAction({ db, gameId, addLog, carryValue, payload }) {
+  const cv = Number(carryValue ?? payload?.carryValue ?? 0);
+
   await addDoc(collection(db, "games", gameId, "actions"), {
     ...payload,
+
+    // ✅ top-level carryValue (makkelijk filteren in Firestore)
+    carryValue: Number.isFinite(cv) ? cv : 0,
+
     createdAt: serverTimestamp(),
   });
 
-  // games/{game}/log (via your helper)
   if (typeof addLog === "function") {
     await addLog(gameId, {
-      round: payload.round ?? 0,
-      phase: payload.phase ?? "",
+      round: payload?.round ?? 0,
+      phase: payload?.phase ?? "",
       kind: "BOT",
-      playerId: payload.playerId,
-      message: payload.message || `${payload.playerName || "BOT"}: ${payload.choice}`,
+      playerId: payload?.playerId,
+      message:
+        payload?.message ||
+        `${payload?.playerName || "BOT"}: ${payload?.choice}`,
     });
   }
 }
