@@ -4,6 +4,7 @@
 import { getEventFacts } from "./aiKit.js";
 import { getActionDefByName } from "../cards.js";
 import { comboScore } from "./actionComboMatrix.js";
+import { computeCarryValue, computeDangerMetrics } from "./core/metrics.js";
 import {
   rankActions,
   scoreActionFacts,
@@ -154,22 +155,6 @@ function handToActionIds(hand) {
   }
   return ids;
 }
-
-function computeCarryValue(p) {
-  const eggs = Number(p?.eggs ?? 0);
-  const hens = Number(p?.hens ?? 0);
-  const prize = p?.prize ? 3 : 0;
-
-  const loot = Array.isArray(p?.loot) ? p.loot : [];
-  const lootPts = loot.reduce((s, c) => {
-    const raw = c?.v ?? c?.value ?? c?.points ?? c?.pts ?? 0;
-    const n = Number(raw);
-    return s + (Number.isFinite(n) ? n : 0);
-  }, 0);
-
-  return eggs * 1 + hens * 3 + prize + lootPts;
-}
-
 
 // ================================
 // Heuristics/Strategies ctx builder
@@ -1370,30 +1355,6 @@ function getRunnerId() {
 }
 
 /** ===== logging ===== */
-async function logBotAction({ db, gameId, addLog, carryValue, payload }) {
-  const cv = Number(carryValue ?? payload?.carryValue ?? 0);
-
-  await addDoc(collection(db, "games", gameId, "actions"), {
-    ...payload,
-
-    // ✅ top-level carryValue (makkelijk filteren in Firestore)
-    carryValue: Number.isFinite(cv) ? cv : 0,
-
-    createdAt: serverTimestamp(),
-  });
-
-  if (typeof addLog === "function") {
-    await addLog(gameId, {
-      round: payload?.round ?? 0,
-      phase: payload?.phase ?? "",
-      kind: "BOT",
-      playerId: payload?.playerId,
-      message:
-        payload?.message ||
-        `${payload?.playerName || "BOT"}: ${payload?.choice}`,
-    });
-  }
-}
 
 async function applyOpsActionAndAdvanceTurn({ db, gameRef, actorId, isPass }) {
   const now = Date.now();
@@ -1554,24 +1515,31 @@ async function botDoMove({ db, gameId, botId }) {
 
     // ✅ carryValue NA mutaties
     const pAfter = { ...p, hand, loot };
-    carryValue = Number(computeCarryValue(pAfter) ?? 0);
+const metrics = computeDangerMetrics({
+  game: g,
+  player: pAfter,
+  players: [], // move heeft vaak geen freshPlayers; is ok
+  flagsRound: flags,
+  intel: {
+    knownUpcomingEvents: Array.isArray(pAfter.knownUpcomingEvents) ? pAfter.knownUpcomingEvents : [],
+    // noInfer: zet alleen als je echt track wil “blinderen”
+  },
+});
 
-    // ✅ logPayload met carryValue
-    logPayload = {
-      round: Number(g.round || 0),
-      phase: "MOVE",
-      playerId: botId,
-      playerName: p.name || "BOT",
-      choice: `MOVE_${did.kind}`,
-      message: `BOT deed ${did.kind} (${did.detail})`,
-      carryValue,
-      ctxMini: { carryValue },
-    };
+logPayload = {
+  round: Number(g.round || 0),
+  phase: "MOVE",
+  playerId: botId,
+  playerName: p.name || "BOT",
+  choice: `MOVE_${did.kind}`,
+  message: `BOT deed ${did.kind} (${did.detail})`,
+  metrics,
+};
+
   });
 
-  // ✅ carryValue ook meegeven aan logger (handig als je logger die preferreert)
   if (logPayload) {
-    await logBotAction({ db, gameId, addLog: null, carryValue, payload: logPayload });
+   await logBotAction({ db, gameId, addLog: null, payload: logPayload });
   }
 }
 
@@ -1776,16 +1744,29 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
           : {}),
       });
 
-      logPayload = {
-        round: roundNum,
-        phase: "ACTIONS",
-        playerId: botId,
-        playerName: p.name || "BOT",
-        choice: "ACTION_PASS",
-        message: "BOT kiest PASS",
-        carryValue: carryNow,
-        ctxMini: { carryValue: carryNow },
-      };
+     const pAfter = { ...p, hand, color: p.color, den: p.color };
+
+const metrics = computeDangerMetrics({
+  game: { ...g, ...extraGameUpdates, flagsRound }, // reflecteer eventuele track updates
+  player: pAfter,
+  players: latestPlayers || [],
+  flagsRound,
+  intel: {
+    knownUpcomingEvents: Array.isArray(pAfter.knownUpcomingEvents) ? pAfter.knownUpcomingEvents : [],
+  },
+});
+
+logPayload = {
+  round: roundNum,
+  phase: "ACTIONS",
+  playerId: botId,
+  playerName: p.name || "BOT",
+  choice: isPass ? "OPS_PASS" : `ACTION_${cardName}`,
+  message: msg,
+  metrics,
+};
+      await logBotAction({ db, gameId, addLog: null, payload: logPayload });
+
       return;
     }
 
@@ -1867,11 +1848,16 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
       flagsRound.denImmune = denImmune;
     }
 
-    if (cardName === "No-Go Zone") {
-      flagsRound.opsLocked = true;
-      extraGameUpdates.opsConsecutivePasses = target;
-      extraGameUpdates.opsEndedAtMs = Date.now();
-    }
+   if (cardName === "No-Go Zone") {
+  // kies een positie om te blocken (simpel: nextIndex of nextIndex+1)
+  const trackLen = Array.isArray(g.eventTrack) ? g.eventTrack.length : 0;
+  const nextIdx = getNextEventIndex(g); // jouw helper in botRunner bestaat al
+  const pos = Math.max(0, Math.min(trackLen - 1, nextIdx + 1));
+
+  const arr = Array.isArray(flagsRound.noPeek) ? [...flagsRound.noPeek] : [];
+  if (!arr.includes(pos)) arr.push(pos);
+  flagsRound.noPeek = arr;
+}
 
     if (cardName === "Hold Still") {
       const targetId = play.targetId;
@@ -1927,10 +1913,6 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
         ft[botId] = targetId;
         flagsRound.followTail = ft;
       }
-    }
-
-    if (cardName === "Molting Mask") {
-      flagsRound.noPeek = true;
     }
 
     if (cardName === "Nose for Trouble") {
@@ -2061,7 +2043,33 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
     });
 
     let decision = rec?.decision || "LURK";
+const metrics = computeDangerMetrics({
+  game: g,
+  player: p,
+  players: freshPlayers || [],
+  flagsRound: g.flagsRound,
+  intel: {
+    knownUpcomingEvents: Array.isArray(p.knownUpcomingEvents) ? p.knownUpcomingEvents : [],
+  },
+});
 
+logPayload = {
+  round: Number(g.round || 0),
+  phase: "DECISION",
+  playerId: botId,
+  playerName: p.name || "BOT",
+  choice: `DECISION_${decision}`,
+  message: `BOT kiest ${decision}`,
+  kind: "BOT_DECISION",
+  at: Date.now(),
+
+  metrics,
+
+  // (optioneel) puur debug: wat adviseerde heuristic?
+  // recDecision: rec?.decision || null,
+  // cashoutBias: Number(rec?.cashoutBias ?? 0),
+};
+    
     // Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
     const nextEvent0 = nextEventId(g, 0);
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
