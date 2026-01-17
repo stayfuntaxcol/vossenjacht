@@ -149,16 +149,11 @@ function handToActionIds(hand) {
 }
 
 function computeCarryValue(p) {
-  const eggs = Number(bot?.eggs || 0);
-  const hens = Number(bot?.hens || 0);
-  const prize = bot?.prize ? 3 : 0;
+  const eggs = Number(p?.eggs || 0);
+  const hens = Number(p?.hens || 0);
+  const prize = p?.prize ? 3 : 0;
 
-  const loot = Array.isArray(bot?.loot) ? bot.loot : [];
-  const lootPts = loot.reduce((s, c) => {
-    const raw = c?.v ?? c?.value ?? c?.points ?? c?.pts ?? 1;
-    const n = Number(raw);
-    return s + (Number.isFinite(n) ? n : 1);
-  }, 0);
+  const lootPts = sumLootPoints(p); // gebruikt p.loot
 
   const HEN_VALUE = 3;
   const EGG_VALUE = 1;
@@ -1192,7 +1187,7 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
       }
 
       // ---- metrics voor logging (vlak vóór logBotDecision) ----
-      const carryNow = computeCarryValue(p);
+      const carryNow = computeCarryValue(bot);
       ctx.carryValue = carryNow; // core gebruikt dit
 
       let core = null;
@@ -1218,50 +1213,61 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
 
       const dangerStay = dangerVec ? Math.min(dangerVec.lurk, dangerVec.burrow) : 0;
 
-      // ---- decision log (OPS only) ----
-      if (String(game?.phase || "") === "OPS") {
-        await logBotDecision(db, gameId, {
-          phase: ctx?.phase || String(game?.phase || ""),
-          round: Number(game?.round || ctx?.round || 0),
-          opsTurnIndex: Number(game?.opsTurnIndex || 0),
+// ---- decision log (OPS only) ----
+if (String(game?.phase || "") === "OPS") {
+  const phase = String(ctx?.phase || game?.phase || "");
+  const round = Number(game?.round ?? ctx?.round ?? 0);
+  const opsTurnIndex = Number(game?.opsTurnIndex ?? 0);
 
-          by: bot.id,
-          presetKey,
-          denColor,
+  const carryValue = Number(carryNow ?? 0);
 
-          pick: { actionId: id, targetId: targetId || null },
+  const rankedTop = (Array.isArray(ranked) ? ranked : [])
+    .slice(0, 6)
+    .map((r) => ({
+      id: r?.id,
+      total: Number(r?.total ?? 0),
+      coreDelta: Number(r?.s?.coreDelta ?? 0),
+      stratDelta: Number(r?.s?.stratDelta ?? 0),
+    }));
 
-          rankedTop: (Array.isArray(ranked) ? ranked : []).slice(0, 6).map((r) => ({
-            id: r?.id,
-            total: Number(r?.total || 0),
-            coreDelta: Number(r?.s?.coreDelta || 0),
-            stratDelta: Number(r?.s?.stratDelta || 0),
-          })),
+  await logBotDecision(db, gameId, {
+    phase,
+    round,
+    opsTurnIndex,
 
-          ctxMini: {
-            carryValue: Number(carryNow || 0),
-            carryDebug: {
-                eggs: Number(bot?.eggs || 0),
-                hens: Number(bot?.hens || 0),
-                prize: !!bot?.prize,
-                lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
-                lootSample: Array.isArray(bot?.loot) ? bot.loot[0] : null,
-              },
-            dangerNext: Number(ctx?.dangerNext || 0),
-            dangerPeak: Number(dangerPeak || 0),
-            dangerStay: Number(dangerStay || 0),
-            dangerVec: dangerVec || null,
+    by: bot.id,
+    presetKey,
+    denColor,
 
-            dangerEffective: Number(core?.dangerEffective ?? 0),
-            cashoutBias: Number(core?.cashoutBias ?? 0),
+    pick: { actionId: id, targetId: targetId ?? null },
 
-            scoutTier: ctx?.scoutTier || "NO_SCOUT",
-            nextKnown: !!ctx?.nextKnown,
-            postRooster2Window: !!ctx?.postRooster2Window,
-            actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
-          },
-        });
-      }
+    rankedTop,
+
+    ctxMini: {
+      carryValue,
+      carryDebug: {
+        eggs: Number(bot?.eggs ?? 0),
+        hens: Number(bot?.hens ?? 0),
+        prize: !!bot?.prize,
+        lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
+        lootSample: Array.isArray(bot?.loot) ? bot.loot[0] : null,
+      },
+
+      dangerNext: Number(ctx?.dangerNext ?? 0),
+      dangerPeak: Number(dangerPeak ?? 0),
+      dangerStay: Number(dangerStay ?? 0),
+      dangerVec: dangerVec ?? null,
+
+      dangerEffective: Number(core?.dangerEffective ?? 0),
+      cashoutBias: Number(core?.cashoutBias ?? 0),
+
+      scoutTier: ctx?.scoutTier ?? "NO_SCOUT",
+      nextKnown: !!ctx?.nextKnown,
+      postRooster2Window: !!ctx?.postRooster2Window,
+      actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound ?? 0),
+    },
+  });
+}
 
       // ✅ IMPORTANT: actually return the playable card
       const chosenName =
