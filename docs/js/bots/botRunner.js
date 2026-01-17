@@ -1133,12 +1133,6 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
     const botPlayedSet = new Set(botPlayedActionIdsThisRound);
 
     // Anti-duplicate: global singleton (bots only)
-    const GLOBAL_SINGLETON_ACTIONS = new Set(["KICK_UP_DUST", "PACK_TINKER", "NO_GO_ZONE", "SCATTER"]);
-
-       // Anti-duplicate: bot itself not twice same action in same round
-    const botPlayedSet = new Set(botPlayedActionIdsThisRound);
-
-    // Anti-duplicate: global singleton (bots only)
     const GLOBAL_SINGLETON_ACTIONS = new Set([
       "KICK_UP_DUST",
       "PACK_TINKER",
