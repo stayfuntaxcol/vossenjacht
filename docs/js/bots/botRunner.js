@@ -1243,7 +1243,7 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
                 prize: !!bot?.prize,
                 lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
                 lootSample: Array.isArray(bot?.loot) ? bot.loot[0] : null,
-              }
+              },
             dangerNext: Number(ctx?.dangerNext || 0),
             dangerPeak: Number(dangerPeak || 0),
             dangerStay: Number(dangerStay || 0),
