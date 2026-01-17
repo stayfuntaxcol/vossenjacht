@@ -1744,8 +1744,6 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
           : {}),
       });
 
-     const pAfter = { ...p, hand, color: p.color, den: p.color };
-
 const pAfter = { ...p, hand, color: p.color, den: p.color };
 
 const metrics = computeDangerMetrics({
