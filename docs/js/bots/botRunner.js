@@ -1247,33 +1247,35 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
             stratDelta: Number(r?.s?.stratDelta || 0),
           })),
 
-          ctxMini: {
-            carryValue: Number(carryNow || 0),
-            carryDebug: {
-                eggs: Number(bot?.eggs || 0),
-                hens: Number(bot?.hens || 0),
-                prize: !!bot?.prize,
-                lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
-                lootSample: Array.isArray(bot?.loot) ? bot.loot[0] : null,
-              },
-            dangerNext: Number(ctx?.dangerNext || 0),
-            dangerPeak: Number(dangerPeak || 0),
-            dangerStay: Number(dangerStay || 0),
-            dangerVec: dangerVec || null,
-            carryCompare: {
-                botLootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
-                pLootLen: Array.isArray(p?.loot) ? p.loot.length : 0,
-                botCarry: computeCarryValue(bot),
-                pCarry: computeCarryValue(p),
-                },
-            dangerEffective: Number(core?.dangerEffective ?? 0),
-            cashoutBias: Number(core?.cashoutBias ?? 0),
+         ctxMini: {
+  carryValue: Number(carryNow || 0),
+  carryDebug: {
+    eggs: Number(p?.eggs || 0),
+    hens: Number(p?.hens || 0),
+    prize: !!p?.prize,
+    lootLen: Array.isArray(p?.loot) ? p.loot.length : 0,
+    lootSample: Array.isArray(p?.loot) ? p.loot[0] : null,
+  },
 
-            scoutTier: ctx?.scoutTier || "NO_SCOUT",
-            nextKnown: !!ctx?.nextKnown,
-            postRooster2Window: !!ctx?.postRooster2Window,
-            actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
-          },
+  // als je compare wilt, doe alleen p (bot bestaat hier niet)
+  carryCompare: {
+    pLootLen: Array.isArray(p?.loot) ? p.loot.length : 0,
+    pCarry: computeCarryValue(p),
+  },
+
+  dangerNext: Number(ctx?.dangerNext || 0),
+  dangerPeak: Number(dangerPeak || 0),
+  dangerStay: Number(dangerStay || 0),
+  dangerVec: dangerVec || null,
+
+  dangerEffective: Number(core?.dangerEffective ?? 0),
+  cashoutBias: Number(core?.cashoutBias ?? 0),
+
+  scoutTier: ctx?.scoutTier || "NO_SCOUT",
+  nextKnown: !!ctx?.nextKnown,
+  postRooster2Window: !!ctx?.postRooster2Window,
+  actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
+      },
         });
       }
 
