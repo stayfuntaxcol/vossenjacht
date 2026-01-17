@@ -1746,14 +1746,14 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
 
      const pAfter = { ...p, hand, color: p.color, den: p.color };
 
+const pAfter = { ...p, hand, color: p.color, den: p.color };
+
 const metrics = computeDangerMetrics({
-  game: { ...g, ...extraGameUpdates, flagsRound }, // reflecteer eventuele track updates
+  game: { ...g, flagsRound },     // ✅ geen extraGameUpdates hier
   player: pAfter,
   players: latestPlayers || [],
   flagsRound,
-  intel: {
-    knownUpcomingEvents: Array.isArray(pAfter.knownUpcomingEvents) ? pAfter.knownUpcomingEvents : [],
-  },
+  intel: { knownUpcomingEvents: Array.isArray(pAfter.knownUpcomingEvents) ? pAfter.knownUpcomingEvents : [] },
 });
 
 logPayload = {
@@ -1761,15 +1761,15 @@ logPayload = {
   phase: "ACTIONS",
   playerId: botId,
   playerName: p.name || "BOT",
-  choice: isPass ? "OPS_PASS" : `ACTION_${cardName}`,
-  message: msg,
+  choice: "OPS_PASS",
+  message: "BOT past (OPS)",
   metrics,
-};
-      await logBotAction({ db, gameId, addLog: null, payload: logPayload });
+  };
+  });
 
-      return;
-    }
-
+if (logPayload) {
+  await logBotAction({ db, gameId, addLog: null, payload: logPayload });
+}
     // =========================
     // TRY REMOVE CARD FROM HAND
     // =========================
