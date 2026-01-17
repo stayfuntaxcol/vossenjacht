@@ -2003,6 +2003,8 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
   const pRef = doc(db, "games", gameId, "players", botId);
 
   let logPayload = null;
+  let carryNow = 0;
+  let carryRec = 0;
 
   await runTransaction(db, async (tx) => {
     const gSnap = await tx.get(gRef);
@@ -2064,9 +2066,8 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
 
     tx.update(pRef, update);
 
-    const carryNow = Number(computeCarryValue(p) ?? 0);
-    const carryRec = Number(rec?.carryValue ?? 0); // optioneel bewaren
-
+    carryNow = Number(computeCarryValue(p) ?? 0);
+    carryRec = Number(rec?.carryValue ?? 0);
     
     logPayload = {
       round: Number(g.round || 0),
