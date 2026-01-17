@@ -160,7 +160,12 @@ function computeCarryValue(p) {
   const hens = Number(p?.hens ?? 0);
   const prize = p?.prize ? 3 : 0;
 
-  const lootPts = sumLootPoints(p); // gebruikt p.loot
+  const loot = Array.isArray(p?.loot) ? p.loot : [];
+  const lootPts = loot.reduce((s, c) => {
+    const raw = c?.v ?? c?.value ?? c?.points ?? c?.pts ?? 0;
+    const n = Number(raw);
+    return s + (Number.isFinite(n) ? n : 0);
+  }, 0);
 
   return eggs * 1 + hens * 3 + prize + lootPts;
 }
@@ -810,7 +815,7 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
   const opsLockedActive = !!game?.flagsRound?.opsLocked;
 
   // --- carry value (use score if present) ---
- const carryValue = computeCarryValue(pAfter);
+ const carryValue = computeCarryValue(p);
 
   // --- follow target hints (simple v1) ---
   const list = Array.isArray(players) ? players : [];
@@ -1365,26 +1370,27 @@ function getRunnerId() {
 }
 
 /** ===== logging ===== */
-async function logBotAction({ db, gameId, addLog, payload, carryValue }) {
-  const cv = Number(carryValue ?? payload?.carryValue ?? payload?.ctxMini?.carryValue);
+async function logBotAction({ db, gameId, addLog, carryValue, payload }) {
+  const cv = Number(carryValue ?? payload?.carryValue ?? 0);
 
-  const docData = {
+  await addDoc(collection(db, "games", gameId, "actions"), {
     ...payload,
+
+    // ✅ top-level carryValue (makkelijk filteren in Firestore)
+    carryValue: Number.isFinite(cv) ? cv : 0,
+
     createdAt: serverTimestamp(),
-  };
-
-  // alleen wegschrijven als het een echt getal is
-  if (Number.isFinite(cv)) docData.carryValue = cv;
-
-  await addDoc(collection(db, "games", gameId, "actions"), docData);
+  });
 
   if (typeof addLog === "function") {
     await addLog(gameId, {
-      round: payload.round ?? 0,
-      phase: payload.phase ?? "",
+      round: payload?.round ?? 0,
+      phase: payload?.phase ?? "",
       kind: "BOT",
-      playerId: payload.playerId,
-      message: payload.message || `${payload.playerName || "BOT"}: ${payload.choice}`,
+      playerId: payload?.playerId,
+      message:
+        payload?.message ||
+        `${payload?.playerName || "BOT"}: ${payload?.choice}`,
     });
   }
 }
@@ -1476,12 +1482,11 @@ async function acquireBotLock({ db, gameId, gameRef, runnerKey }) {
 }
 
 /** ===== smarter MOVE ===== */
-async function botDoMove({ db, gameId, botId, addLog }) {
+async function botDoMove({ db, gameId, botId }) {
   const gRef = doc(db, "games", gameId);
   const pRef = doc(db, "games", gameId, "players", botId);
 
   let logPayload = null;
-  let carryValue = null;
 
   await runTransaction(db, async (tx) => {
     const gSnap = await tx.get(gRef);
@@ -1502,48 +1507,62 @@ async function botDoMove({ db, gameId, botId, addLog }) {
     const myColor = normColor(p.color);
     const immune = !!flags.denImmune?.[myColor];
     const upcoming = classifyEvent(nextEventId(g, 0));
-    const lootPts = sumLootPoints(p);
+    const lootPts = sumLootPoints({ loot });
 
-    // ------------------------------------------------------------
-    // ✅ HIER komt jouw bestaande MOVE-beslissing + tx.update(...) code
-    // - je mutates: moved, hand, actionDeck, lootDeck, loot, eggs/hens/prize etc.
-    // - je doet tx.update(pRef, {...}) en tx.update(gRef, {...})
-    // - je zet logPayload = {...} met choice/phase/round/playerId/payload/message
-    // ------------------------------------------------------------
+    // Priorities:
+    // 1) If Gate Toll soon and no loot: grab loot
+    const mustHaveLoot = upcoming.type === "TOLL";
+    // 2) If danger soon and no Den Signal in hand: forage to fish for defense
+    const dangerSoon =
+      upcoming.type === "DOG" || (upcoming.type === "DEN" && normColor(upcoming.color) === myColor);
+    const needsDefense = dangerSoon && !immune && !hasCard(hand, "Den Signal");
 
-    // Als je niets deed, stop
-    if (!logPayload) return;
+    // Choose MOVE
+    let did = null;
 
-    // ✅ pAfter = spelerstaat NA mutaties (hand/loot zijn arrays die jij al gemuteerd hebt)
-    const pAfter = {
-      ...p,
-      hand,
-      loot,
-      // als jij eggs/hens/prize in jouw MOVE wijzigt, zet ze dan ook in pAfter
-      // eggs: newEggs,
-      // hens: newHens,
-      // prize: newPrize,
-    };
+    if (mustHaveLoot && lootPts <= 0) {
+      if (!lootDeck.length) return;
+      const card = lootDeck.pop();
+      loot.push(card);
+      did = { kind: "SNATCH", detail: `${card.t || "Loot"} ${card.v ?? ""}` };
+    } else if (needsDefense && actionDeck.length) {
+      // draw up to 2
+      let drawn = 0;
+      for (let i = 0; i < 2; i++) {
+        if (!actionDeck.length) break;
+        hand.push(actionDeck.pop());
+        drawn++;
+      }
+      did = { kind: "FORAGE", detail: `${drawn} kaart(en)` };
+    } else if (hand.length < 2 && actionDeck.length) {
+      let drawn = 0;
+      for (let i = 0; i < 2; i++) {
+        if (!actionDeck.length) break;
+        hand.push(actionDeck.pop());
+        drawn++;
+      }
+      did = { kind: "FORAGE", detail: `${drawn} kaart(en)` };
+    } else {
+      if (!lootDeck.length) return;
+      const card = lootDeck.pop();
+      loot.push(card);
+      did = { kind: "SNATCH", detail: `${card.t || "Loot"} ${card.v ?? ""}` };
+    }
 
-    carryValue = Number(computeCarryValue(pAfter) ?? 0);
+    tx.update(pRef, { hand, loot });
+    tx.update(gRef, { actionDeck, lootDeck, movedPlayerIds: [...new Set([...moved, botId])] });
 
-    // ✅ zet carryValue ook in payload (top-level veld in actions)
     logPayload = {
-      ...logPayload,
-      carryValue,
+      round: Number(g.round || 0),
+      phase: "MOVE",
+      playerId: botId,
+      playerName: p.name || "BOT",
+      choice: `MOVE_${did.kind}`,
+      message: `BOT deed ${did.kind} (${did.detail})`,
     };
   });
 
-  // ✅ LOG NA de transaction (addDoc in tx is niet handig/veilig)
-  if (logPayload) {
-    await logBotAction({
-      db,
-      gameId,
-      addLog,        // mag undefined zijn
-      carryValue,    // logBotAction schrijft dit weg als top-level carryValue
-      payload: logPayload,
-    });
-  }
+  if (logPayload) await logBotAction({ db, gameId, addLog: null, payload: logPayload });
 }
 
 /** ===== smarter OPS ===== */
