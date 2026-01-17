@@ -717,6 +717,24 @@ function getNextEventId(game) {
   }
   return game.currentEventId || null;
 }
+function getNextEventIndex(game) {
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
+
+  // Prefer eventRevealed: find first unrevealed slot
+  if (track.length && rev.length) {
+    const n = Math.min(track.length, rev.length);
+    for (let i = 0; i < n; i++) {
+      if (rev[i] !== true) return i;
+    }
+    return n; // all revealed up to n
+  }
+
+  // Fallback to eventIndex
+  const idx = Number.isFinite(Number(game?.eventIndex)) ? Number(game.eventIndex) : 0;
+  return Math.max(0, Math.min(track.length ? track.length - 1 : 0, idx));
+}
+
 
 function pickSafestDecisionForUpcomingEvent(game) {
   const nextId = getNextEventId(game);
