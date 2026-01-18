@@ -352,11 +352,27 @@ export function computeDangerMetrics({
   }
 
   // 2) explicit intel on player / passed in
-  knownListRaw.push(...safeArr(intel?.knownUpcomingEvents || player?.knownUpcomingEvents));
+const idx = num(game?.eventIndex, 0);
 
-  const knownList = knownListRaw
-    .map((x) => String(x || "").trim())
-    .filter(Boolean);
+const denColor = normColor(intel?.denColor || player?.color || player?.den || player?.denColor);
+const denEntry =
+  flags?.denIntel && typeof flags.denIntel === "object"
+    ? flags.denIntel[denColor]
+    : null;
+
+const denEvents =
+  denEntry && Number(denEntry.atEventIndex) === idx && Array.isArray(denEntry.events)
+    ? denEntry.events
+    : [];
+
+const knownListRaw = [
+  ...safeArr(intel?.knownUpcomingEvents || player?.knownUpcomingEvents),
+  ...safeArr(denEvents),
+];
+
+const knownList = knownListRaw
+  .map((x) => String(x || "").trim())
+  .filter(Boolean);
 
   // Track-peek is allowed when noPeek !== true
   const nextByTrack = !noPeek && track[idx] ? String(track[idx]) : null;
