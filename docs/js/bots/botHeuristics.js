@@ -399,7 +399,7 @@ function isEarlyGame(game) {
 
 function getNextEventKey(game, ctx) {
   // noPeek: do not infer next unrevealed card from eventTrack
-  if (game?.flagsRound?.noPeek) return null;
+  if (game?.flagsRound?.noPeek === true) return null;
 
   const idx = Number(game?.eventIndex);
   const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
