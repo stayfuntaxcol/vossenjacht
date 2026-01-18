@@ -1536,16 +1536,76 @@ async function botDoMove({ db, gameId, botId, latestPlayers = [] }) {
     const flags = fillFlags(g.flagsRound);
     const myColor = normColor(p.color);
     const immune = !!flags.denImmune?.[myColor];
-    const upcoming = classifyEvent(nextEventId(g, 0));
     const lootPts = sumLootPoints({ loot });
 
-    // Priorities:
-    // 1) If Gate Toll soon and no loot: grab loot
-    const mustHaveLoot = upcoming.type === "TOLL";
-    // 2) If danger soon and no Den Signal in hand: forage to fish for defense
-    const dangerSoon =
-      upcoming.type === "DOG" || (upcoming.type === "DEN" && normColor(upcoming.color) === myColor);
-    const needsDefense = dangerSoon && !immune && !hasCard(hand, "Den Signal");
+    // === Metrics-driven MOVE planning (carryValueRec + dangerEffective) ===
+    // Rule: do NOT peek the hidden next event. Only use deterministic next-event info
+    // if the bot actually knows it (SCOUT / intel). Otherwise rely on probabilistic danger.
+    const meForMetrics = { ...p, hand, loot };
+
+    const basePlayers = Array.isArray(latestPlayers) ? latestPlayers : [];
+    const mergedPlayers = basePlayers.length
+      ? basePlayers.map((x) => (String(x?.id) === String(botId) ? meForMetrics : x))
+      : [meForMetrics];
+
+    const isLead = computeIsLeadForPlayer(g, meForMetrics, mergedPlayers);
+    const carryExact = computeCarryValue(meForMetrics);
+    const carryRecObj = computeCarryValueRec({
+      game: g,
+      player: meForMetrics,
+      players: mergedPlayers,
+      mode: "publicSafe",
+    });
+    const carryValueRec = Number(carryRecObj?.carryValueRec || 0);
+
+    const danger = computeDangerMetrics({
+      game: g,
+      player: meForMetrics,
+      players: mergedPlayers,
+      flagsRound: flags,
+      intel: {
+        denColor: myColor,
+        isLead,
+        carryValueExact: carryExact,
+        carryValueRec,
+      },
+    });
+
+    const dangerEffective = Number(danger?.dangerEffective || 0);
+    const pDanger = Number(danger?.pDanger || 0);
+    const confidence = Number(danger?.confidence || 0);
+
+    const nextUsedId = danger?.nextEventIdUsed || null;
+    const upcoming = nextUsedId ? classifyEvent(nextUsedId) : { type: "UNKNOWN" };
+
+    // Defense readiness: can we survive a bad obstacle without needing to DASH?
+    const hasHardDefense = hasCard(hand, "Den Signal");
+    const hasTrackDefense =
+      !flags.lockEvents &&
+      (hasCard(hand, "Kick Up Dust") || hasCard(hand, "Pack Tinker"));
+    const defenseReady = immune || hasHardDefense || hasTrackDefense;
+
+    // If we *know* Gate Toll is next and we have no loot -> SNATCH to avoid forced capture.
+    const mustHaveLoot =
+      upcoming.type === "TOLL" && danger?.intel?.nextKnown === true;
+
+    // Translate (carryValueRec + dangerEffective) into SNATCH vs FORAGE.
+    // Goal: bots aim for high score (keep farming), but invest in survivability so they can keep LURKing later.
+    const dangerHigh = dangerEffective >= 7.0;
+    const dangerMid = dangerEffective >= 5.2;
+    const uncertain = confidence <= 0.40;
+    const cashPressure = carryValueRec >= 8.0;
+    const extremePressure = carryValueRec >= 10.5;
+
+    const wantForage =
+      !mustHaveLoot &&
+      actionDeck.length > 0 &&
+      (
+        (dangerHigh && !defenseReady) ||
+        (dangerMid && cashPressure && !defenseReady) ||
+        (extremePressure && (pDanger >= 0.25 || uncertain) && hand.length < 3) ||
+        (hand.length < 2)
+      );
 
     // Choose MOVE
     let did = null;
@@ -1555,29 +1615,39 @@ async function botDoMove({ db, gameId, botId, latestPlayers = [] }) {
       const card = lootDeck.pop();
       loot.push(card);
       did = { kind: "SNATCH", detail: `${card.t || "Loot"} ${card.v ?? ""}` };
-    } else if (needsDefense && actionDeck.length) {
-      // draw up to 2
+    } else if (wantForage) {
+      // draw up to 2 action cards
       let drawn = 0;
       for (let i = 0; i < 2; i++) {
         if (!actionDeck.length) break;
         hand.push(actionDeck.pop());
         drawn++;
       }
-      did = { kind: "FORAGE", detail: `${drawn} kaart(en)` };
-    } else if (hand.length < 2 && actionDeck.length) {
-      let drawn = 0;
-      for (let i = 0; i < 2; i++) {
-        if (!actionDeck.length) break;
-        hand.push(actionDeck.pop());
-        drawn++;
-      }
-      did = { kind: "FORAGE", detail: `${drawn} kaart(en)` };
+      did = {
+        kind: "FORAGE",
+        detail: `${drawn} kaart(en) (rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)})`,
+      };
     } else {
-      if (!lootDeck.length) return;
-      const card = lootDeck.pop();
-      loot.push(card);
-      did = { kind: "SNATCH", detail: `${card.t || "Loot"} ${card.v ?? ""}` };
+      // Default: SNATCH (farm points). If loot is empty, fallback to FORAGE.
+      if (!lootDeck.length) {
+        if (!actionDeck.length) return;
+        let drawn = 0;
+        for (let i = 0; i < 2; i++) {
+          if (!actionDeck.length) break;
+          hand.push(actionDeck.pop());
+          drawn++;
+        }
+        did = { kind: "FORAGE", detail: `${drawn} kaart(en) (loot op)` };
+      } else {
+        const card = lootDeck.pop();
+        loot.push(card);
+        did = {
+          kind: "SNATCH",
+          detail: `${card.t || "Loot"} ${card.v ?? ""} (rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)})`,
+        };
+      }
     }
+
 
     tx.update(pRef, { hand, loot });
     tx.update(gRef, { actionDeck, lootDeck, movedPlayerIds: [...new Set([...moved, botId])] });
