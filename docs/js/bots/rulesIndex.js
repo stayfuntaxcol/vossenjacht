@@ -107,14 +107,14 @@ function deriveEventDanger(ev, ctx) {
     dangerBurrow = 0;
     notes.push("CATCH_DASHERS: DASH is gevaarlijk.");
   }
-  
-   // Sheepdog Patrol is a special CATCH_DASHERS: it's SAFE for everyone except DASH.
+ 
+  // Sheepdog Patrol is NOT a "general danger" event: it's SAFE for everyone except DASH.
   // Bots should not "panic dash" here; they should prefer staying (LURK) unless other reasons push DASH.
   if (ev.id === "SHEEPDOG_PATROL") {
     dangerDash = Math.max(dangerDash, 10);
     dangerLurk = 0;
-    dangerBurrow = 0;
-    notes.push("SHEEPDOG_PATROL: alleen DASH is gevaarlijk; LURK/BURROW zijn veilig.");
+    dangerBurrow = 5;
+    notes.push("SHEEPDOG_PATROL: alleen DASH is gevaarlijk; LURK is veilig.");
   }
   
   if (tags.has("CATCH_ALL_YARD")) {
