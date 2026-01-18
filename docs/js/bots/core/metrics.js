@@ -330,56 +330,33 @@ export function computeDangerMetrics({
   // scale danger slightly with "loss severity" (more carried loot -> more to lose)
   const severityScale = 1 + clamp(carryExact / 10, 0, 1) * 0.5; // up to +50%
 
-  const track = safeArr(game?.eventTrack);
+    const track = safeArr(game?.eventTrack);
   const idx = num(game?.eventIndex, 0);
-
-  // For probabilistic mode (when track is visible but we still want EV estimates)
   const remainingBag = track.slice(Math.max(0, idx));
 
-  // -------- Known upcoming events (SCOUT / PREDICT_EVENT / stored intel) --------
-  // Never discard knownUpcomingEvents when noPeek=true; that is exactly when SCOUT matters.
-  const knownListRaw = [];
+  // Combine per-player intel + shared den intel (optional)
+  const denIntelEntry =
+    (flags?.denIntel && typeof flags.denIntel === "object")
+      ? flags.denIntel[denColor]
+      : null;
 
-  // 1) predictions (e.g. Nose for Trouble / PREDICT_EVENT) stored on flagsRound.predictions
-  const preds = Array.isArray(flags?.predictions) ? flags.predictions : [];
-  if (pid && preds.length) {
-    let lastPred = null;
-    for (const pr of preds) {
-      const prPid = String(pr?.playerId || pr?.pid || pr?.id || "");
-      if (prPid === pid && pr?.eventId) lastPred = pr;
-    }
-    if (lastPred?.eventId) knownListRaw.push(lastPred.eventId);
-  }
+  const denEvents =
+    (denIntelEntry &&
+      Number(denIntelEntry.atEventIndex) === Number(idx) &&
+      Array.isArray(denIntelEntry.events))
+      ? denIntelEntry.events
+      : [];
 
-  // 2) explicit intel on player / passed in
-// idx is already declared earlier in this function
-const denColor2 = normColor(intel?.denColor || player?.color || player?.den || player?.denColor);
+  const knownList = [
+    ...safeArr(intel?.knownUpcomingEvents || player?.knownUpcomingEvents),
+    ...safeArr(denEvents),
+  ]
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
 
-const denEntry =
-  flags?.denIntel && typeof flags.denIntel === "object"
-    ? flags.denIntel[denColor2]
-    : null;
-
-const denEvents =
-  denEntry &&
-  Number(denEntry.atEventIndex) === Number(idx) &&
-  Array.isArray(denEntry.events)
-    ? denEntry.events
-    : [];
-
-const knownListRaw = [
-  ...safeArr(intel?.knownUpcomingEvents || player?.knownUpcomingEvents),
-  ...safeArr(denEvents),
-];
-
-const knownList = knownListRaw
-  .map((x) => String(x || "").trim())
-  .filter(Boolean);
-
-  // Track-peek is allowed when noPeek !== true
   const nextByTrack = !noPeek && track[idx] ? String(track[idx]) : null;
 
-  // nextKnown: true if we can see track OR we have a scouted/predicted next
+  // nextKnown: track-visible OR scouted/shared intel
   const nextKnown = (!!nextByTrack && !noPeek) || knownList.length > 0;
 
   const scopedCtx = {
@@ -396,19 +373,16 @@ const knownList = knownListRaw
   let confidence = 0;
   let debug = {};
 
-  // -------------------------
-  // Mode selection
-  // -------------------------
+  // 1) Deterministic from track (when peeking is allowed)
   if (!noPeek && nextByTrack) {
-    // Deterministic from the eventTrack (bots are allowed to "see" next when noPeek is false)
     const id1 = nextByTrack;
     const id2 = track[idx + 1] ? String(track[idx + 1]) : null;
 
     const f1 = scopeEventFacts(id1, scopedCtx);
     const f2 = id2 ? scopeEventFacts(id2, scopedCtx) : null;
 
-    const w1 = 0.75;
-    const w2 = f2 ? 0.25 : 0.0;
+    const w1 = 0.7;
+    const w2 = f2 ? 0.3 : 0.0;
     const ww = w2 > 0 ? (w1 + w2) : 1.0;
 
     dangerVec = {
@@ -418,11 +392,7 @@ const knownList = knownListRaw
     };
 
     nextEventIdUsed = id1;
-
-    const d1 = peakDanger(f1);
-    const d2 = peakDanger(f2);
-    pDanger = (d1 >= 7 ? 1 : 0) * 0.8 + (d2 >= 7 ? 1 : 0) * 0.2;
-
+    pDanger = (peakDanger(f1) >= 7 ? 1 : 0) * 0.8 + (f2 && peakDanger(f2) >= 7 ? 1 : 0) * 0.2;
     confidence = f2 ? 0.85 : 0.7;
 
     debug = {
@@ -432,17 +402,19 @@ const knownList = knownListRaw
       used2: !!f2,
       appliesToMe: f1?._appliesToMe,
       noPeek,
+      knownUpcomingCount: knownList.length,
     };
-  } else if (knownList.length) {
-    // Deterministic from SCOUT / prediction (when noPeek is true, this is the only “legal” knowledge)
+  }
+  // 2) Deterministic from SCOUT/shared intel (when noPeek is on)
+  else if (knownList.length) {
     const id1 = String(knownList[0]);
     const id2 = knownList.length >= 2 ? String(knownList[1]) : null;
 
     const f1 = scopeEventFacts(id1, scopedCtx);
     const f2 = id2 ? scopeEventFacts(id2, scopedCtx) : null;
 
-    const w1 = 0.75;
-    const w2 = f2 ? 0.25 : 0.0;
+    const w1 = 0.7;
+    const w2 = f2 ? 0.3 : 0.0;
     const ww = w2 > 0 ? (w1 + w2) : 1.0;
 
     dangerVec = {
@@ -452,11 +424,7 @@ const knownList = knownListRaw
     };
 
     nextEventIdUsed = id1;
-
-    const d1 = peakDanger(f1);
-    const d2 = peakDanger(f2);
-    pDanger = (d1 >= 7 ? 1 : 0) * 0.8 + (d2 >= 7 ? 1 : 0) * 0.2;
-
+    pDanger = (peakDanger(f1) >= 7 ? 1 : 0) * 0.8 + (f2 && peakDanger(f2) >= 7 ? 1 : 0) * 0.2;
     confidence = f2 ? 0.75 : 0.6;
 
     debug = {
@@ -466,44 +434,34 @@ const knownList = knownListRaw
       used2: !!f2,
       appliesToMe: f1?._appliesToMe,
       noPeek,
+      knownUpcomingCount: knownList.length,
     };
-  } else {
-    // Probabilistic fallback
-    if (!noPeek && remainingBag.length) {
-      // Track is visible but caller chooses EV approach (rare now)
-      const exp = computeExpectedFactsFromBag(remainingBag, scopedCtx);
-
-      dangerVec = {
-        dash: exp.expDash,
-        lurk: exp.expLurk,
-        burrow: exp.expBurrow,
-      };
-
-      nextEventIdUsed = null;
-      pDanger = exp.pDanger;
-      confidence = 0.45;
-
-      debug = {
-        mode: "probabilistic_trackbag",
-        bagN: exp.n,
-        nextByTrack,
-        knownUpcomingCount: knownList.length,
-        noPeek,
-      };
-    } else {
-      // Truly blind: keep it mild to avoid panic-dashing
-      dangerVec = { dash: 3.5, lurk: 2.8, burrow: 2.2 };
-      nextEventIdUsed = null;
-      pDanger = 0.25;
-      confidence = 0.25;
-
-      debug = {
-        mode: "probabilistic_blind",
-        knownUpcomingCount: knownList.length,
-        noPeek,
-      };
-    }
   }
+  // 3) Probabilistic fallback
+  else {
+    const exp = computeExpectedFactsFromBag(remainingBag, scopedCtx);
+
+    dangerVec = {
+      dash: exp.expDash,
+      lurk: exp.expLurk,
+      burrow: exp.expBurrow,
+    };
+
+    nextEventIdUsed = null;
+    pDanger = exp.pDanger;
+    confidence = noPeek ? 0.25 : 0.45;
+
+    debug = {
+      mode: "probabilistic",
+      bagN: exp.n,
+      nextByTrack,
+      knownUpcomingCount: knownList.length,
+      noPeek,
+    };
+  }
+
+  // expose whether we consider next known (used elsewhere like Gate Toll mustHaveLoot)
+  debug.nextKnown = nextKnown;
 
   // Ops locked -> staying is more dangerous because you can't play defense actions.
   if (opsLocked) {
