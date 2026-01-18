@@ -307,41 +307,62 @@ export function computeDangerMetrics({
 
   const flags = flagsRound || game?.flagsRound || {};
 
-  const noPeek = bool(flags?.noPeek) || bool(intel?.noPeek);
-  const opsLocked = bool(flags?.opsLocked);
+  // IMPORTANT: strict booleans (avoid {} / [] becoming truthy)
+  const noPeek = flags?.noPeek === true || intel?.noPeek === true;
+  const opsLocked = flags?.opsLocked === true;
 
-// holdStill can be either:
-// - true (global)
-// - a per-player map: { [playerId]: true }
-// Default in fillFlags() is {} and must NOT be treated as active.
-const pid = String(player?.id || intel?.playerId || "");
-const hs = flags?.holdStill;
+  // holdStill can be either:
+  // - true (global)
+  // - a per-player map: { [playerId]: true }
+  const pid = String(player?.id || intel?.playerId || "");
+  const hs = flags?.holdStill;
 
-const holdStill =
-  hs === true ||
-  (hs && typeof hs === "object" && pid && !!hs[pid]) ||
-  (typeof intel?.holdStill === "boolean" ? intel.holdStill : false);
+  const holdStill =
+    hs === true ||
+    (hs && typeof hs === "object" && pid && !!hs[pid]) ||
+    (typeof intel?.holdStill === "boolean" ? intel.holdStill : false);
 
-const carryExact = num(
-  intel?.carryValueExact,
-  num(intel?.carryValue, computeCarryValue(player))
-);
+  const carryExact = num(
+    intel?.carryValueExact,
+    num(intel?.carryValue, computeCarryValue(player))
+  );
 
   // scale danger slightly with "loss severity" (more carried loot -> more to lose)
   const severityScale = 1 + clamp(carryExact / 10, 0, 1) * 0.5; // up to +50%
 
   const track = safeArr(game?.eventTrack);
   const idx = num(game?.eventIndex, 0);
+
+  // For probabilistic mode (when track is visible but we still want EV estimates)
   const remainingBag = track.slice(Math.max(0, idx));
 
-  const knownListRaw = safeArr(intel?.knownUpcomingEvents || player?.knownUpcomingEvents);
-  const knownList = noPeek ? [] : knownListRaw.map((x) => String(x || "").trim()).filter(Boolean);
+  // -------- Known upcoming events (SCOUT / PREDICT_EVENT / stored intel) --------
+  // Never discard knownUpcomingEvents when noPeek=true; that is exactly when SCOUT matters.
+  const knownListRaw = [];
 
+  // 1) predictions (e.g. Nose for Trouble / PREDICT_EVENT) stored on flagsRound.predictions
+  const preds = Array.isArray(flags?.predictions) ? flags.predictions : [];
+  if (pid && preds.length) {
+    let lastPred = null;
+    for (const pr of preds) {
+      const prPid = String(pr?.playerId || pr?.pid || pr?.id || "");
+      if (prPid === pid && pr?.eventId) lastPred = pr;
+    }
+    if (lastPred?.eventId) knownListRaw.push(lastPred.eventId);
+  }
+
+  // 2) explicit intel on player / passed in
+  knownListRaw.push(...safeArr(intel?.knownUpcomingEvents || player?.knownUpcomingEvents));
+
+  const knownList = knownListRaw
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
+
+  // Track-peek is allowed when noPeek !== true
   const nextByTrack = !noPeek && track[idx] ? String(track[idx]) : null;
-  const nextKnown = !!(knownList.length && nextByTrack && knownList[0] === nextByTrack);
 
-  // If we *truly* know next, use it; otherwise treat as probabilistic.
-  const useDeterministic = nextKnown && !noPeek;
+  // nextKnown: true if we can see track OR we have a scouted/predicted next
+  const nextKnown = (!!nextByTrack && !noPeek) || knownList.length > 0;
 
   const scopedCtx = {
     denColor,
@@ -357,15 +378,19 @@ const carryExact = num(
   let confidence = 0;
   let debug = {};
 
-  if (useDeterministic) {
+  // -------------------------
+  // Mode selection
+  // -------------------------
+  if (!noPeek && nextByTrack) {
+    // Deterministic from the eventTrack (bots are allowed to "see" next when noPeek is false)
     const id1 = nextByTrack;
-    const id2 = (track[idx + 1] ? String(track[idx + 1]) : null);
+    const id2 = track[idx + 1] ? String(track[idx + 1]) : null;
 
     const f1 = scopeEventFacts(id1, scopedCtx);
-    const f2 = knownList.length >= 2 && id2 && knownList[1] === id2 ? scopeEventFacts(id2, scopedCtx) : null;
+    const f2 = id2 ? scopeEventFacts(id2, scopedCtx) : null;
 
-    const w1 = 0.7;
-    const w2 = f2 ? 0.3 : 0.0;
+    const w1 = 0.75;
+    const w2 = f2 ? 0.25 : 0.0;
     const ww = w2 > 0 ? (w1 + w2) : 1.0;
 
     dangerVec = {
@@ -375,39 +400,91 @@ const carryExact = num(
     };
 
     nextEventIdUsed = id1;
-    pDanger = peakDanger(f1) >= 7 ? 1 : 0;
 
-    confidence = f2 ? 0.9 : 0.75;
+    const d1 = peakDanger(f1);
+    const d2 = peakDanger(f2);
+    pDanger = (d1 >= 7 ? 1 : 0) * 0.8 + (d2 >= 7 ? 1 : 0) * 0.2;
+
+    confidence = f2 ? 0.85 : 0.7;
 
     debug = {
-      mode: "deterministic",
+      mode: "deterministic_track",
       nextByTrack: id1,
       next2ByTrack: id2,
       used2: !!f2,
       appliesToMe: f1?._appliesToMe,
-    };
-  } else {
-    // Probabilistic: assume remaining events are a shuffled bag.
-    const exp = computeExpectedFactsFromBag(remainingBag, scopedCtx);
-
-    dangerVec = {
-      dash: exp.expDash,
-      lurk: exp.expLurk,
-      burrow: exp.expBurrow,
-    };
-
-    nextEventIdUsed = null;
-    pDanger = exp.pDanger;
-
-    confidence = noPeek ? 0.25 : 0.45;
-
-    debug = {
-      mode: "probabilistic",
-      bagN: exp.n,
-      nextByTrack: nextByTrack,
-      knownUpcomingCount: knownList.length,
       noPeek,
     };
+  } else if (knownList.length) {
+    // Deterministic from SCOUT / prediction (when noPeek is true, this is the only “legal” knowledge)
+    const id1 = String(knownList[0]);
+    const id2 = knownList.length >= 2 ? String(knownList[1]) : null;
+
+    const f1 = scopeEventFacts(id1, scopedCtx);
+    const f2 = id2 ? scopeEventFacts(id2, scopedCtx) : null;
+
+    const w1 = 0.75;
+    const w2 = f2 ? 0.25 : 0.0;
+    const ww = w2 > 0 ? (w1 + w2) : 1.0;
+
+    dangerVec = {
+      dash: ((num(f1?.dangerDash, 0) * w1) + (num(f2?.dangerDash, 0) * w2)) / ww,
+      lurk: ((num(f1?.dangerLurk, 0) * w1) + (num(f2?.dangerLurk, 0) * w2)) / ww,
+      burrow: ((num(f1?.dangerBurrow, 0) * w1) + (num(f2?.dangerBurrow, 0) * w2)) / ww,
+    };
+
+    nextEventIdUsed = id1;
+
+    const d1 = peakDanger(f1);
+    const d2 = peakDanger(f2);
+    pDanger = (d1 >= 7 ? 1 : 0) * 0.8 + (d2 >= 7 ? 1 : 0) * 0.2;
+
+    confidence = f2 ? 0.75 : 0.6;
+
+    debug = {
+      mode: "deterministic_scout",
+      nextKnownId: id1,
+      nextKnownId2: id2,
+      used2: !!f2,
+      appliesToMe: f1?._appliesToMe,
+      noPeek,
+    };
+  } else {
+    // Probabilistic fallback
+    if (!noPeek && remainingBag.length) {
+      // Track is visible but caller chooses EV approach (rare now)
+      const exp = computeExpectedFactsFromBag(remainingBag, scopedCtx);
+
+      dangerVec = {
+        dash: exp.expDash,
+        lurk: exp.expLurk,
+        burrow: exp.expBurrow,
+      };
+
+      nextEventIdUsed = null;
+      pDanger = exp.pDanger;
+      confidence = 0.45;
+
+      debug = {
+        mode: "probabilistic_trackbag",
+        bagN: exp.n,
+        nextByTrack,
+        knownUpcomingCount: knownList.length,
+        noPeek,
+      };
+    } else {
+      // Truly blind: keep it mild to avoid panic-dashing
+      dangerVec = { dash: 3.5, lurk: 2.8, burrow: 2.2 };
+      nextEventIdUsed = null;
+      pDanger = 0.25;
+      confidence = 0.25;
+
+      debug = {
+        mode: "probabilistic_blind",
+        knownUpcomingCount: knownList.length,
+        noPeek,
+      };
+    }
   }
 
   // Ops locked -> staying is more dangerous because you can't play defense actions.
@@ -416,7 +493,7 @@ const carryExact = num(
     dangerVec.burrow += 0.75;
   }
 
-  // HoldStill (global) -> dash may be blocked; encode as extremely dangerous / infeasible.
+  // HoldStill -> dash may be blocked; encode as extremely dangerous / infeasible.
   if (holdStill || bool(intel?.dashBlocked)) {
     dangerVec.dash = Math.max(dangerVec.dash, 9.5);
     debug.dashBlocked = true;
@@ -452,8 +529,8 @@ const carryExact = num(
     dangerStay: Math.round(dangerStay * 10) / 10,
     dangerEffective: Math.round(dangerEffective * 10) / 10,
     nextEventIdUsed,
-    pDanger: Math.round(pDanger * 1000) / 1000,
-    confidence: Math.round(confidence * 1000) / 1000,
+    pDanger: Math.round(num(pDanger, 0) * 1000) / 1000,
+    confidence: Math.round(num(confidence, 0) * 1000) / 1000,
     intel: {
       denColor,
       isLead,
