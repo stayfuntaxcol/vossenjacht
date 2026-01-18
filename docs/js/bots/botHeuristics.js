@@ -180,12 +180,12 @@ const ACTION_TAG_SCORES = {
   LOCK_EVENTS: { control: 4 },
 
   // deny info
-  BLOCK_SCOUT: { control: 5 },
-  BLOCK_SCOUT_POS: { control: 4 },
+  BLOCK_SCOUT: { control: 2 },
+  BLOCK_SCOUT_POS: { control: 2 },
 
   // defense
   DEN_IMMUNITY: { risk: -6, control: 2 },
-  LOCK_OPS: { control: 5, tempo: 2 },
+  LOCK_OPS: { control: 2, tempo: 0 },
 
   // utility
   COPY_DECISION_LATER: { info: 2, control: 2, risk: 2 },
@@ -725,6 +725,71 @@ export function scoreActionFacts(actionKey, opts = {}) {
     soft.control += 1.25;
     soft.tempo += 0.25;
   }
+// H) Hold Still (LOCK_OPS) is usually a trap:
+// it blocks the OPS phase (including your own Den Signal / track-manip defense).
+const isHoldStill =
+  a.id === "HOLD_STILL" || hasTag(a.tags, "LOCK_OPS") || affectsFlags.includes("opsLocked");
+
+if (isHoldStill) {
+  // baseline: low utility unless very niche
+  soft.control -= 2.5;
+  soft.tempo -= 1.0;
+  soft.risk += 2.0;
+
+  // if danger is rising, this is actively bad (you remove your best counterplays)
+  if (dangerNext >= 5) {
+    soft.risk += 6.0;
+    soft.control -= 2.0;
+    soft.tempo -= 1.5;
+  }
+
+  // if you already played this round, even more wasteful
+  if (playedThisRound >= 1) {
+    soft.risk += 2.0;
+    soft.tempo -= 0.75;
+  }
+
+  // tiny niche: if you're last/behind and danger is low, denial can be acceptable
+  const { isLast, scoreBehind } = getScoreRankHints(opts);
+  const hailMary = isLast || scoreBehind >= 6;
+  if (hailMary && dangerNext <= 2) {
+    soft.control += 1.0;
+    soft.risk += 0.5;
+  }
+}
+
+// I) Scatter (BLOCK_SCOUT) is also situational: only worth it as denial play.
+const isScatter = a.id === "SCATTER" || hasTag(a.tags, "BLOCK_SCOUT");
+if (isScatter) {
+  // baseline: denial is a tempo loss
+  soft.tempo -= 1.0;
+  soft.control -= 1.0;
+  soft.risk += 1.0;
+
+  // if the game already has noPeek, Scatter is redundant
+  if (game?.flagsRound?.noPeek === true || ctx?.noPeek === true) {
+    soft.risk += 4.0;
+    soft.control -= 3.0;
+    soft.tempo -= 1.0;
+  }
+
+  // if danger is medium-high, you need defense, not denial
+  if (dangerNext >= 6) {
+    soft.risk += 4.0;
+    soft.control -= 2.0;
+  }
+
+  // behind => allow as deny/hail-mary
+  const { isLast, scoreBehind } = getScoreRankHints(opts);
+  const hailMary = isLast || scoreBehind >= 6;
+  if (hailMary) {
+    soft.control += 1.75;
+    soft.risk += 0.5;
+  } else {
+    soft.risk += 2.0;
+    soft.control -= 1.5;
+  }
+}
 
   const implemented = !!a.engineImplemented;
   const reliability = implemented ? 1.0 : (preset.unimplementedMult ?? 0.9);
