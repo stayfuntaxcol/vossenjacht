@@ -54,6 +54,40 @@ const BOT_NAME_POOL = [
 function normColor(c) {
   return String(c || "").trim().toUpperCase();
 }
+function extractIntelForDenShare({ game, player }) {
+  const idx = Number.isFinite(Number(game?.eventIndex)) ? Number(game.eventIndex) : null;
+  if (idx === null) return null;
+
+  const known = Array.isArray(player?.knownUpcomingEvents)
+    ? player.knownUpcomingEvents.filter(Boolean).map((x) => String(x))
+    : [];
+
+  if (!known.length) return null;
+
+  const events = known.slice(0, 2);
+  const confidence = events.length >= 2 ? 0.75 : 0.6;
+
+  return { events, atEventIndex: idx, confidence };
+}
+
+function mergeDenIntel(prev, next) {
+  if (!next) return prev || null;
+  if (!prev) return next;
+
+  // andere eventIndex -> vervang
+  if (Number(prev.atEventIndex) !== Number(next.atEventIndex)) return next;
+
+  // zelfde index: hou “beste”
+  const prevC = Number(prev.confidence || 0);
+  const nextC = Number(next.confidence || 0);
+
+  const prevKey = Array.isArray(prev.events) ? prev.events.join("|") : "";
+  const nextKey = Array.isArray(next.events) ? next.events.join("|") : "";
+
+  if (nextKey && nextKey !== prevKey) return { ...prev, ...next };
+  if (nextC >= prevC) return { ...prev, ...next };
+  return prev;
+}
 
 function shuffleArray(arr) {
   const a = Array.isArray(arr) ? [...arr] : [];
@@ -755,6 +789,7 @@ function fillFlags(flagsRound) {
     followTail: {},
     scentChecks: [],
     holdStill: {},
+    denIntel: {}, 
     ...(fr || {}),
     noPeek, // override after spread
   };
