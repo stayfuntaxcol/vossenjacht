@@ -108,8 +108,8 @@ function deriveEventDanger(ev, ctx) {
     notes.push("CATCH_DASHERS: DASH is gevaarlijk.");
   }
   
-  // Sheepdog Patrol is NOT a "general danger" event.
-  // Only DASHers get caught; LURK/BURROW are safe.
+   // Sheepdog Patrol is a special CATCH_DASHERS: it's SAFE for everyone except DASH.
+  // Bots should not "panic dash" here; they should prefer staying (LURK) unless other reasons push DASH.
   if (ev.id === "SHEEPDOG_PATROL") {
     dangerDash = Math.max(dangerDash, 10);
     dangerLurk = 0;
@@ -150,10 +150,13 @@ function deriveEventDanger(ev, ctx) {
   }
 
   if (ev.id === "GATE_TOLL") {
+    // Engine: iedereen in yard en niet-DASH: betaal 1 loot, anders caught.
+    // Belangrijk voor bots: dit is meestal een TAX (mild) als je >=1 loot hebt,
+    // maar is LETHAL als je 0 loot hebt (je kunt niet betalen).
     dangerDash = 0;
 
-    // We try to estimate if the player can pay 1 loot.
-    // If unknown, treat as mild (it's a tax, not a panic trigger).
+    // ctx may provide exact loot length / carry points (bots know their own).
+    // If unknown, keep it mild to avoid overreacting.
     const lootLenRaw =
       (typeof ctx?.lootLen === "number" ? ctx.lootLen : NaN) ||
       (typeof ctx?.lootCount === "number" ? ctx.lootCount : NaN) ||
@@ -174,41 +177,17 @@ function deriveEventDanger(ev, ctx) {
       (Number.isFinite(carry) ? carry > 0 : false);
 
     if (!hasInfo) {
-      // Unknown inventory -> don't overreact
       dangerLurk = Math.max(dangerLurk, 2);
       dangerBurrow = Math.max(dangerBurrow, 2);
       notes.push("GATE_TOLL: mild (tax) als je loot hebt; lethal alleen als je 0 loot hebt.");
     } else if (canPay) {
-      // You can pay -> it's mostly a penalty, not a catch
       dangerLurk = Math.max(dangerLurk, 1);
       dangerBurrow = Math.max(dangerBurrow, 1);
       notes.push("GATE_TOLL: je kunt betalen -> laag danger (wel loot penalty).");
     } else {
-      // Cannot pay -> you get caught if you stay
       dangerLurk = Math.max(dangerLurk, 9);
       dangerBurrow = Math.max(dangerBurrow, 9);
       notes.push("GATE_TOLL: 0 loot -> stay is lethal (caught).");
-    }
-  }
-
-  if (ev.id === "MAGPIE_SNITCH") {
-    const isLead = !!ctx?.isLead;
-    if (isLead) {
-      dangerLurk = Math.max(dangerLurk, 9);
-      notes.push("MAGPIE_SNITCH: jij bent Lead → LURK gevaarlijk.");
-    } else {
-      // Niet-Lead: event is vooral druk, niet direct dodelijk.
-      notes.push("MAGPIE_SNITCH: vooral risico voor Lead.");
-    }
-  }
-
-  if (ev.id === "SILENT_ALARM") {
-    const isLead = !!ctx?.isLead;
-    if (isLead) {
-      dangerLurk = Math.max(dangerLurk, 9);
-      notes.push("SILENT_ALARM: jij bent Lead → LURK gevaarlijk.");
-    } else {
-      notes.push("SILENT_ALARM: vooral risico voor Lead.");
     }
   }
 
