@@ -295,7 +295,28 @@ export function computeDangerMetrics({
 
   const noPeek = bool(flags?.noPeek) || bool(intel?.noPeek);
   const opsLocked = bool(flags?.opsLocked);
-  const holdStill = bool(flags?.holdStill); // global holdStill (if you track per-player later, override via intel)
+
+  // holdStill is stored as a per-player map in flagsRound (e.g. {playerId:true}).
+  // Default from fillFlags() is {} which must not block dash.
+  const holdStillFlag = flags?.holdStill;
+  const holdStill =
+    holdStillFlag === true ||
+    (holdStillFlag && typeof holdStillFlag === "object" && player?.id && !!holdStillFlag[player.id]) ||
+    (typeof intel?.holdStill === "boolean" ? intel.holdStill : false);
+  // holdStill is stored as a per-player map (e.g. {<playerId>: true}) in flagsRound.
+  // Default in fillFlags() is {} which must NOT be treated as true.
+  const holdStillFlag = flags?.holdStill;
+  const holdStill =
+    holdStillFlag === true ||
+    (holdStillFlag && typeof holdStillFlag === "object" && player?.id && !!holdStillFlag[player.id]) ||
+    (typeof intel?.holdStill === "boolean" ? intel.holdStill : false);
+  // holdStill is stored as a per-player map (e.g. {<playerId>: true}) in flagsRound.
+  // Default in fillFlags() is {} which must NOT be treated as active.
+  const holdStillFlag = flags?.holdStill;
+  const holdStill =
+    holdStillFlag === true ||
+    (holdStillFlag && typeof holdStillFlag === "object" && player?.id && !!holdStillFlag[player.id]) ||
+    bool(intel?.holdStill);
 
   const carryExact = num(intel?.carryValueExact, num(intel?.carryValue, computeCarryValue(player)));
 
