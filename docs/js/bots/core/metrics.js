@@ -310,13 +310,18 @@ export function computeDangerMetrics({
     holdStillFlag === true ||
     (holdStillFlag && typeof holdStillFlag === "object" && player?.id && !!holdStillFlag[player.id]) ||
     (typeof intel?.holdStill === "boolean" ? intel.holdStill : false);
-  // holdStill is stored as a per-player map (e.g. {<playerId>: true}) in flagsRound.
-  // Default in fillFlags() is {} which must NOT be treated as active.
-  const holdStillFlag = flags?.holdStill;
-  const holdStill =
-    holdStillFlag === true ||
-    (holdStillFlag && typeof holdStillFlag === "object" && player?.id && !!holdStillFlag[player.id]) ||
-    bool(intel?.holdStill);
+ // holdStill is stored as a per-player map in flagsRound (e.g. { [playerId]: true }).
+// Default in fillFlags() is {} which must NOT be treated as active.
+const playerId = String(player?.id || intel?.playerId || "");
+const holdStillFlag = flags?.holdStill;
+
+const holdStill =
+  holdStillFlag === true ||
+  (holdStillFlag &&
+    typeof holdStillFlag === "object" &&
+    playerId &&
+    !!holdStillFlag[playerId]) ||
+  (typeof intel?.holdStill === "boolean" ? intel.holdStill : false);
 
   const carryExact = num(intel?.carryValueExact, num(intel?.carryValue, computeCarryValue(player)));
 
