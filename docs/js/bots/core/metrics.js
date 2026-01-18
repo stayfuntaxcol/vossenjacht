@@ -352,16 +352,18 @@ export function computeDangerMetrics({
   }
 
   // 2) explicit intel on player / passed in
-const idx = num(game?.eventIndex, 0);
+// idx is already declared earlier in this function
+const denColor2 = normColor(intel?.denColor || player?.color || player?.den || player?.denColor);
 
-const denColor = normColor(intel?.denColor || player?.color || player?.den || player?.denColor);
 const denEntry =
   flags?.denIntel && typeof flags.denIntel === "object"
-    ? flags.denIntel[denColor]
+    ? flags.denIntel[denColor2]
     : null;
 
 const denEvents =
-  denEntry && Number(denEntry.atEventIndex) === idx && Array.isArray(denEntry.events)
+  denEntry &&
+  Number(denEntry.atEventIndex) === Number(idx) &&
+  Array.isArray(denEntry.events)
     ? denEntry.events
     : [];
 
