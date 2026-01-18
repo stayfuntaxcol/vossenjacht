@@ -1,200 +1,232 @@
 // js/bots/core/metrics.js
-// Pure metrics: carryValue + danger scoring (0–10) + uncertainty.
-// GEEN Firestore calls.
+// Pure metrics helpers (NO Firestore calls).
+//
+// Exported:
+// - calcLootStats(loot) -> {eggs,hens,prize,points}
+// - computeCarryValue(player) -> exact loot points in hand
+// - computeCarryValueRec({game, player, players, mode, avgLootV}) -> {carryValueRec, debug...}
+// - computeDangerMetrics({game, player, players, flagsRound, intel}) -> danger bundle
+//
+// Notes
+// - This module intentionally avoids reading "secret" info unless you pass mode="omniscient".
+// - Default mode="publicSafe" uses only counts + a stable average loot value.
 
-import { getEventFacts as getEventFactsFromKit } from "../aiKit.js";
+import { getEventFacts } from "../aiKit.js";
 
-// ---------- tiny utils ----------
 function num(x, d = 0) {
   const n = Number(x);
   return Number.isFinite(n) ? n : d;
 }
-function clamp(n, lo, hi) {
-  return Math.max(lo, Math.min(hi, n));
+
+function bool(x) {
+  return !!x;
 }
-function clamp01(n) {
-  return clamp(num(n, 0), 0, 1);
+
+function clamp(x, lo, hi) {
+  return Math.max(lo, Math.min(hi, x));
 }
-function round1(n) {
-  return Math.round(num(n, 0) * 10) / 10;
-}
+
 function normColor(c) {
   return String(c || "").trim().toUpperCase();
 }
-function arr(x) {
+
+function safeArr(x) {
   return Array.isArray(x) ? x : [];
 }
 
-const DEFAULT_CFG = {
-  LOOKAHEAD_WEIGHTS: [0.72, 0.28],
-  DANGER_HIGH_THRESHOLD: 7,
-  CARRY_SCALE: 12,       // ~ CARRY_EXTREME
-  LOSS_W: 0.6,           // carry -> danger severity multiplier
-  UNCERTAINTY_W: 0.25,   // low confidence -> slightly more conservative
-  OPS_LOCK_PENALTY: 0.4, // small bump if opsLocked (less flexibility)
-};
-
-// ---------- Carry ----------
-function sumLootPoints(p) {
-  const loot = arr(p?.loot);
-  return loot.reduce((s, c) => {
-    const raw = c?.v ?? c?.value ?? c?.points ?? c?.pts;
-    const v = Number(raw);
-    return s + (Number.isFinite(v) ? v : 0);
-  }, 0);
+function sumV(cards) {
+  const arr = safeArr(cards);
+  let s = 0;
+  for (const c of arr) s += num(c?.v, 0);
+  return s;
 }
 
-/**
- * computeCarryValue(p)
- * Rule: prefer loot[] points (single source of truth).
- * Fallback: eggs/hens/prize if loot[] ontbreekt.
- */
-export function computeCarryValue(p, opts = {}) {
-  const lootPts = sumLootPoints(p);
-  if (lootPts > 0) return num(lootPts, 0);
+function lootCountFromPlayer(p) {
+  const loot = Array.isArray(p?.loot) ? p.loot : null;
+  if (loot) return loot.length;
 
-  const eggV = Number.isFinite(opts.eggValue) ? opts.eggValue : 1;
-  const henV = Number.isFinite(opts.henValue) ? opts.henValue : 2;
-  const prizeV = Number.isFinite(opts.prizeValue) ? opts.prizeValue : 3;
-
+  // fallback: if you store only counters
   const eggs = num(p?.eggs, 0);
   const hens = num(p?.hens, 0);
-
-  // prize kan bool of count zijn
-  const prizeCount = Number.isFinite(Number(p?.prize)) ? num(p?.prize, 0) : (p?.prize ? 1 : 0);
-
-  return eggs * eggV + hens * henV + prizeCount * prizeV;
+  const prize = num(p?.prize, 0);
+  return eggs + hens + prize;
 }
 
-// ---------- Event classification (light) ----------
-function classifyEventId(eventId) {
-  const id = String(eventId || "");
-  if (!id) return { type: "NONE", id: "" };
-  if (id === "DOG_CHARGE" || id === "SECOND_CHARGE") return { type: "DOG", id };
-  if (id === "GATE_TOLL") return { type: "TOLL", id };
-  if (id === "SHEEPDOG_PATROL") return { type: "NO_DASH", id };
-  if (id === "ROOSTER_CROW") return { type: "ROOSTER", id };
-  if (id.startsWith("DEN_")) return { type: "DEN", id, color: id.split("_")[1] || "" };
-  return { type: "OTHER", id };
+// ----------------------
+// Loot / Carry (exact)
+// ----------------------
+export function calcLootStats(loot) {
+  const items = loot || [];
+  let eggs = 0;
+  let hens = 0;
+  let prize = 0;
+  let points = 0;
+
+  for (const card of items) {
+    const t = String(card?.t || "");
+    const v = num(card?.v, 0);
+    if (t === "Egg") eggs++;
+    else if (t === "Hen") hens++;
+    else if (t === "Prize Hen") prize++;
+    points += v;
+  }
+  return { eggs, hens, prize, points };
 }
 
-function isLeadOnlyEvent(eventId) {
-  const id = String(eventId || "");
-  return id === "SILENT_ALARM" || id === "MAGPIE_SNITCH";
+// Exact points carried ("what you currently hold")
+export function computeCarryValue(player) {
+  const loot = Array.isArray(player?.loot) ? player.loot : null;
+  if (loot && loot.length) {
+    return calcLootStats(loot).points;
+  }
+
+  // fallback if loot[] isn't present (older schema)
+  const eggs = num(player?.eggs, 0);
+  const hens = num(player?.hens, 0);
+  const prize = num(player?.prize, 0);
+
+  // Values reflect your scoring model: Egg=1, Hen=2, Prize Hen=3
+  return eggs * 1 + hens * 2 + prize * 3;
 }
 
-function isNoPeekForPlayer(flagsRound, playerId) {
-  const v = flagsRound?.noPeek;
-  if (v === true) return true;
+// ----------------------
+// CarryValueRec (relative pressure)
+// ----------------------
+// 0..12 index tuned to match botPolicyCore config ranges (CARRY_HIGH / EXTREME).
+// Interpretation:
+// - higher -> "my current loot is a bigger-than-average slice" + "loot pool is running out" -> bank sooner
+// - lower  -> "still early" / "I'm not ahead" -> keep farming & survive the obstacle course
+export function computeCarryValueRec({
+  game,
+  player,
+  players,
+  mode = "publicSafe",
+  avgLootV = null,
+} = {}) {
+  const mePoints = computeCarryValue(player);
 
-  // als iemand per ongeluk [] opslaat (truthy), behandel dat NIET als “noPeek actief”
-  // (alleen lijst-modus als het echt IDs bevat)
-  if (Array.isArray(v)) return v.includes(playerId);
+  const list = Array.isArray(players) ? players : [];
+  const inRaid = list.filter((p) => {
+    if (!p) return false;
+    if (p?.dashed) return false;
+    if (p?.caught) return false;
+    // default: if inYard missing, treat as active
+    return p?.inYard !== false;
+  });
 
-  return false;
-}
+  const nPlayers = Math.max(1, inRaid.length);
 
-function isDenImmuneForColor(flagsRound, denColor) {
-  const map = flagsRound?.denImmune || {};
-  const k = normColor(denColor);
-  return !!(k && map[k]);
-}
+  const totalHeldCards = inRaid.reduce((s, p) => s + lootCountFromPlayer(p), 0);
 
-// ---------- Facts getter with scoping + fallback ----------
-function fallbackFacts(eventId, ctx) {
-  const cls = classifyEventId(eventId);
-  const lootPts = sumLootPoints(ctx.player);
+  const deckCards = Array.isArray(game?.lootDeck) ? game.lootDeck.length : 0;
+  const sackCards = Array.isArray(game?.sack) ? game.sack.length : 0;
 
-  // defaults
-  let out = { dangerDash: 0, dangerLurk: 0, dangerBurrow: 0, appliesToMe: true };
+  // We estimate initial deck size without needing a stored constant:
+  // every loot card should be in exactly one of: deck, sack, or some player's loot.
+  const initialDeckCardsEst = Math.max(1, deckCards + sackCards + totalHeldCards);
+  const drawnCardsEst = sackCards + totalHeldCards;
+  const depletion = clamp(drawnCardsEst / initialDeckCardsEst, 0, 1);
 
-  if (cls.type === "DOG") {
-    out = { dangerDash: 0, dangerLurk: 10, dangerBurrow: 0, appliesToMe: true };
-  } else if (cls.type === "DEN") {
-    const mine = normColor(cls.color) === normColor(ctx.denColor);
-    out = { dangerDash: 0, dangerLurk: mine ? 10 : 0, dangerBurrow: 0, appliesToMe: mine };
-  } else if (cls.type === "NO_DASH") {
-    out = { dangerDash: 10, dangerLurk: 0, dangerBurrow: 0, appliesToMe: true };
-  } else if (cls.type === "TOLL") {
-    const stay = lootPts > 0 ? 4 : 10;
-    out = { dangerDash: 0, dangerLurk: stay, dangerBurrow: stay, appliesToMe: true };
-  } else if (eventId === "SILENT_ALARM") {
-    out = { dangerDash: 0, dangerLurk: ctx.isLead ? 6 : 0, dangerBurrow: ctx.isLead ? 4 : 0, appliesToMe: !!ctx.isLead };
-  } else if (eventId === "MAGPIE_SNITCH") {
-    out = { dangerDash: 0, dangerLurk: ctx.isLead ? 10 : 0, dangerBurrow: 0, appliesToMe: !!ctx.isLead };
+  // Average loot value per card
+  let mu = num(avgLootV, 0);
+  if (mu <= 0) {
+    if (mode === "omniscient" && Array.isArray(game?.lootDeck) && game.lootDeck.length) {
+      mu = sumV(game.lootDeck) / Math.max(1, game.lootDeck.length);
+    } else {
+      // Safe default (Egg=1 / Hen=2 / Prize=3) -> typical mean ~1.7..1.9 depending on mix.
+      mu = 1.8;
+    }
   }
 
-  return out;
-}
+  // We intentionally do NOT use exact other players' points in publicSafe mode.
+  const totalHeldValueEst = totalHeldCards * mu;
 
-function getScopedEventFacts(eventId, ctx) {
-  if (!eventId) return null;
+  const myShareOfHeld = totalHeldValueEst > 0 ? mePoints / totalHeldValueEst : 0;
+  const expectedShare = 1 / nPlayers;
+  const shareVsExpected = expectedShare > 0 ? myShareOfHeld / expectedShare : 0; // == myShare * nPlayers
 
-  // 1) try your existing facts
-  let f = null;
-  try {
-    f = typeof getEventFactsFromKit === "function" ? getEventFactsFromKit(eventId) : null;
-  } catch {
-    f = null;
-  }
+  // Core mapping to 0..12
+  // - being above expected share matters (early bank pressure)
+  // - depletion matters (late bank pressure)
+  // - weights chosen so that early game typically stays low unless you're clearly ahead
+  let recRaw = (shareVsExpected - 1) * 4 + depletion * 6;
 
-  // 2) fallback if missing
-  if (!f) f = fallbackFacts(eventId, ctx);
+  // guardrails
+  if (!Number.isFinite(recRaw)) recRaw = 0;
 
-  const cls = classifyEventId(eventId);
-
-  let appliesToMe =
-    typeof f.appliesToMe === "boolean"
-      ? f.appliesToMe
-      : (typeof f._appliesToMe === "boolean" ? f._appliesToMe : undefined);
-
-  // DEN scoping
-  if (cls.type === "DEN") {
-    const mine = normColor(cls.color) === normColor(ctx.denColor);
-    if (!mine) appliesToMe = false;
-  }
-
-  // lead-only scoping
-  if (isLeadOnlyEvent(eventId) && !ctx.isLead) appliesToMe = false;
-
-  // den immunity scoping
-  const immune = isDenImmuneForColor(ctx.flagsRound, ctx.denColor);
-  if (immune) {
-    // immune neutraliseert DOG + eigen DEN
-    if (cls.type === "DOG") appliesToMe = false;
-    if (cls.type === "DEN" && normColor(cls.color) === normColor(ctx.denColor)) appliesToMe = false;
-  }
-
-  // Build normalized output
-  let dangerDash = num(f.dangerDash, 0);
-  let dangerLurk = num(f.dangerLurk, 0);
-  let dangerBurrow = num(f.dangerBurrow, 0);
-
-  // If it doesn't apply → zero danger vector
-  if (appliesToMe === false) {
-    dangerDash = 0;
-    dangerLurk = 0;
-    dangerBurrow = 0;
-  }
-
-  // holdStill: DASH effectively “not allowed” → treat as very risky
-  const hs = ctx.flagsRound?.holdStill || {};
-  if (ctx.playerId && hs[ctx.playerId] === true) {
-    dangerDash = Math.max(dangerDash, 9);
-  }
-
-  // burrowUsed: treat BURROW as same safety as LURK (conservative)
-  if (ctx.player?.burrowUsed) {
-    dangerBurrow = dangerLurk;
-  }
+  const carryValueRec = clamp(recRaw, 0, 12);
 
   return {
-    eventId,
-    dangerDash,
-    dangerLurk,
-    dangerBurrow,
-    appliesToMe: (typeof appliesToMe === "boolean") ? appliesToMe : undefined,
+    carryValueRec: Math.round(carryValueRec * 10) / 10,
+    debug: {
+      mode,
+      mePoints,
+      nPlayers,
+      muUsed: Math.round(mu * 100) / 100,
+      totalHeldCards,
+      deckCards,
+      sackCards,
+      initialDeckCardsEst,
+      drawnCardsEst,
+      depletion: Math.round(depletion * 1000) / 1000,
+      myShareOfHeld: Math.round(myShareOfHeld * 1000) / 1000,
+      shareVsExpected: Math.round(shareVsExpected * 1000) / 1000,
+      recRaw: Math.round(recRaw * 100) / 100,
+    },
   };
+}
+
+// ----------------------
+// Danger metrics
+// ----------------------
+function eventAppliesToMeById(eventId, denColor, isLead, flagsRound) {
+  const id = String(eventId || "").trim();
+  if (!id) return true;
+
+  // DEN color targeting
+  if (id.startsWith("DEN_")) {
+    const target = normColor(id.slice(4));
+    if (target && denColor && target !== denColor) return false;
+  }
+
+  // lead-only events
+  if (id === "MAGPIE_SNITCH" || id === "SILENT_ALARM") {
+    if (!isLead) return false;
+  }
+
+  // Den Signal immunity (denImmune is map by color: {RED:true,...})
+  const denImmune = flagsRound?.denImmune && typeof flagsRound.denImmune === "object"
+    ? !!flagsRound.denImmune[denColor]
+    : false;
+
+  if (denImmune) {
+    // In engine, denImmune blocks catch events like DOG_CHARGE / SECOND_CHARGE and DEN_*.
+    if (id === "DOG_CHARGE" || id === "SECOND_CHARGE" || id.startsWith("DEN_")) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function scopeEventFacts(eventId, { denColor, isLead, flagsRound } = {}) {
+  const base = eventId ? getEventFacts(String(eventId)) : null;
+  if (!base) return null;
+
+  const applies = eventAppliesToMeById(base.id || eventId, denColor, isLead, flagsRound);
+
+  // Clone shallow so we can safely mutate danger fields
+  const f = { ...base };
+  f.appliesToMe = applies;
+  f._appliesToMe = applies;
+
+  if (applies === false) {
+    f.dangerDash = 0;
+    f.dangerLurk = 0;
+    f.dangerBurrow = 0;
+  }
+
+  return f;
 }
 
 function peakDanger(f) {
@@ -202,253 +234,202 @@ function peakDanger(f) {
   return Math.max(num(f.dangerDash, 0), num(f.dangerLurk, 0), num(f.dangerBurrow, 0));
 }
 
-function stayDanger(f) {
-  if (!f) return 0;
-  const lurk = num(f.dangerLurk, 0);
-  const burrow = num(f.dangerBurrow, 0);
-  const dash = num(f.dangerDash, 0);
-
-  if (lurk <= 0 && burrow <= 0) return Math.max(dash, lurk, burrow);
-  return Math.min(lurk, burrow);
-}
-
-// Mirrors core-policy behavior: dangerEffective = dangerNext(stay) + roosterBonus (late only)
-function computeDangerEffectiveLikeCore({ nextEventFacts, roosterSeen, postRooster2Window, cfg }) {
-  const applies = (typeof nextEventFacts?.appliesToMe === "boolean")
-    ? nextEventFacts.appliesToMe
-    : (typeof nextEventFacts?._appliesToMe === "boolean" ? nextEventFacts._appliesToMe : undefined);
-
-  if (applies === false) return 0;
-
-  const dangerNext = stayDanger(nextEventFacts);
-  const roosterBonus = (postRooster2Window && roosterSeen >= 2) ? num(cfg.ROOSTER_BONUS ?? 2, 2) : 0;
-  return clamp(dangerNext + roosterBonus, 0, 20);
-}
-
-function bagCounts(list) {
-  const m = new Map();
-  for (const x of list) {
-    const k = String(x || "");
-    if (!k) continue;
-    m.set(k, (m.get(k) || 0) + 1);
-  }
-  return m;
-}
-function removeOneFromBag(map, key) {
-  const k = String(key || "");
-  if (!k) return map;
-  const out = new Map(map);
-  const n = out.get(k) || 0;
-  if (n <= 1) out.delete(k);
-  else out.set(k, n - 1);
-  return out;
-}
-
-function expectedVecFromBag(bag, ctx, cfg) {
-  let total = 0;
-  let dash = 0, lurk = 0, burrow = 0;
-  let pDangerCount = 0;
-
-  for (const [eventId, count] of bag.entries()) {
-    const c = num(count, 0);
-    if (c <= 0) continue;
-
-    const f = getScopedEventFacts(eventId, ctx) || { dangerDash: 0, dangerLurk: 0, dangerBurrow: 0 };
-    dash += c * num(f.dangerDash, 0);
-    lurk += c * num(f.dangerLurk, 0);
-    burrow += c * num(f.dangerBurrow, 0);
-
-    if (peakDanger(f) >= cfg.DANGER_HIGH_THRESHOLD) pDangerCount += c;
-    total += c;
+function computeExpectedFactsFromBag(bagIds, scopedCtx) {
+  const ids = safeArr(bagIds).map((x) => String(x || "").trim()).filter(Boolean);
+  if (!ids.length) {
+    return {
+      expDash: 0,
+      expLurk: 0,
+      expBurrow: 0,
+      pDanger: 0,
+      n: 0,
+    };
   }
 
-  if (total <= 0) {
-    return { dash: 0, lurk: 0, burrow: 0, pDanger: 0, n: 0 };
+  let sDash = 0;
+  let sLurk = 0;
+  let sBurrow = 0;
+  let dangerous = 0;
+  let n = 0;
+
+  for (const id of ids) {
+    const f = scopeEventFacts(id, scopedCtx);
+    if (!f) continue;
+    const d = num(f.dangerDash, 0);
+    const l = num(f.dangerLurk, 0);
+    const b = num(f.dangerBurrow, 0);
+    sDash += d;
+    sLurk += l;
+    sBurrow += b;
+
+    if (peakDanger(f) >= 7) dangerous++;
+    n++;
+  }
+
+  if (!n) {
+    return { expDash: 0, expLurk: 0, expBurrow: 0, pDanger: 0, n: 0 };
   }
 
   return {
-    dash: dash / total,
-    lurk: lurk / total,
-    burrow: burrow / total,
-    pDanger: pDangerCount / total,
-    n: total,
+    expDash: sDash / n,
+    expLurk: sLurk / n,
+    expBurrow: sBurrow / n,
+    pDanger: dangerous / n,
+    n,
   };
 }
 
-/**
- * computeDangerMetrics({game, player, players, flagsRound, intel})
- * -> { dangerScore, dangerVec, dangerPeak, dangerStay, dangerEffective, nextEventIdUsed, pDanger, confidence, intel }
- */
-export function computeDangerMetrics({ game, player, players = [], flagsRound = null, intel = {}, config = {} }) {
-  const cfg = { ...DEFAULT_CFG, ...(config || {}) };
+export function computeDangerMetrics({
+  game,
+  player,
+  players,
+  flagsRound,
+  intel,
+} = {}) {
+  const denColor = normColor(intel?.denColor || player?.color || player?.den || player?.denColor);
 
-  const g = game || {};
-  const p = player || {};
-  const playerId = String(p.id || intel.playerId || "");
-  const flags = flagsRound || g.flagsRound || {};
+  // isLead can be passed in intel by botRunner (recommended)
+  const isLead = typeof intel?.isLead === "boolean" ? intel.isLead : false;
 
-  const denColor = normColor(intel.denColor || p.color || p.den || p.denColor);
-  const isLead = (typeof intel.isLead === "boolean") ? intel.isLead : (String(g.leadFoxId || "") === playerId);
+  const flags = flagsRound || game?.flagsRound || {};
 
-  const noPeek = isNoPeekForPlayer(flags, playerId);
-  const knownUpcoming = arr(p.knownUpcomingEvents);
-  const knownUpcomingCount = knownUpcoming.length;
+  const noPeek = bool(flags?.noPeek) || bool(intel?.noPeek);
+  const opsLocked = bool(flags?.opsLocked);
+  const holdStill = bool(flags?.holdStill); // global holdStill (if you track per-player later, override via intel)
 
-  const track = arr(g.eventTrack);
-  const idx = Number.isFinite(Number(g.eventIndex)) ? Number(g.eventIndex) : 0;
+  const carryExact = num(intel?.carryValueExact, num(intel?.carryValue, computeCarryValue(player)));
 
-  // event candidates
-  const peek0 = track[idx] || null;
-  const peek1 = track[idx + 1] || null;
+  // scale danger slightly with "loss severity" (more carried loot -> more to lose)
+  const severityScale = 1 + clamp(carryExact / 10, 0, 1) * 0.5; // up to +50%
 
-  const next0 = noPeek ? (knownUpcoming[0] || null) : peek0;
-  const next1 = noPeek ? (knownUpcoming[1] || null) : peek1;
+  const track = safeArr(game?.eventTrack);
+  const idx = num(game?.eventIndex, 0);
+  const remainingBag = track.slice(Math.max(0, idx));
 
-  const nextKnown = !!next0;
+  const knownListRaw = safeArr(intel?.knownUpcomingEvents || player?.knownUpcomingEvents);
+  const knownList = noPeek ? [] : knownListRaw.map((x) => String(x || "").trim()).filter(Boolean);
 
-  // remaining bag for probabilistic mode
-  const remaining = track.slice(idx);
-  const bag0 = bagCounts(remaining);
-  const bag1 = next0 ? removeOneFromBag(bag0, next0) : bag0;
+  const nextByTrack = !noPeek && track[idx] ? String(track[idx]) : null;
+  const nextKnown = !!(knownList.length && nextByTrack && knownList[0] === nextByTrack);
 
-  const baseCtx = {
-    player,
-    playerId,
-    denColor,
-    isLead,
-    flagsRound: flags,
+  // If we *truly* know next, use it; otherwise treat as probabilistic.
+  const useDeterministic = nextKnown && !noPeek;
+
+  const scopedCtx = { denColor, isLead, flagsRound: flags };
+
+  let dangerVec = { dash: 0, lurk: 0, burrow: 0 };
+  let nextEventIdUsed = null;
+  let pDanger = 0;
+  let confidence = 0;
+  let debug = {};
+
+  if (useDeterministic) {
+    const id1 = nextByTrack;
+    const id2 = (track[idx + 1] ? String(track[idx + 1]) : null);
+
+    const f1 = scopeEventFacts(id1, scopedCtx);
+    const f2 = knownList.length >= 2 && id2 && knownList[1] === id2 ? scopeEventFacts(id2, scopedCtx) : null;
+
+    const w1 = 0.7;
+    const w2 = f2 ? 0.3 : 0.0;
+    const ww = w2 > 0 ? (w1 + w2) : 1.0;
+
+    dangerVec = {
+      dash: ((num(f1?.dangerDash, 0) * w1) + (num(f2?.dangerDash, 0) * w2)) / ww,
+      lurk: ((num(f1?.dangerLurk, 0) * w1) + (num(f2?.dangerLurk, 0) * w2)) / ww,
+      burrow: ((num(f1?.dangerBurrow, 0) * w1) + (num(f2?.dangerBurrow, 0) * w2)) / ww,
+    };
+
+    nextEventIdUsed = id1;
+    pDanger = peakDanger(f1) >= 7 ? 1 : 0;
+
+    confidence = f2 ? 0.9 : 0.75;
+
+    debug = {
+      mode: "deterministic",
+      nextByTrack: id1,
+      next2ByTrack: id2,
+      used2: !!f2,
+      appliesToMe: f1?._appliesToMe,
+    };
+  } else {
+    // Probabilistic: assume remaining events are a shuffled bag.
+    const exp = computeExpectedFactsFromBag(remainingBag, scopedCtx);
+
+    dangerVec = {
+      dash: exp.expDash,
+      lurk: exp.expLurk,
+      burrow: exp.expBurrow,
+    };
+
+    nextEventIdUsed = null;
+    pDanger = exp.pDanger;
+
+    confidence = noPeek ? 0.25 : 0.45;
+
+    debug = {
+      mode: "probabilistic",
+      bagN: exp.n,
+      nextByTrack: nextByTrack,
+      knownUpcomingCount: knownList.length,
+      noPeek,
+    };
+  }
+
+  // Ops locked -> staying is more dangerous because you can't play defense actions.
+  if (opsLocked) {
+    dangerVec.lurk += 0.75;
+    dangerVec.burrow += 0.75;
+  }
+
+  // HoldStill (global) -> dash may be blocked; encode as extremely dangerous / infeasible.
+  if (holdStill || bool(intel?.dashBlocked)) {
+    dangerVec.dash = Math.max(dangerVec.dash, 9.5);
+    debug.dashBlocked = true;
+  }
+
+  // Apply severity scale & clamp to 0..10
+  dangerVec = {
+    dash: clamp(dangerVec.dash * severityScale, 0, 10),
+    lurk: clamp(dangerVec.lurk * severityScale, 0, 10),
+    burrow: clamp(dangerVec.burrow * severityScale, 0, 10),
   };
 
-  // offset 0 vec
-  let v0, pDanger0 = 0, n0 = 0;
-  if (next0) {
-    const f0 = getScopedEventFacts(next0, baseCtx);
-    v0 = {
-      dash: num(f0?.dangerDash, 0),
-      lurk: num(f0?.dangerLurk, 0),
-      burrow: num(f0?.dangerBurrow, 0),
-    };
-    pDanger0 = (f0 && peakDanger(f0) >= cfg.DANGER_HIGH_THRESHOLD) ? 1 : 0;
-    n0 = 1;
-  } else {
-    const e0 = expectedVecFromBag(bag0, baseCtx, cfg);
-    v0 = { dash: e0.dash, lurk: e0.lurk, burrow: e0.burrow };
-    pDanger0 = e0.pDanger;
-    n0 = e0.n;
-  }
+  const dangerPeak = Math.max(dangerVec.dash, dangerVec.lurk, dangerVec.burrow);
 
-  // offset 1 vec
-  let v1, pDanger1 = 0, n1 = 0;
-  if (next1) {
-    const f1 = getScopedEventFacts(next1, baseCtx);
-    v1 = {
-      dash: num(f1?.dangerDash, 0),
-      lurk: num(f1?.dangerLurk, 0),
-      burrow: num(f1?.dangerBurrow, 0),
-    };
-    pDanger1 = (f1 && peakDanger(f1) >= cfg.DANGER_HIGH_THRESHOLD) ? 1 : 0;
-    n1 = 1;
-  } else {
-    const e1 = expectedVecFromBag(bag1, baseCtx, cfg);
-    v1 = { dash: e1.dash, lurk: e1.lurk, burrow: e1.burrow };
-    pDanger1 = e1.pDanger;
-    n1 = e1.n;
-  }
+  // Staying risk should reflect best defensive option, but if burrow isn't available, prefer lurk.
+  const burrowUsed = bool(player?.burrowUsed) || bool(intel?.burrowUsed);
+  const dangerStay = burrowUsed ? dangerVec.lurk : Math.min(dangerVec.lurk, dangerVec.burrow);
 
-  const w0 = num(cfg.LOOKAHEAD_WEIGHTS?.[0], 0.72);
-  const w1 = num(cfg.LOOKAHEAD_WEIGHTS?.[1], 0.28);
+  // dangerScore: single scalar for UI/logs (weighted toward peak, but includes stay)
+  const dangerScore = clamp(dangerPeak * 0.65 + dangerStay * 0.35, 0, 10);
 
-  const dangerVec = {
-    dash: round1(w0 * v0.dash + w1 * v1.dash),
-    lurk: round1(w0 * v0.lurk + w1 * v1.lurk),
-    burrow: round1(w0 * v0.burrow + w1 * v1.burrow),
-  };
-
-  const dangerPeak = round1(Math.max(dangerVec.dash, dangerVec.lurk, dangerVec.burrow));
-  const dangerStay = round1(Math.min(dangerVec.lurk, dangerVec.burrow));
-
-  // carry & multipliers
-  const carryValue = Number.isFinite(Number(intel.carryValue)) ? num(intel.carryValue, 0) : computeCarryValue(p);
-  const lossMult = 1 + cfg.LOSS_W * clamp01(carryValue / cfg.CARRY_SCALE);
-
-  const riskWeight = num(intel.riskWeight, 1); // pass in from preset/profile
-  const riskMult = clamp(0.85 + 0.15 * riskWeight, 0.75, 1.3);
-
-  // confidence
-  let confidence = 1;
-  if (!nextKnown) {
-    const N = Math.max(1, remaining.length);
-    confidence = clamp(0.2 + 0.6 * (1 / Math.sqrt(N)), 0.2, 0.8);
-  } else if (noPeek && knownUpcomingCount === 1) {
-    confidence = 0.85;
-  } else if (noPeek && knownUpcomingCount >= 2) {
-    confidence = 0.95;
-  }
-
-  const uncertaintyMult = 1 + cfg.UNCERTAINTY_W * (1 - confidence);
-
-  const opsLockedPenalty = flags?.opsLocked ? cfg.OPS_LOCK_PENALTY : 0;
-
-  const dangerScore = clamp(
-    round1(dangerStay * lossMult * riskMult * uncertaintyMult + opsLockedPenalty),
-    0,
-    10
-  );
-
-  // dangerEffective (core-like): gebaseerd op stayDanger(nextEventFacts) + rooster bonus (late only)
-  const nextEventFacts0 = next0 ? getScopedEventFacts(next0, baseCtx) : null;
-
-  const roosterSeen = Number.isFinite(Number(g?.roosterSeen)) ? Number(g.roosterSeen) : 0;
-  const postRooster2Window = roosterSeen >= 2;
-
-  const dangerEffective = round1(
-    computeDangerEffectiveLikeCore({
-      nextEventFacts: nextEventFacts0,
-      roosterSeen,
-      postRooster2Window,
-      cfg: { ROOSTER_BONUS: 2 },
-    })
-  );
-
-  // blended pDanger
-  const pDanger = round1(w0 * pDanger0 + w1 * pDanger1);
+  // dangerEffective: what should push cashout / policy ("stay danger")
+  const dangerEffective = dangerStay;
 
   return {
-    dangerScore,
-    dangerVec,
-    dangerPeak,
-    dangerStay,
-    dangerEffective,
-    nextEventIdUsed: next0 || null,
-    pDanger,
-    confidence: round1(confidence),
+    dangerScore: Math.round(dangerScore * 10) / 10,
+    dangerVec: {
+      dash: Math.round(dangerVec.dash * 10) / 10,
+      lurk: Math.round(dangerVec.lurk * 10) / 10,
+      burrow: Math.round(dangerVec.burrow * 10) / 10,
+    },
+    dangerPeak: Math.round(dangerPeak * 10) / 10,
+    dangerStay: Math.round(dangerStay * 10) / 10,
+    dangerEffective: Math.round(dangerEffective * 10) / 10,
+    nextEventIdUsed,
+    pDanger: Math.round(pDanger * 1000) / 1000,
+    confidence: Math.round(confidence * 1000) / 1000,
     intel: {
       denColor,
       isLead,
-      noPeek,
       nextKnown,
-      knownUpcomingCount,
-      next0,
-      next1,
-      remainingN: remaining.length,
-      lockEvents: !!flags?.lockEvents,
-      scatter: !!flags?.scatter,
-      opsLocked: !!flags?.opsLocked,
-      denImmune: isDenImmuneForColor(flags, denColor),
-      holdStill: !!(flags?.holdStill && playerId && flags.holdStill[playerId] === true),
-      // passthrough (optioneel)
-      scoutTier: intel.scoutTier ?? null,
+      knownUpcomingCount: knownList.length,
+      noPeek,
+      opsLocked,
+      carryValueExact: carryExact,
+      severityScale: Math.round(severityScale * 1000) / 1000,
     },
-    // (optioneel) debug multipliers
-    debug: {
-      carryValue: round1(carryValue),
-      lossMult: round1(lossMult),
-      riskMult: round1(riskMult),
-      uncertaintyMult: round1(uncertaintyMult),
-      w0,
-      w1,
-      n0,
-      n1,
-    },
+    debug,
   };
 }
