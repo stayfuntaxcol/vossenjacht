@@ -329,7 +329,13 @@ const carryExact = num(
   // If we *truly* know next, use it; otherwise treat as probabilistic.
   const useDeterministic = nextKnown && !noPeek;
 
-  const scopedCtx = { denColor, isLead, flagsRound: flags };
+const scopedCtx = {
+  denColor,
+  isLead,
+  flagsRound: flags,
+  lootLen: Array.isArray(player?.loot) ? player.loot.length : 0,
+  carryExact,
+};
 
   let dangerVec = { dash: 0, lurk: 0, burrow: 0 };
   let nextEventIdUsed = null;
