@@ -13,7 +13,7 @@ import {
   recommendDecision,
 } from "./botHeuristics.js";
 
-import { computeDangerMetrics } from "./core/metrics.js";
+import { computeDangerMetrics, computeCarryValue, computeCarryValueRec } from "./core/metrics.js";
 
 import {
   doc,
@@ -146,23 +146,6 @@ function handToActionIds(hand) {
   return ids;
 }
 
-function computeCarryValue(bot) {
-  const eggs = Number(bot?.eggs || 0);
-  const hens = Number(bot?.hens || 0);
-  const prize = bot?.prize ? 3 : 0;
-
-  const loot = Array.isArray(bot?.loot) ? bot.loot : [];
-  const lootPts = loot.reduce((s, c) => {
-    const raw = c?.v ?? c?.value ?? c?.points ?? c?.pts ?? 1;
-    const n = Number(raw);
-    return s + (Number.isFinite(n) ? n : 1);
-  }, 0);
-
-  const HEN_VALUE = 3;
-  const EGG_VALUE = 1;
-
-  return eggs * EGG_VALUE + hens * HEN_VALUE + prize + lootPts;
-}
 
 // ================================
 // Metrics (centralized + loggable)
@@ -178,6 +161,8 @@ function buildBotMetricsForLog({ game, bot, players, flagsRoundOverride = null, 
 
   // carryValue blijft 1 source of truth: deze helper
   const carryValue = computeCarryValue(bot);
+  const carryRecObj = computeCarryValueRec({ game, player: bot, players: players || [], mode: "publicSafe" });
+  const carryValueRec = Number(carryRecObj?.carryValueRec || 0);
 
   const danger = computeDangerMetrics({
     game,
@@ -189,13 +174,19 @@ function buildBotMetricsForLog({ game, bot, players, flagsRoundOverride = null, 
       presetKey,
       riskWeight,
       isLead,
-      carryValue,
+        carryValue,
+      carryValueExact: carryValue,
+      carryValueRec,
       ...(extraIntel || {}),
     },
   });
 
   return {
     carryValue,
+    carryValueRec,
+    carryRecDebug: carryRecObj?.debug ?? null,
+    lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
+    lootSample: Array.isArray(bot?.loot) ? bot.loot.slice(0, 3) : [],
     dangerScore: danger?.dangerScore ?? 0,
     dangerVec: danger?.dangerVec ?? null,
     dangerPeak: danger?.dangerPeak ?? 0,
@@ -858,8 +849,12 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
   const lockEventsActive = !!game?.flagsRound?.lockEvents;
   const opsLockedActive = !!game?.flagsRound?.opsLocked;
 
-  // --- carry value (use score if present) ---
- const carryValue = computeCarryValue(bot);
+  // --- carry (exact + relative) ---
+  const carryValueExact = computeCarryValue(bot);
+  const carryRecObj = computeCarryValueRec({ game, player: bot, players: players || [], mode: "publicSafe" });
+  const carryValueRec = Number(carryRecObj?.carryValueRec || 0);
+  const carryValue = carryValueRec;// cashout core uses this
+
 
   // --- follow target hints (simple v1) ---
   const list = Array.isArray(players) ? players : [];
@@ -877,7 +872,7 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
   const best = eligible
     .map((p) => ({
       p,
-      v: Number.isFinite(Number(p?.score)) ? Number(p.score) : Number(p?.eggs || 0) + Number(p?.hens || 0) + (p?.prize ? 3 : 0),
+      v: Number.isFinite(Number(p?.score)) ? Number(p.score) : computeCarryValue(p),
     }))
     .sort((a, b) => b.v - a.v)[0]?.p;
 
@@ -893,6 +888,11 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
     botId: bot?.id,
     denColor,
     carryValue,
+    carryValueExact,
+    carryValueRec,
+    carryRecDebug: carryRecObj?.debug ?? null,
+    lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
+    lootSample: Array.isArray(bot?.loot) ? bot.loot.slice(0, 3) : [],
     isLast: !!isLast,
     scoreBehind: Number(scoreBehind || 0),
 
@@ -1059,6 +1059,9 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
     const sorted = [...list].sort((a, b) => getVal(b) - getVal(a));
     const leaderVal = sorted.length ? getVal(sorted[0]) : 0;
     const myVal = getVal(bot);
+    const carryExact = computeCarryValue(bot);
+    const carryRecObj3 = computeCarryValueRec({ game, player: bot, players: list, mode: "publicSafe" });
+    const carryRec = Number(carryRecObj3?.carryValueRec || 0);
     const myRank = sorted.findIndex((x) => x.id === bot.id);
     const isLast = myRank >= 0 ? myRank === sorted.length - 1 : false;
     const scoreBehind = Math.max(0, leaderVal - myVal);
@@ -1124,7 +1127,9 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
       botId: bot?.id || null,
       denColor,
 
-      carryValue: myVal,
+      carryValue: carryRec,
+      carryValueExact: carryExact,
+      carryValueRec: carryRec,
       isLast,
       scoreBehind,
 
@@ -1241,8 +1246,12 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
       }
 
       // ---- metrics voor logging (vlak vóór logBotDecision) ----
-      const carryNow = computeCarryValue(bot);
-      ctx.carryValue = carryNow; // core gebruikt dit
+      const carryNowExact = computeCarryValue(bot);
+      const carryRecObj2 = computeCarryValueRec({ game, player: bot, players: players || [], mode: "publicSafe" });
+      const carryNowRec = Number(carryRecObj2?.carryValueRec || 0);
+      ctx.carryValueExact = carryNowExact;
+      ctx.carryValueRec = carryNowRec;
+      ctx.carryValue = carryNowRec;// core gebruikt this
 
       let core = null;
       try {
@@ -1288,11 +1297,12 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
           })),
 
           ctxMini: {
-            carryValue: Number(carryNow || 0),
+            carryValue: Number(carryNowExact || 0),
+            carryValueRec: Number(carryNowRec || 0),
             carryDebug: {
                 eggs: Number(bot?.eggs || 0),
                 hens: Number(bot?.hens || 0),
-                prize: !!bot?.prize,
+                prize: Number(bot?.prize || 0),
                 lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
                 lootSample: Array.isArray(bot?.loot) ? bot.loot[0] : null,
               },
