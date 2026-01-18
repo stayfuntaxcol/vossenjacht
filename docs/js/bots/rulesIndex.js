@@ -107,7 +107,16 @@ function deriveEventDanger(ev, ctx) {
     dangerBurrow = 0;
     notes.push("CATCH_DASHERS: DASH is gevaarlijk.");
   }
-
+  
+  // Sheepdog Patrol is NOT a "general danger" event.
+  // Only DASHers get caught; LURK/BURROW are safe.
+  if (ev.id === "SHEEPDOG_PATROL") {
+    dangerDash = Math.max(dangerDash, 10);
+    dangerLurk = 0;
+    dangerBurrow = 0;
+    notes.push("SHEEPDOG_PATROL: alleen DASH is gevaarlijk; LURK/BURROW zijn veilig.");
+  }
+  
   if (tags.has("CATCH_ALL_YARD")) {
     // Engine: DOG_CHARGE/SECOND_CHARGE pakken niet-DASH en niet-BURROW (en niet denImmune). :contentReference[oaicite:4]{index=4}
     dangerDash = Math.max(dangerDash, 0);
@@ -141,11 +150,45 @@ function deriveEventDanger(ev, ctx) {
   }
 
   if (ev.id === "GATE_TOLL") {
-    // Engine: iedereen in yard en niet-DASH: betaal 1 loot, anders caught. :contentReference[oaicite:6]{index=6}
     dangerDash = 0;
-    dangerLurk = Math.max(dangerLurk, 4);
-    dangerBurrow = Math.max(dangerBurrow, 4);
-    notes.push("GATE_TOLL: niet-DASH moet 1 loot betalen of wordt gepakt.");
+
+    // We try to estimate if the player can pay 1 loot.
+    // If unknown, treat as mild (it's a tax, not a panic trigger).
+    const lootLenRaw =
+      (typeof ctx?.lootLen === "number" ? ctx.lootLen : NaN) ||
+      (typeof ctx?.lootCount === "number" ? ctx.lootCount : NaN) ||
+      (Array.isArray(ctx?.me?.loot) ? ctx.me.loot.length : NaN);
+
+    const lootLen = Number.isFinite(Number(lootLenRaw)) ? Number(lootLenRaw) : NaN;
+
+    const carryRaw =
+      (typeof ctx?.carryExact === "number" ? ctx.carryExact : NaN) ||
+      (typeof ctx?.carryValueExact === "number" ? ctx.carryValueExact : NaN) ||
+      (typeof ctx?.carryValue === "number" ? ctx.carryValue : NaN);
+
+    const carry = Number.isFinite(Number(carryRaw)) ? Number(carryRaw) : NaN;
+
+    const hasInfo = Number.isFinite(lootLen) || Number.isFinite(carry);
+    const canPay =
+      (Number.isFinite(lootLen) ? lootLen > 0 : false) ||
+      (Number.isFinite(carry) ? carry > 0 : false);
+
+    if (!hasInfo) {
+      // Unknown inventory -> don't overreact
+      dangerLurk = Math.max(dangerLurk, 2);
+      dangerBurrow = Math.max(dangerBurrow, 2);
+      notes.push("GATE_TOLL: mild (tax) als je loot hebt; lethal alleen als je 0 loot hebt.");
+    } else if (canPay) {
+      // You can pay -> it's mostly a penalty, not a catch
+      dangerLurk = Math.max(dangerLurk, 1);
+      dangerBurrow = Math.max(dangerBurrow, 1);
+      notes.push("GATE_TOLL: je kunt betalen -> laag danger (wel loot penalty).");
+    } else {
+      // Cannot pay -> you get caught if you stay
+      dangerLurk = Math.max(dangerLurk, 9);
+      dangerBurrow = Math.max(dangerBurrow, 9);
+      notes.push("GATE_TOLL: 0 loot -> stay is lethal (caught).");
+    }
   }
 
   if (ev.id === "MAGPIE_SNITCH") {
