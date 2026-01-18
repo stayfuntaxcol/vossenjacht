@@ -111,7 +111,7 @@ function deriveEventDanger(ev, ctx) {
   // Sheepdog Patrol is NOT a "general danger" event: it's SAFE for everyone except DASH.
   // Bots should not "panic dash" here; they should prefer staying (LURK) unless other reasons push DASH.
   if (ev.id === "SHEEPDOG_PATROL") {
-    dangerDash = Math.max(dangerDash, 10);
+    dangerDash = 9;
     dangerLurk = 0;
     dangerBurrow = 5;
     notes.push("SHEEPDOG_PATROL: alleen DASH is gevaarlijk; LURK is veilig.");
