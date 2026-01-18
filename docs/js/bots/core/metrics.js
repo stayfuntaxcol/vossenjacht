@@ -296,34 +296,22 @@ export function computeDangerMetrics({
   const noPeek = bool(flags?.noPeek) || bool(intel?.noPeek);
   const opsLocked = bool(flags?.opsLocked);
 
-  // holdStill is stored as a per-player map in flagsRound (e.g. {playerId:true}).
-  // Default from fillFlags() is {} which must not block dash.
-  const holdStillFlag = flags?.holdStill;
-  const holdStill =
-    holdStillFlag === true ||
-    (holdStillFlag && typeof holdStillFlag === "object" && player?.id && !!holdStillFlag[player.id]) ||
-    (typeof intel?.holdStill === "boolean" ? intel.holdStill : false);
-  // holdStill is stored as a per-player map (e.g. {<playerId>: true}) in flagsRound.
-  // Default in fillFlags() is {} which must NOT be treated as true.
-  const holdStillFlag = flags?.holdStill;
-  const holdStill =
-    holdStillFlag === true ||
-    (holdStillFlag && typeof holdStillFlag === "object" && player?.id && !!holdStillFlag[player.id]) ||
-    (typeof intel?.holdStill === "boolean" ? intel.holdStill : false);
- // holdStill is stored as a per-player map in flagsRound (e.g. { [playerId]: true }).
-// Default in fillFlags() is {} which must NOT be treated as active.
-const playerId = String(player?.id || intel?.playerId || "");
-const holdStillFlag = flags?.holdStill;
+// holdStill can be either:
+// - true (global)
+// - a per-player map: { [playerId]: true }
+// Default in fillFlags() is {} and must NOT be treated as active.
+const pid = String(player?.id || intel?.playerId || "");
+const hs = flags?.holdStill;
 
 const holdStill =
-  holdStillFlag === true ||
-  (holdStillFlag &&
-    typeof holdStillFlag === "object" &&
-    playerId &&
-    !!holdStillFlag[playerId]) ||
+  hs === true ||
+  (hs && typeof hs === "object" && pid && !!hs[pid]) ||
   (typeof intel?.holdStill === "boolean" ? intel.holdStill : false);
 
-  const carryExact = num(intel?.carryValueExact, num(intel?.carryValue, computeCarryValue(player)));
+const carryExact = num(
+  intel?.carryValueExact,
+  num(intel?.carryValue, computeCarryValue(player))
+);
 
   // scale danger slightly with "loss severity" (more carried loot -> more to lose)
   const severityScale = 1 + clamp(carryExact / 10, 0, 1) * 0.5; // up to +50%
