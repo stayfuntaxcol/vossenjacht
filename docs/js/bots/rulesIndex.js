@@ -103,7 +103,7 @@ function deriveEventDanger(ev, ctx) {
   // DASH wordt vaak “veilig” bij catch-events (behalve Patrol). :contentReference[oaicite:3]{index=3}
   if (tags.has("CATCH_DASHERS")) {
     dangerDash = 9;
-    dangerLurk = 1;
+    dangerLurk = 0;
     dangerBurrow = 0;
     notes.push("CATCH_DASHERS: DASH is gevaarlijk.");
   }
