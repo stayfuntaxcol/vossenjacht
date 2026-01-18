@@ -2138,22 +2138,46 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
     const dashDecisionsSoFar = countDashDecisions(freshPlayers);
     const isLead = computeIsLeadForPlayer(g, p, freshPlayers);
 
-    const rec = recommendDecision({
-      presetKey,
-      denColor,
-      game: g,
-      me: p,
-      ctx: {
-        round: Number(g.round || 0),
-        isLead,
-        dashDecisionsSoFar,
-        // rooster context
-        roosterSeen: Number.isFinite(Number(g?.roosterSeen)) ? Number(g.roosterSeen) : countRevealedRoosters(g),
-        postRooster2Window: countRevealedRoosters(g) >= 2,
-      },
-    });
+   // Compute danger/carry metrics *before* deciding so DECISION can use probabilistic danger too
+const metricsNow = buildBotMetricsForLog({
+  game: g,
+  bot: p,
+  players: freshPlayers || [],
+});
 
-    let decision = rec?.decision || "LURK";
+const rec = recommendDecision({
+  presetKey,
+  denColor,
+  game: g,
+  me: p,
+  ctx: {
+    round: Number(g.round || 0),
+    isLead,
+    dashDecisionsSoFar,
+
+    // rooster context
+    roosterSeen: Number.isFinite(Number(g?.roosterSeen))
+      ? Number(g.roosterSeen)
+      : countRevealedRoosters(g),
+    postRooster2Window: countRevealedRoosters(g) >= 2,
+
+    // ✅ feed computed metrics into decision (so it works even without peeking)
+    carryValue: metricsNow?.carryValue,
+    carryValueRec: metricsNow?.carryValueRec, // if you log it
+    dangerVec: metricsNow?.dangerVec,
+    dangerPeak: metricsNow?.dangerPeak,
+    dangerStay: metricsNow?.dangerStay,
+    dangerEffective: metricsNow?.dangerEffective,
+    nextEventIdUsed: metricsNow?.nextEventIdUsed,
+    pDanger: metricsNow?.pDanger,
+    confidence: metricsNow?.confidence,
+
+    // optional: pass flags so decision can respect holdStill/noPeek/opsLocked if you use it there
+    flagsRound: g?.flagsRound || null,
+  },
+});
+
+let decision = rec?.decision || "LURK";
 
     // Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
     const nextEvent0 = nextEventId(g, 0);
