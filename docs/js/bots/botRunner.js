@@ -1569,6 +1569,20 @@ async function botDoMove({ db, gameId, botId, latestPlayers = [] }) {
     const loot = Array.isArray(p.loot) ? [...p.loot] : [];
 
     const flags = fillFlags(g.flagsRound);
+    // --- Den Intel share (publish) ---
+const denColor = normColor(p.color);
+
+const share = extractIntelForDenShare({ game: g, player: p });
+if (share && denColor) {
+  const prev = flags?.denIntel?.[denColor] || null;
+  const merged = mergeDenIntel(prev, {
+    ...share,
+    by: String(p.id || botId || ""),
+    at: Date.now(),
+  });
+
+  tx.update(gRef, { [`flagsRound.denIntel.${denColor}`]: merged });
+}
     const myColor = normColor(p.color);
     const immune = !!flags.denImmune?.[myColor];
     const lootPts = sumLootPoints({ loot });
@@ -1711,6 +1725,21 @@ function chooseBotOpsPlay({ game, bot, players }) {
   const p = bot;
 
   const flags = fillFlags(g.flagsRound);
+  // --- Den Intel share (publish) ---
+const denColor = normColor(p.color);
+
+const share = extractIntelForDenShare({ game: g, player: p });
+if (share && denColor) {
+  const prev = flags?.denIntel?.[denColor] || null;
+  const merged = mergeDenIntel(prev, {
+    ...share,
+    by: String(p.id || botId || ""),
+    at: Date.now(),
+  });
+
+  tx.update(gRef, { [`flagsRound.denIntel.${denColor}`]: merged });
+}
+
   const myColor = normColor(p.color);
   const immune = !!flags.denImmune?.[myColor];
 
