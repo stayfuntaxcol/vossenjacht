@@ -145,15 +145,28 @@ export function computeCarryValueRec({
   const expectedShare = 1 / nPlayers;
   const shareVsExpected = expectedShare > 0 ? myShareOfHeld / expectedShare : 0; // == myShare * nPlayers
 
-  // Core mapping to 0..12
+    // Core mapping to 0..12
   // - being above expected share matters (early bank pressure)
   // - depletion matters (late bank pressure)
-  // - weights chosen so that early game typically stays low unless you're clearly ahead
-  let recRaw = (shareVsExpected - 1) * 4 + depletion * 6;
+  // - BUT early-game sample sizes are tiny; damp the "share" signal until enough loot is in circulation.
 
-  // guardrails
+  // When very few cards are in play, share-vs-expected is noisy (can spike to 12).
+  // So we ramp in the share term gradually based on totalHeldCards.
+  const earlyDrawThreshold = nPlayers * 2;
+  const shareSample = clamp(totalHeldCards / Math.max(1, nPlayers * 6), 0, 1); // slow ramp
+
+  let shareTerm = (shareVsExpected - 1) * 4 * shareSample;
+  let depletionTerm = depletion * 6;
+
+  // Bootstrap: if almost nobody has loot yet, ignore share-term completely.
+  if (drawnCardsEst < earlyDrawThreshold) {
+    shareTerm = 0;
+    depletionTerm = depletion * 4;
+  }
+
+  let recRaw = shareTerm + depletionTerm;
+
   if (!Number.isFinite(recRaw)) recRaw = 0;
-
   const carryValueRec = clamp(recRaw, 0, 12);
 
   return {
@@ -209,13 +222,14 @@ function eventAppliesToMeById(eventId, denColor, isLead, flagsRound) {
   return true;
 }
 
-function scopeEventFacts(eventId, { denColor, isLead, flagsRound } = {}) {
-  const base = eventId ? getEventFacts(String(eventId)) : null;
+function scopeEventFacts(eventId, { denColor, isLead, flagsRound, lootLen, carryExact } = {}) {
+  const base = eventId
+    ? getEventFacts(String(eventId), { denColor, isLead, flagsRound, lootLen, carryExact })
+    : null;
   if (!base) return null;
 
   const applies = eventAppliesToMeById(base.id || eventId, denColor, isLead, flagsRound);
 
-  // Clone shallow so we can safely mutate danger fields
   const f = { ...base };
   f.appliesToMe = applies;
   f._appliesToMe = applies;
@@ -329,13 +343,13 @@ const carryExact = num(
   // If we *truly* know next, use it; otherwise treat as probabilistic.
   const useDeterministic = nextKnown && !noPeek;
 
-const scopedCtx = {
-  denColor,
-  isLead,
-  flagsRound: flags,
-  lootLen: Array.isArray(player?.loot) ? player.loot.length : 0,
-  carryExact,
-};
+  const scopedCtx = {
+    denColor,
+    isLead,
+    flagsRound: flags,
+    lootLen: Array.isArray(player?.loot) ? player.loot.length : 0,
+    carryExact,
+  };
 
   let dangerVec = { dash: 0, lurk: 0, burrow: 0 };
   let nextEventIdUsed = null;
