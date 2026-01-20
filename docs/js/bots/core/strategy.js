@@ -1,648 +1,1144 @@
-// js/bots/core/strategy.js
+// bots/core/strategy.js
+// Shared, utility-based policy for MOVE / OPS(ACTIONS) / DECISION.
+// No Firestore writes. (Caller handles writes; only BURROW hard-rule uses a Firestore boolean: player.burrowUsed)
+
+import { getEventFacts, getActionFacts } from "../rulesIndex.js";
+import { getActionDefByName, getLootDef } from "../../cards.js";
+
+/** =========================
+ *  TUNING (edit here)
+ *  ========================= */
 export const BOT_UTILITY_CFG = {
-  // weights
+  // utility = gainLoot + denyOpponents + teamSynergy − riskPenalty − resourcePenalty
   wLoot: 1.0,
-  wDeny: 0.65,
-  wTeam: 0.50,
+  wDeny: 0.8,
+  wTeam: 0.6,
   wRisk: 1.15,
-  wResource: 0.70,
-  wShare: 0.75, // invloed van sack-bonus op V(p)
+  wShare: 0.9,
+  wResource: 1.0,
 
-  // thresholds
-  dashPushThreshold: 6.2,
-  panicStayRisk: 7.5,        // stayRisk (0-10) boven dit = paniek
-  safeDashRisk: 3.0,         // dashRisk (0-10) onder dit = “veilig genoeg”
-  burrowMinSafetyGain: 2.0,  // minimaal voordeel (stayRisk - burrowRisk)
-  shiftMinGain: 1.8,         // minimaal utility voordeel om SHIFT te doen
-  comboMinGain: 1.2,         // minimaal extra voordeel vs beste single
-  holdHorizon: 2,            // bewaar counters als event binnen 1-2
-  lookaheadN: 5,
+  // lookahead (peek)
+  lookaheadN: 4,
 
-  // EVs (ruw, maar stabiel)
-  lootEV: 1.7,          // gemiddelde lootkaart (Egg=1, Hen=2, PrizeHen=3)
-  actionCardEV: 0.9,    // gemiddelde waarde van 1 action card in hand
+  // DECISION
+  dashPushScale: 10,          // carry points -> dashPush=10
+  dashPushThreshold: 6.5,     // dashPush above this: bias to DASH if risk not worse
+  panicStayRisk: 7.0,         // anti-suicide lurk trigger
+  suicideMargin: 1.8,         // "dashRisk not worse than stayRisk" margin
+  burrowMinSafetyGain: 2.5,   // BURROW only if safety gain large
+  burrowMaxExtraCost: 2.0,    // spending your 1x BURROW is a resource cost
 
-  // combo discount (kans dat je later nog een keer aan de beurt komt in OPS)
-  comboSecondTurnBaseProb: 0.55,
+  // MOVE
+  shiftMinGain: 3.0,          // SHIFT must beat next-best by this much (after cost)
+  scoutBaseValue: 0.3,        // in peek-mode scout is basically worthless
+
+  // MOVE expected values (cheap but stable)
+  actionDeckSampleN: 30,
+
+  // OPS
+  actionReserveMinHand: 2,
+  actionPlayMinGain: 1.2,
+  comboMinGain: 2.0,
+  allowComboSearch: true,
+  comboMaxPairs: 20,
+
+  // “implemented” safety
+  actionUnimplementedMult: 0.15,
+
+  // Random actions sampling
+  kickUpDustSamples: 6,
+  kickUpDustOptimism: 0.55,
+
+  // Share modeling
+  dashersLikelyThreshold: 6.0,
+
+  // Hidden Nest coordination (anti-herding)
+  hiddenNestCoordination: true,
+  hiddenNestDashPenalty: 4.0, // how hard we discourage DASH if not in slot
 };
 
-// js/bots/core/strategy.js
-import { getEventFacts } from "../bots/rulesIndex.js"; // pas pad aan naar jouw rulesIndex
-import { getActionDefByName } from "../cards.js";
+const DEFAULTS = BOT_UTILITY_CFG;
 
-// ---------- small helpers ----------
-const clamp = (x, a=0, b=10) => Math.max(a, Math.min(b, Number(x||0)));
-const normColor = (c) => String(c || "").trim().toUpperCase();
-
-export function sumLootPoints(loot) {
-  const arr = Array.isArray(loot) ? loot : [];
-  return arr.reduce((s, card) => s + Number(card?.v || 0), 0);
+/** =========================
+ *  small helpers
+ *  ========================= */
+function safeArr(x) { return Array.isArray(x) ? x : []; }
+function normColor(c) { return String(c || "").trim().toUpperCase(); }
+function clamp(x, lo, hi) {
+  const n = Number(x);
+  if (!Number.isFinite(n)) return lo;
+  return Math.max(lo, Math.min(hi, n));
 }
-
-export function highestLootCardIndex(loot) {
-  const arr = Array.isArray(loot) ? loot : [];
-  let bestI = -1;
-  let bestV = -Infinity;
-  for (let i=0;i<arr.length;i++){
-    const v = Number(arr[i]?.v||0);
+function sumLootPoints(p) {
+  const loot = safeArr(p?.loot);
+  return loot.reduce((s, c) => s + (Number(c?.v) || 0), 0);
+}
+function lootCardValue(card) {
+  if (!card) return 0;
+  const v = Number(card?.v);
+  if (Number.isFinite(v)) return v;
+  const def = getLootDef?.(card?.t || card?.name || "");
+  return Number(def?.value || 0);
+}
+function highestLootCardIndex(loot) {
+  const arr = safeArr(loot);
+  if (!arr.length) return -1;
+  let bestI = 0;
+  let bestV = lootCardValue(arr[0]);
+  for (let i = 1; i < arr.length; i++) {
+    const v = lootCardValue(arr[i]);
     if (v > bestV) { bestV = v; bestI = i; }
   }
   return bestI;
 }
+function structuredCloneSafe(obj) {
+  if (typeof structuredClone === "function") return structuredClone(obj);
+  return JSON.parse(JSON.stringify(obj));
+}
+function isInYard(p) { return p?.inYard !== false && !p?.dashed; }
+function isSameDen(a, b) {
+  const da = normColor(a?.color || a?.den || a?.denColor);
+  const db = normColor(b?.color || b?.den || b?.denColor);
+  return !!da && da === db;
+}
+function nextEventId(game, offset = 0) {
+  const track = safeArr(game?.eventTrack);
+  const idx = Number.isFinite(Number(game?.eventIndex)) ? Number(game.eventIndex) : 0;
+  return track[idx + offset] || null;
+}
+function classifyEvent(eventId) {
+  const id = String(eventId || "");
+  if (!id) return { type: "NONE" };
+  if (id === "DOG_CHARGE" || id === "SECOND_CHARGE") return { type: "DOG" };
+  if (id === "GATE_TOLL") return { type: "TOLL" };
+  if (id === "SHEEPDOG_PATROL") return { type: "NO_DASH" };
+  if (id === "ROOSTER_CROW") return { type: "ROOSTER" };
+  if (id.startsWith("DEN_")) return { type: "DEN", color: id.split("_")[1] || "" };
+  return { type: "OTHER", id };
+}
+function computeIsLead(game, me, players) {
+  const meId = String(me?.id || "");
+  const leadFoxId = String(game?.leadFoxId || "");
+  if (leadFoxId && leadFoxId === meId) return true;
 
-function deepClone(x) {
-  // structuredClone is modern; fallback ok
-  if (typeof structuredClone === "function") return structuredClone(x);
-  return JSON.parse(JSON.stringify(x));
+  const leadFoxName = String(game?.leadFox || "");
+  const meName = String(me?.name || "");
+  if (leadFoxName && meName && leadFoxName === meName) return true;
+
+  const idx = Number.isFinite(Number(game?.leadIndex)) ? Number(game.leadIndex) : null;
+  if (idx === null) return false;
+
+  const ordered = safeArr(players).slice().sort((a, b) => {
+    const ao = typeof a?.joinOrder === "number" ? a.joinOrder : 9999;
+    const bo = typeof b?.joinOrder === "number" ? b.joinOrder : 9999;
+    return ao - bo;
+  });
+  return String(ordered[idx]?.id || "") === meId;
 }
 
-// ---------- peek intel ----------
-export function getPeekIntel({ game, player, flagsRound, lookaheadN }) {
-  const g = game || {};
-  const p = player || {};
-  const flags = flagsRound || {};
-
-  const N = Math.max(1, Number(lookaheadN || 3));
-  const track = Array.isArray(g.eventTrack) ? g.eventTrack : [];
-  const idx = Number.isFinite(g.eventIndex) ? g.eventIndex : 0;
-
-  // als noPeek effect actief is voor deze speler: val terug op knownUpcomingEvents
-  const noPeekArr = Array.isArray(flags.noPeek) ? flags.noPeek : [];
-  const isNoPeek = noPeekArr.includes(String(p.id || ""));
-
-  const fromTrack = track.slice(idx, idx + N).filter(Boolean);
-  const fromKnown = Array.isArray(p.knownUpcomingEvents) ? p.knownUpcomingEvents.slice(0, N) : [];
-
-  const ids = (isNoPeek ? fromKnown : fromTrack);
+/** flags: keep compatible with your fillFlags strict boolean noPeek,
+ *  but also tolerate array forms (future-proof). */
+function getFlags(flagsRound, meId = null) {
+  const fr = flagsRound || {};
+  let noPeek = fr.noPeek === true; // strict boolean
+  if (!noPeek && Array.isArray(fr.noPeek) && meId) {
+    noPeek = fr.noPeek.includes(meId);
+  }
   return {
-    nextKnown: ids.length > 0,
-    upcomingIds: ids,
-    nextId: ids[0] || null,
+    lockEvents: false,
+    scatter: false,
+    denImmune: {},
+    noPeek: false,
+    predictions: [],
+    opsLocked: false,
+    followTail: {},
+    scentChecks: [],
+    holdStill: {},
+    denIntel: {},
+    ...(fr || {}),
+    noPeek, // override after spread
   };
 }
-// js/bots/core/strategy.js (vervolg)
 
-function isDenEvent(eventId) {
-  return String(eventId||"").startsWith("DEN_");
+function hasActionIdInHand(hand, actionId) {
+  const h = safeArr(hand);
+  for (const raw of h) {
+    const name = String(raw?.name || raw || "").trim();
+    if (!name) continue;
+    const def = getActionDefByName(name);
+    if (String(def?.id || "") === String(actionId)) return true;
+  }
+  return false;
 }
-function denColorFromEvent(eventId){
-  const parts = String(eventId||"").split("_");
-  return normColor(parts[1] || "");
-}
 
-function survivalProbNextEvent({ eventId, decision, game, player, flagsRound, isLead }) {
-  const ev = String(eventId || "");
-  const dec = String(decision || "LURK").toUpperCase();
-  const p = player || {};
-  const flags = flagsRound || {};
-  const myColor = normColor(p.color || p.den);
+/** =========================
+ *  Peek intel (N=3..5)
+ *  ========================= */
+export function getPeekIntel({ game, me, flagsRound = null, lookaheadN = null }) {
+  const n = Number.isFinite(Number(lookaheadN)) ? Number(lookaheadN) : DEFAULTS.lookaheadN;
+  const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
 
-  // Hold Still: target “can only LURK” (jij forceert dit in DECISION)
-  // -> survival check gebeurt elders door forced decision; hier geen aparte rule.
-
-  // Den immune = volledig safe tegen DOG + DEN (zoals in engine) :contentReference[oaicite:5]{index=5}
-  const immune = !!(flags.denImmune && myColor && flags.denImmune[myColor]);
-
-  // SHEEPDOG_PATROL: DASHers worden gepakt :contentReference[oaicite:6]{index=6}
-  if (ev === "SHEEPDOG_PATROL") return dec === "DASH" ? 0 : 1;
-
-  // DOG charges: lurkers gepakt, dash/burrow safe; immune maakt alles safe :contentReference[oaicite:7]{index=7}
-  if (ev === "DOG_CHARGE" || ev === "SECOND_CHARGE") {
-    if (immune) return 1;
-    return dec === "LURK" ? 0 : 1;
+  if (flags.noPeek) {
+    const known = safeArr(me?.knownUpcomingEvents).filter(Boolean).map(String);
+    const events = known.slice(0, n);
+    return { mode: "known", confidence: events.length ? Math.min(1, events.length / n) : 0, events };
   }
 
-  // DEN_x: alleen jouw kleur is gevaarlijk (tenzij immune) :contentReference[oaicite:8]{index=8}
-  if (isDenEvent(ev)) {
-    if (immune) return 1;
-    const c = denColorFromEvent(ev);
-    if (c && c === myColor) return dec === "LURK" ? 0 : 1;
-    return 1;
+  const events = [];
+  for (let k = 0; k < n; k++) {
+    const id = nextEventId(game, k);
+    if (!id) break;
+    events.push(String(id));
+  }
+  return { mode: "peek", confidence: events.length ? 1 : 0, events };
+}
+
+/** =========================
+ *  Risk model (0..10)
+ *  ========================= */
+function eventDangerForChoice({ eventId, choice, game, me, players, flagsRound }) {
+  if (!eventId) return 0;
+  const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
+  const den = normColor(me?.color || me?.den || me?.denColor);
+  const immune = !!flags?.denImmune?.[den];
+  const isLead = computeIsLead(game, me, players);
+
+  const facts = getEventFacts(String(eventId), { game, me, denColor: den, isLead });
+  if (!facts) return 0;
+
+  // Den Signal immunity applies to DEN_* and DOG_CHARGE/SECOND_CHARGE (NOT Sheepdog Patrol)
+  const t = classifyEvent(eventId).type;
+  if (immune && (t === "DOG" || t === "DEN")) return 0;
+
+  const dDash = Number(facts.dangerDash || 0);
+  const dLurk = Number(facts.dangerLurk || 0);
+  const dBurrow = Number(facts.dangerBurrow || 0);
+
+  if (choice === "DASH") return dDash;
+  if (choice === "BURROW") return dBurrow;
+  return dLurk;
+}
+function peakDangerForEvent({ eventId, game, me, players, flagsRound }) {
+  const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
+  const den = normColor(me?.color || me?.den || me?.denColor);
+  const immune = !!flags?.denImmune?.[den];
+  const isLead = computeIsLead(game, me, players);
+
+  const facts = getEventFacts(String(eventId), { game, me, denColor: den, isLead });
+  if (!facts) return 0;
+
+  const t = classifyEvent(eventId).type;
+  if (immune && (t === "DOG" || t === "DEN")) return 0;
+
+  return Math.max(
+    Number(facts.dangerDash || 0),
+    Number(facts.dangerLurk || 0),
+    Number(facts.dangerBurrow || 0),
+  );
+}
+
+/** =========================
+ *  DECISION
+ *  ========================= */
+function dashPushFromCarry(carryPts, cfg) {
+  const scale = Math.max(1, Number(cfg?.dashPushScale || DEFAULTS.dashPushScale));
+  return clamp((Number(carryPts || 0) / scale) * 10, 0, 10);
+}
+
+function countRevealedRoosters(game) {
+  const track = safeArr(game?.eventTrack);
+  const rev = safeArr(game?.eventRevealed);
+  const n = Math.min(track.length, rev.length);
+  let c = 0;
+  for (let i = 0; i < n; i++) {
+    if (rev[i] === true && String(track[i]) === "ROOSTER_CROW") c++;
+  }
+  if (c === 0 && Number.isFinite(Number(game?.roosterSeen))) c = Number(game.roosterSeen);
+  return c;
+}
+
+function estimateLikelyDashers({ game, players, me, cfg }) {
+  const c = cfg || DEFAULTS;
+  const meId = String(me?.id || "");
+  const inYard = safeArr(players).filter((p) => isInYard(p) && String(p?.id || "") !== meId);
+
+  let count = 0;
+  for (const p of inYard) {
+    const carry = sumLootPoints(p);
+    const push = dashPushFromCarry(carry, c);
+    const roosters = countRevealedRoosters(game);
+    const latePressure = roosters >= 2 ? 1.2 : 0;
+    if (push + latePressure >= Number(c.dashersLikelyThreshold || 6)) count++;
+  }
+  return count;
+}
+
+function avgLootDeckValue(game) {
+  const deck = safeArr(game?.lootDeck);
+  if (!deck.length) return 1.5;
+  let s = 0;
+  for (const c of deck) s += lootCardValue(c);
+  return s / deck.length;
+}
+
+// Hidden Nest anti-herding coordinator (deterministic slots)
+function hash32(str) {
+  let h = 2166136261;
+  const s = String(str || "");
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+function hiddenNestSlots(n) {
+  if (n <= 2) return n;
+  if (n === 3) return 1;
+  return 2; // 4+ -> max 2 dashers (keep bonus meaningful)
+}
+function isMeAllowedToDashHiddenNest({ game, players, meId }) {
+  const inYard = safeArr(players).filter((p) => isInYard(p));
+  const slots = hiddenNestSlots(inYard.length);
+  const keyBase = `${String(game?.id || game?.gameId || "raid")}|r${Number(game?.round || 0)}`;
+
+  const ranked = inYard
+    .map((p) => ({ id: String(p?.id || ""), k: hash32(`${keyBase}|${String(p?.id || "")}`) }))
+    .filter((x) => x.id)
+    .sort((a, b) => a.k - b.k)
+    .slice(0, slots)
+    .map((x) => x.id);
+
+  return ranked.includes(String(meId));
+}
+
+function decisionUtility({ decision, game, me, players, flagsRound, peekIntel, cfg, predictedDashers }) {
+  const c = cfg || DEFAULTS;
+
+  const carry = sumLootPoints(me);
+  const dashPush = dashPushFromCarry(carry, c);
+
+  const events = safeArr(peekIntel?.events);
+  const nextId = events[0] || nextEventId(game, 0);
+
+  const riskNow = eventDangerForChoice({ eventId: nextId, choice: decision, game, me, players, flagsRound });
+  const caughtP = clamp(riskNow / 10, 0, 1);
+  const surviveP = 1 - caughtP;
+
+  // expected carry after next event
+  let expectedCarryAfter = surviveP * carry;
+
+  // Hidden Nest bonus for DASH (approx)
+  if (String(nextId) === "HIDDEN_NEST" && decision === "DASH") {
+    const dashers = Math.max(0, Number(predictedDashers || 0));
+    const dashersInclMe = dashers + 1;
+
+    let bonusCards = 0;
+    if (dashersInclMe === 1) bonusCards = 3;
+    else if (dashersInclMe === 2) bonusCards = 2;
+    else if (dashersInclMe === 3) bonusCards = 1;
+
+    expectedCarryAfter += surviveP * bonusCards * avgLootDeckValue(game);
   }
 
-  // GATE_TOLL: non-dash moet 1 loot betalen anders caught :contentReference[oaicite:9]{index=9}
-  if (ev === "GATE_TOLL") {
-    if (dec === "DASH") return 1;
-    const lootLen = Array.isArray(p.loot) ? p.loot.length : 0;
-    return lootLen > 0 ? 1 : 0;
+  // Gate Toll: lose 1 loot if you don't DASH (if you have any)
+  if (String(nextId) === "GATE_TOLL" && decision !== "DASH") {
+    if (carry > 0) expectedCarryAfter -= surviveP * 1;
   }
 
-  // MAGPIE_SNITCH: Lead wordt gepakt als hij niet dash/burrow (engine) :contentReference[oaicite:10]{index=10}
-  if (ev === "MAGPIE_SNITCH") {
-    if (!isLead) return 1;
-    return (dec === "DASH" || dec === "BURROW") ? 1 : 0;
-  }
-
-  // SILENT_ALARM: survival ok; loot penalty wordt apart behandeld :contentReference[oaicite:11]{index=11}
-  if (ev === "SILENT_ALARM") return 1;
-
-  // default: safe
-  return 1;
-}
-
-function silentAlarmLootPenalty({ eventId, decision, player, isLead }) {
-  if (String(eventId) !== "SILENT_ALARM") return 0;
-  if (!isLead) return 0;
-  const dec = String(decision||"LURK").toUpperCase();
-  if (dec === "DASH") return 0; // jij ontwijkt meestal penalty door te dashen
-  const lootPts = sumLootPoints(player?.loot);
-  // engine: lead legt 2 loot af als hij kan (anders lead advance) :contentReference[oaicite:12]{index=12}
-  return lootPts >= 2 ? 2 : 0.75; // 0.75 = “soft penalty” voor lead-advance risico
-}
-
-function estimateDashPush({ player, cfg, game }) {
-  const lootPts = sumLootPoints(player?.loot);
-  // simpele mapping naar 0..10
-  let push = lootPts * 2.5; // 4 pts -> 10
-  // rooster druk: dichter bij einde => meer dash
-  const roosterSeen = Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0;
-  if (roosterSeen >= 2) push += 1.5;
-  return clamp(push, 0, 10);
-}
-
-// schatting: hoeveel dashers aan het einde (voor sack-bonus) — engine deelt door #dashers :contentReference[oaicite:13]{index=13}
-function expectedFinalDashers({ game, players, cfg }) {
-  const dashersNow = players.filter(p => p?.dashed === true).length;
-  const yard = players.filter(p => p?.dashed !== true && p?.inYard !== false);
-  let exp = dashersNow;
-  for (const p of yard) {
-    const dp = estimateDashPush({ player: p, cfg, game }) / 10;
-    exp += clamp(dp, 0, 1);
-  }
-  return Math.max(1, exp);
-}
-
-function expectedSackBonusPerDasher({ game, players, cfg }) {
-  const sackPts = sumLootPoints(game?.sack);
-  const expDashers = expectedFinalDashers({ game, players, cfg });
-  return (cfg.wShare || 0) * (sackPts / expDashers);
-}
-
-function isAlly(me, other){
-  return normColor(me?.color || me?.den) && normColor(me?.color || me?.den) === normColor(other?.color || other?.den);
-}
-
-function computeIsLead({ game, player, players }) {
-  const leadIndex = Number.isFinite(Number(game?.leadIndex)) ? Number(game.leadIndex) : 0;
-  const order = [...(players||[])].sort((a,b)=> Number(a?.joinOrder||0)-Number(b?.joinOrder||0));
-  const lead = order[leadIndex] || null;
-  return !!(lead && String(lead.id) === String(player?.id));
-}
-
-function bestDecisionForPlayer({ eventId, game, player, players, flagsRound, cfg }) {
-  // forced by Hold Still?
-  const hs = flagsRound?.holdStill || {};
-  if (hs && hs[String(player?.id)]) return "LURK";
-
-  const isLead = computeIsLead({ game, player, players });
-  const burrowAllowed = player?.burrowUsed ? false : true;
-
-  const dashSurv = survivalProbNextEvent({ eventId, decision:"DASH", game, player, flagsRound, isLead });
-  const lurkSurv = survivalProbNextEvent({ eventId, decision:"LURK", game, player, flagsRound, isLead });
-  const burSurv  = burrowAllowed ? survivalProbNextEvent({ eventId, decision:"BURROW", game, player, flagsRound, isLead }) : 0;
-
-  const lootPts = sumLootPoints(player?.loot);
-  const dashPush = estimateDashPush({ player, cfg, game });
-
-  // heel eenvoudige “zelf utility”: loot behouden + survival + alarm penalty
-  const alarmDash = silentAlarmLootPenalty({ eventId, decision:"DASH", player, isLead });
-  const alarmLurk = silentAlarmLootPenalty({ eventId, decision:"LURK", player, isLead });
-  const alarmBur  = silentAlarmLootPenalty({ eventId, decision:"BURROW", player, isLead });
-
-  const uDash = dashSurv * (lootPts) - (1-dashSurv) * lootPts - alarmDash + (dashPush/10)*0.4;
-  const uLurk = lurkSurv * (lootPts) - (1-lurkSurv) * lootPts - alarmLurk;
-  const uBur  = burSurv  * (lootPts) - (1-burSurv)  * lootPts - alarmBur  - 0.35; // burrow “kost” future option
-
-  let best = { dec:"LURK", u:uLurk };
-  if (uDash > best.u) best = { dec:"DASH", u:uDash };
-  if (burrowAllowed && uBur > best.u) best = { dec:"BURROW", u:uBur };
-  return best.dec;
-}
-
-function playerValuePerspective({ game, players, player, flagsRound, cfg, nextEventId }) {
-  const lootPts = sumLootPoints(player?.loot);
-  const bonus = expectedSackBonusPerDasher({ game, players, cfg });
-
-  // als al dashed: risk next event ~ 0 voor deze value
-  if (player?.dashed === true || player?.inYard === false) {
-    return lootPts + bonus;
-  }
-
-  const dec = bestDecisionForPlayer({ eventId: nextEventId, game, player, players, flagsRound, cfg });
-  const isLead = computeIsLead({ game, player, players });
-  const surv = survivalProbNextEvent({ eventId: nextEventId, decision: dec, game, player, flagsRound, isLead });
-  const alarm = silentAlarmLootPenalty({ eventId: nextEventId, decision: dec, player, isLead });
-
-  // expected loss: caught => loot kwijt (ruw), plus alarm penalty
-  const expectedLoss = (1 - surv) * lootPts + alarm;
-
-  // hand = “potentieel” (dit maakt FORAGE/HOLD STILL/denial meetellen)
-  const handLen = Array.isArray(player?.hand) ? player.hand.length : 0;
-  const handPotential = handLen * (cfg.actionCardEV || 0);
-
-  return (lootPts + bonus + handPotential) - expectedLoss;
-}
-
-function stateUtility({ game, players, meId, flagsRound, cfg, nextEventId }) {
-  const me = players.find(p => String(p.id) === String(meId));
-  if (!me) return -Infinity;
-
-  const allies = players.filter(p => p && String(p.id)!==String(meId) && isAlly(me,p));
-  const enemies= players.filter(p => p && String(p.id)!==String(meId) && !isAlly(me,p));
-
-  const Vme = playerValuePerspective({ game, players, player: me, flagsRound, cfg, nextEventId });
-  const Vallies = allies.reduce((s,p)=> s + playerValuePerspective({ game, players, player:p, flagsRound, cfg, nextEventId }), 0);
-  const Venemies= enemies.reduce((s,p)=> s + playerValuePerspective({ game, players, player:p, flagsRound, cfg, nextEventId }), 0);
-
-  return (cfg.wLoot||0)*Vme + (cfg.wTeam||0)*Vallies - (cfg.wDeny||0)*Venemies;
-}
-
-// js/bots/core/strategy.js (vervolg)
-
-function swapInPlace(arr, i, j) {
-  const a = [...arr];
-  if (!a[i] || !a[j]) return a;
-  [a[i], a[j]] = [a[j], a[i]];
-  return a;
-}
-
-function bestShiftSwap({ game, players, meId, flagsRound, cfg, intel }) {
-  const g = game || {};
-  const track = Array.isArray(g.eventTrack) ? g.eventTrack : [];
-  const idx = Number.isFinite(g.eventIndex) ? g.eventIndex : 0;
-
-  const N = Math.max(2, Number(cfg.lookaheadN || 5));
-  const lo = idx;
-  const hi = Math.min(track.length-1, idx + N - 1);
-
-  const baseNext = intel.nextId;
-  const baseU = stateUtility({ game:g, players, meId, flagsRound, cfg, nextEventId: baseNext });
-
-  let best = { gain: -Infinity, pair: null };
-
-  for (let i=lo; i<=hi; i++){
-    for (let j=i+1; j<=hi; j++){
-      const g2 = { ...g, eventTrack: swapInPlace(track, i, j) };
-      const intel2 = getPeekIntel({ game: g2, player: players.find(p=>String(p.id)===String(meId)), flagsRound, lookaheadN: cfg.lookaheadN });
-      const u2 = stateUtility({ game:g2, players, meId, flagsRound, cfg, nextEventId: intel2.nextId });
-      const gain = u2 - baseU;
-      if (gain > best.gain) best = { gain, pair: [i, j], intel2 };
+  // Silent Alarm: lead pays 2 loot into sack if possible
+  if (String(nextId) === "SILENT_ALARM") {
+    const isLead = computeIsLead(game, me, players);
+    if (isLead && decision !== "DASH") {
+      if (carry >= 2) expectedCarryAfter -= surviveP * 2;
+      else expectedCarryAfter -= surviveP * 0.5;
     }
   }
 
-  return best.pair ? best : null;
+  // share penalty: prefer dashing when fewer dash
+  let sharePenalty = 0;
+  if (decision === "DASH") {
+    const dashersInclMe = Math.max(1, Number(predictedDashers || 0) + 1);
+    sharePenalty = c.wShare * Math.log(1 + dashersInclMe);
+  }
+
+  // future pressure: staying means you face upcoming dangers
+  let futurePressure = 0;
+  if (decision !== "DASH") {
+    const future = events.slice(1);
+    let best = 0;
+    for (let i = 0; i < future.length; i++) {
+      const pd = peakDangerForEvent({ eventId: future[i], game, me, players, flagsRound });
+      const w = i === 0 ? 0.7 : i === 1 ? 0.45 : 0.28;
+      best = Math.max(best, pd * w);
+    }
+    futurePressure = best;
+  }
+
+  // rooster pressure
+  const roosters = countRevealedRoosters(game);
+  let roosterBias = 0;
+  if (roosters >= 2) roosterBias = decision === "DASH" ? 2.0 : -3.0;
+  else if (roosters === 1 && carry >= 3) roosterBias = decision === "DASH" ? 0.8 : -1.2;
+
+  // BURROW cost: 1x per raid resource
+  const burrowCost = decision === "BURROW" ? Number(c.burrowMaxExtraCost || 0) : 0;
+
+  const lootTerm = c.wLoot * expectedCarryAfter;
+  const riskTerm = c.wRisk * (riskNow + futurePressure);
+  const dashPushBonus =
+    decision === "DASH"
+      ? Math.max(0, dashPush - Number(c.dashPushThreshold || 6.5)) * 0.6
+      : 0;
+
+  let utility = lootTerm - riskTerm - sharePenalty - burrowCost + roosterBias + dashPushBonus;
+
+  // Hidden Nest coordination: discourage DASH if not in deterministic slot
+  if (
+    c.hiddenNestCoordination &&
+    String(nextId) === "HIDDEN_NEST" &&
+    decision === "DASH" &&
+    !isMeAllowedToDashHiddenNest({ game, players, meId: me?.id })
+  ) {
+    utility -= Number(c.hiddenNestDashPenalty || 4.0);
+  }
+
+  return { utility, surviveP, riskNow, futurePressure, carry, dashPush, sharePenalty, expectedCarryAfter };
 }
 
-export function evaluateMoveOptions({ game, bot, players, flagsRound, cfg = BOT_UTILITY_CFG }) {
-  const g = game || {};
-  const me = bot || {};
-  const P = Array.isArray(players) ? players.map(p => (String(p.id)===String(me.id) ? me : p)) : [me];
-  const flags = flagsRound || {};
+export function evaluateDecision({ game, me, players, flagsRound = null, cfg = null, peekIntel = null }) {
+  const c = { ...DEFAULTS, ...(cfg || {}) };
+  const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
+  const intel = peekIntel || getPeekIntel({ game, me, flagsRound: flags, lookaheadN: c.lookaheadN });
 
-  const intel = getPeekIntel({ game:g, player:me, flagsRound:flags, lookaheadN: cfg.lookaheadN });
-  const nextId = intel.nextId;
+  const predictedDashers = estimateLikelyDashers({ game, players, me, cfg: c });
+  const burrowUsed = me?.burrowUsed === true;
 
-  // baseline utility
-  const baseU = stateUtility({ game:g, players:P, meId: me.id, flagsRound: flags, cfg, nextEventId: nextId });
+  const options = [
+    { decision: "DASH" },
+    { decision: "LURK" },
+    { decision: "BURROW", illegal: burrowUsed },
+  ];
 
-  const loot = Array.isArray(me.loot) ? me.loot : [];
-  const hand = Array.isArray(me.hand) ? me.hand : [];
-  const lootDeckLen = Array.isArray(g.lootDeck) ? g.lootDeck.length : 0;
-  const actionDeckLen = Array.isArray(g.actionDeck) ? g.actionDeck.length : 0;
+  const scored = [];
+  for (const o of options) {
+    if (o.illegal) {
+      scored.push({ decision: o.decision, illegal: true, utility: -1e9, reason: "burrowUsed=true" });
+      continue;
+    }
+    const res = decisionUtility({
+      decision: o.decision,
+      game,
+      me,
+      players,
+      flagsRound: flags,
+      peekIntel: intel,
+      cfg: c,
+      predictedDashers,
+    });
+    scored.push({ decision: o.decision, illegal: false, ...res });
+  }
 
-  // ---- candidate: SNATCH (deck draw, expected) ----
-  // SNATCH is “altijd ok” zolang lootDeck niet leeg is
-  const snatchGain = (cfg.wLoot||0) * (cfg.lootEV||0);
-  const uSnatch = baseU + snatchGain;
+  const lurk = scored.find((x) => x.decision === "LURK");
+  const dash = scored.find((x) => x.decision === "DASH");
+  const burrow = scored.find((x) => x.decision === "BURROW");
 
-  // ---- candidate: FORAGE (2 action cards, expected) ----
-  // waarde groeit als je weinig hand hebt en/of gevaar nadert
-  const handNeed = hand.length < 2 ? 1 : (hand.length < 3 ? 0.5 : 0);
-  const dangerFacts = nextId ? getEventFacts(nextId, { denColor: normColor(me.color), lootLen: loot.length, isLead: false }) : null;
-  const dangerNeed = dangerFacts ? clamp(Math.max(dangerFacts.dangerLurk, dangerFacts.dangerDash, dangerFacts.dangerBurrow)) / 10 : 0.3;
-  const forageEV = (cfg.actionCardEV||0) * 2 * (1 + 0.7*handNeed + 0.6*dangerNeed);
-  const uForage = baseU + forageEV;
+  const stayRisk = lurk?.riskNow ?? 0;
+  const dashRisk = dash?.riskNow ?? 0;
+  const burrowRisk = burrow?.riskNow ?? 0;
 
-  // ---- candidate: SHIFT (track swap + cost) ----
-  let bestShift = null;
-  let uShift = -Infinity;
-  if (!flags.lockEvents && loot.length > 0) { // SHIFT verboden zonder loot (kost) of als lockEvents actief is :contentReference[oaicite:14]{index=14}
-    bestShift = bestShiftSwap({ game:g, players:P, meId: me.id, flagsRound: flags, cfg, intel });
-    if (bestShift?.pair) {
-      const hiIdx = highestLootCardIndex(loot);
-      const costV = hiIdx >= 0 ? Number(loot[hiIdx]?.v||0) : 0;
-      uShift = (baseU + bestShift.gain) - (cfg.wResource||0) * costV;
+  // HARD RULE: anti-suicide lurk
+  let forced = null;
+  if (stayRisk >= c.panicStayRisk && dashRisk + c.suicideMargin <= stayRisk) forced = "DASH";
+
+  // BURROW gating: only if it really helps
+  if (!forced && !burrowUsed && burrow && !burrow.illegal) {
+    const bestNonBurrow = [dash, lurk].slice().sort((a, b) => b.utility - a.utility)[0];
+    const safetyGain = (bestNonBurrow?.riskNow ?? 0) - (burrowRisk ?? 0);
+    if (!(safetyGain >= c.burrowMinSafetyGain && (burrow.utility ?? -1e9) >= (bestNonBurrow?.utility ?? -1e9) - 1.5)) {
+      burrow.utility -= 3.5;
     }
   }
 
-  // ---- candidate: SCOUT ----
-  // in peek-mode meestal low value; alleen als noPeek effect actief is
-  const noPeekArr = Array.isArray(flags.noPeek) ? flags.noPeek : [];
-  const isNoPeek = noPeekArr.includes(String(me.id||""));
-  const uScout = isNoPeek ? baseU + 0.8 : -Infinity;
-
-  // filter op echte beschikbaarheid
-  const opts = [];
-  if (lootDeckLen > 0) opts.push({ kind:"SNATCH", u:uSnatch });
-  if (actionDeckLen > 0) opts.push({ kind:"FORAGE", u:uForage });
-  if (bestShift?.pair && uShift > -Infinity) opts.push({ kind:"SHIFT", u:uShift, swap: bestShift.pair });
-  if (uScout > -Infinity) opts.push({ kind:"SCOUT", u:uScout });
-
-  // kies beste, maar SHIFT alleen als gain groot genoeg
-  opts.sort((a,b)=> b.u - a.u);
-  const best = opts[0] || null;
-  if (!best) return null;
-
-  if (best.kind === "SHIFT") {
-    const gainNet = best.u - Math.max(uSnatch, uForage);
-    if (gainNet < (cfg.shiftMinGain||0)) {
-      // SHIFT niet waard -> fallback
-      return (uForage > uSnatch && actionDeckLen>0) ? { kind:"FORAGE" } : { kind:"SNATCH" };
-    }
+  // pick best
+  let best = scored.slice().sort((a, b) => b.utility - a.utility)[0];
+  if (forced) {
+    const f = scored.find((x) => x.decision === forced);
+    if (f) best = f;
   }
 
-  return best.kind === "SHIFT" ? { kind:"SHIFT", swap: best.swap } : { kind: best.kind };
+  return {
+    decision: best?.decision || "LURK",
+    needsBurrowWrite: best?.decision === "BURROW" && !burrowUsed,
+    meta: {
+      predictedDashers,
+      stayRisk,
+      dashRisk,
+      burrowRisk,
+      dashPush: best?.dashPush ?? dashPushFromCarry(sumLootPoints(me), c),
+      carry: best?.carry ?? sumLootPoints(me),
+      intel,
+      flags,
+    },
+    ranked: scored
+      .slice()
+      .sort((a, b) => b.utility - a.utility)
+      .map((x) => ({
+        decision: x.decision,
+        utility: Number(x.utility || 0),
+        illegal: !!x.illegal,
+        riskNow: Number(x.riskNow || 0),
+        surviveP: Number(x.surviveP || 0),
+        expectedCarryAfter: Number(x.expectedCarryAfter || 0),
+        sharePenalty: Number(x.sharePenalty || 0),
+        futurePressure: Number(x.futurePressure || 0),
+      })),
+  };
 }
 
-// APPLY helper voor MOVE (SHIFT-cost): remove hoogste loot en unshift naar bottom lootDeck
+/** =========================
+ *  MOVE (SNATCH / FORAGE / SHIFT / SCOUT)
+ *  ========================= */
 export function applyShiftCost({ loot, lootDeck }) {
-  const L = Array.isArray(loot) ? [...loot] : [];
-  const D = Array.isArray(lootDeck) ? [...lootDeck] : [];
-  const i = highestLootCardIndex(L);
-  if (i < 0) return { loot: L, lootDeck: D, paid: null };
-  const [paid] = L.splice(i,1);
-  // deck top = pop(), dus bottom = unshift() :contentReference[oaicite:15]{index=15}
-  D.unshift(paid);
-  return { loot: L, lootDeck: D, paid };
+  const l = safeArr(loot).slice();
+  const d = safeArr(lootDeck).slice();
+  const idx = highestLootCardIndex(l);
+  if (idx < 0) return { loot: l, lootDeck: d, removedCard: null, removedValue: 0 };
+
+  const [removedCard] = l.splice(idx, 1);
+  const removedValue = lootCardValue(removedCard);
+  // bottom of deck (engine draws with pop from end) => put card at front
+  d.unshift(removedCard);
+  return { loot: l, lootDeck: d, removedCard, removedValue };
 }
 
-// js/bots/core/strategy.js (vervolg)
+function evaluateShiftPlan({ game, me, players, flagsRound, cfg, peekIntel }) {
+  const c = cfg || DEFAULTS;
+  const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
+  if (flags.lockEvents) return null;
 
-// dry-run: pas een subset toe (zoals je live ook doet)
-function applyActionDryRun(state, play, cfg) {
-  const s = deepClone(state);
-  const { game:g, players:P } = s;
-  const flags = s.flagsRound || (s.flagsRound = {});
-  const meId = String(play.by);
+  const team = safeArr(players).filter((p) => isInYard(p) && isSameDen(p, me) && String(p.id) !== String(me.id));
+  const enemies = safeArr(players).filter((p) => isInYard(p) && !isSameDen(p, me));
 
-  const cardName = String(play.name || "").trim();
+  const events = safeArr(peekIntel?.events);
+  if (events.length < 2) return null;
 
-  // helpers
-  const me = P.find(p => String(p.id)===meId);
+  const idxBase = Number.isFinite(Number(game?.eventIndex)) ? Number(game.eventIndex) : 0;
+  const weights = [1.0, 0.65, 0.42, 0.28, 0.18];
+  const wAt = (k) => weights[k] ?? Math.max(0.12, 0.18 * Math.pow(0.7, k));
 
-  if (cardName === "Den Signal") {
-    const c = normColor(play.denColor || me?.color);
-    const denImmune = { ...(flags.denImmune || {}) };
-    if (c) denImmune[c] = true;
-    flags.denImmune = denImmune;
-  }
-
-  if (cardName === "Burrow Beacon") {
-    flags.lockEvents = true;
-  }
-
-  if (cardName === "Hold Still") {
-    const t = String(play.targetId||"");
-    if (t) {
-      const hs = { ...(flags.holdStill || {}) };
-      hs[t] = true;
-      flags.holdStill = hs;
+  function weightedPeak(pl, evs) {
+    let s = 0;
+    for (let k = 0; k < evs.length; k++) {
+      const pd = peakDangerForEvent({ eventId: evs[k], game, me: pl, players, flagsRound: flags });
+      s += pd * wAt(k);
     }
+    return s;
   }
 
-  if (cardName === "Mask Swap") {
-    const tId = String(play.targetId||"");
-    const t = P.find(p => String(p.id)===tId);
-    if (me && t) {
-      const a = normColor(me.color);
-      const b = normColor(t.color);
-      if (a && b && a !== b) {
-        me.color = b; me.den = b;
-        t.color = a; t.den = a;
+  const baseTeam = weightedPeak(me, events) + team.reduce((acc, pl) => acc + weightedPeak(pl, events), 0);
+  const baseEnemies = enemies.reduce((acc, pl) => {
+    const carryW = 1 + Math.min(2.0, sumLootPoints(pl) / 6);
+    return acc + weightedPeak(pl, events) * carryW;
+  }, 0);
+
+  let best = null;
+
+  for (let i = 0; i < events.length - 1; i++) {
+    for (let j = i + 1; j < events.length; j++) {
+      const newEvents = events.slice();
+      [newEvents[i], newEvents[j]] = [newEvents[j], newEvents[i]];
+
+      const t = weightedPeak(me, newEvents) + team.reduce((acc, pl) => acc + weightedPeak(pl, newEvents), 0);
+      const e = enemies.reduce((acc, pl) => {
+        const carryW = 1 + Math.min(2.0, sumLootPoints(pl) / 6);
+        return acc + weightedPeak(pl, newEvents) * carryW;
+      }, 0);
+
+      const teamImprove = baseTeam - t;        // positive good
+      const enemyWorsen = e - baseEnemies;     // positive good
+      const utilityGain = c.wTeam * teamImprove + c.wDeny * enemyWorsen;
+
+      if (!best || utilityGain > best.utilityGain) {
+        best = {
+          utilityGain,
+          swapOffsets: [i, j],
+          swapIndices: [idxBase + i, idxBase + j],
+          summary: { teamImprove, enemyWorsen },
+        };
       }
     }
   }
 
-  if (cardName === "Pack Tinker" && !flags.lockEvents) {
-    // deterministische “beste swap” (zelfde als SHIFT zoek, maar pak alleen 1 pair)
-    const intel = getPeekIntel({ game:g, player:me, flagsRound:flags, lookaheadN: cfg.lookaheadN });
-    const best = bestShiftSwap({ game:g, players:P, meId: me?.id, flagsRound: flags, cfg, intel });
-    if (best?.pair) {
-      const [i,j] = best.pair;
-      const track = Array.isArray(g.eventTrack) ? g.eventTrack : [];
-      g.eventTrack = swapInPlace(track, i, j);
-    }
-  }
-
-  if (cardName === "Kick Up Dust" && !flags.lockEvents) {
-    // random shuffle → verwacht voordeel = 35% van “beste swap” (optimisme-factor)
-    const intel = getPeekIntel({ game:g, player:me, flagsRound:flags, lookaheadN: cfg.lookaheadN });
-    const best = bestShiftSwap({ game:g, players:P, meId: me?.id, flagsRound: flags, cfg, intel });
-    if (best?.pair) {
-      const [i,j] = best.pair;
-      const track = Array.isArray(g.eventTrack) ? g.eventTrack : [];
-      // apply best-case maar discount later in score
-      g.eventTrack = swapInPlace(track, i, j);
-      s._kickDiscount = 0.35;
-    }
-  }
-
-  if (cardName === "Nose for Trouble") {
-    // in peek-mode is dit super: prediction = next event
-    const intel = getPeekIntel({ game:g, player:me, flagsRound:flags, lookaheadN: cfg.lookaheadN });
-    flags.predictions = Array.isArray(flags.predictions) ? flags.predictions : [];
-    flags.predictions = flags.predictions.filter(x => String(x?.playerId) !== meId);
-    if (intel.nextId) flags.predictions.push({ playerId: meId, eventId: intel.nextId });
-  }
-
-  return s;
+  return best;
 }
 
-function actionHoldPenalty(cardName, intel, me, cfg) {
-  // simpele hold logic: bewaar “counters” als relevant event binnen horizon
-  const horizon = Math.max(1, Number(cfg.holdHorizon||2));
-  const upcoming = Array.isArray(intel.upcomingIds) ? intel.upcomingIds.slice(0, horizon) : [];
+function roughActionValue(facts, ctx) {
+  if (!facts) return 0.4;
+  const tags = safeArr(facts.tags).map((t) => String(t || "").toUpperCase());
+  const has = (t) => tags.includes(String(t).toUpperCase());
 
-  if (cardName === "Den Signal") {
-    const myC = normColor(me?.color);
-    const relevant = upcoming.some(ev => (ev==="DOG_CHARGE"||ev==="SECOND_CHARGE") || (isDenEvent(ev) && denColorFromEvent(ev)===myC));
-    return relevant ? 0.9 : 0; // “bewaarwaarde”
-  }
+  let v = 0;
+  if (has("DEN_IMMUNITY")) v += 4;
+  if (has("TRACK_MANIP")) v += 3;
+  if (has("LOCK_EVENTS")) v += 1.5;
+  if (has("PREDICT_EVENT")) v += 2.2;
+  if (has("INFO") || has("PEEK_DECISION")) v += 1.1;
 
-  if (cardName === "Alpha Call") {
-    const relevant = upcoming.includes("MAGPIE_SNITCH") || upcoming.includes("SILENT_ALARM");
-    return relevant ? 0.7 : 0;
-  }
+  // in peek-mode, info less valuable
+  if (ctx?.intel?.mode === "peek" && (has("INFO") || has("PEEK_DECISION") || has("PREDICT_EVENT"))) v *= 0.6;
 
-  return 0;
+  // if next event is dangerous, defense/control up
+  const nextId = safeArr(ctx?.intel?.events)[0] || nextEventId(ctx?.game, 0);
+  const dangerNext = nextId ? peakDangerForEvent({ eventId: nextId, game: ctx.game, me: ctx.me, players: ctx.players, flagsRound: ctx.flags }) : 0;
+  if (dangerNext >= 6 && (has("DEN_IMMUNITY") || has("TRACK_MANIP") || has("LOCK_EVENTS"))) v *= 1.25;
+
+  return v;
 }
 
-// combo search (max 2): evalueer A en A->B dry-run. Speel alleen als netto winst > comboMinGain.
-export function evaluateOpsActions({ game, bot, players, flagsRound, cfg = BOT_UTILITY_CFG }) {
-  const g = game || {};
-  const me = bot || {};
-  const P = Array.isArray(players) ? players.map(p => (String(p.id)===String(me.id) ? me : p)) : [me];
-  const flags = flagsRound || {};
+function avgActionDeckValue(game, ctx, cfg) {
+  const c = cfg || DEFAULTS;
+  const deck = safeArr(game?.actionDeck);
+  if (!deck.length) return 0;
 
-  const intel = getPeekIntel({ game:g, player:me, flagsRound:flags, lookaheadN: cfg.lookaheadN });
-  const nextId = intel.nextId;
+  const sampleN = Math.max(8, Number(c.actionDeckSampleN || 30));
+  const n = Math.min(deck.length, sampleN);
 
-  // OPS locked => pass
-  if (flags.opsLocked) return null;
+  let s = 0;
+  let used = 0;
 
-  const hand = Array.isArray(me.hand) ? me.hand : [];
-  if (!hand.length) return null;
-
-  // baseline
-  const baseState = { game: deepClone(g), players: deepClone(P), flagsRound: deepClone(flags) };
-  const baseU = stateUtility({ game: baseState.game, players: baseState.players, meId: me.id, flagsRound: baseState.flagsRound, cfg, nextEventId: nextId });
-
-  // candidates: alleen kaarten die jij daadwerkelijk kan spelen (naam moet matchen in hand)
-  const cards = hand.map(c => String(c?.name || c || "").trim()).filter(Boolean);
-
-  const plays = cards.map(name => {
+  for (let i = deck.length - 1; i >= 0 && used < n; i--) {
+    const raw = deck[i];
+    const name = String(raw?.name || raw || "").trim();
+    if (!name) continue;
     const def = getActionDefByName(name);
-    return { name, actionId: def?.id || null, by: me.id };
-  });
-
-  // targetting helpers
-  const enemies = P.filter(p => p && String(p.id)!==String(me.id) && !isAlly(me,p) && p.inYard !== false);
-  const allies  = P.filter(p => p && String(p.id)!==String(me.id) && isAlly(me,p) && p.inYard !== false);
-  const richestEnemy = [...enemies].sort((a,b)=> sumLootPoints(b.loot)-sumLootPoints(a.loot))[0] || null;
-  const biggestHandEnemy = [...enemies].sort((a,b)=> (b.hand?.length||0)-(a.hand?.length||0))[0] || null;
-
-  function withTarget(play){
-    if (play.name === "Mask Swap") return { ...play, targetId: richestEnemy?.id || null };
-    if (play.name === "Hold Still") return { ...play, targetId: biggestHandEnemy?.id || richestEnemy?.id || null };
-    if (play.name === "Den Signal") return { ...play, denColor: normColor(me.color) }; // team-synergy default
-    return play;
+    const facts = def?.id ? getActionFacts(def.id) : null;
+    s += roughActionValue(facts, ctx);
+    used++;
   }
 
-  // score single
-  let bestSingle = { u: -Infinity, play: null };
-
-  for (const p0 of plays) {
-    const play0 = withTarget(p0);
-    if (!play0.name) continue;
-
-    const holdPen = actionHoldPenalty(play0.name, intel, me, cfg);
-
-    const s1 = applyActionDryRun(baseState, play0, cfg);
-    const intel1 = getPeekIntel({ game:s1.game, player: s1.players.find(x=>String(x.id)===String(me.id)), flagsRound:s1.flagsRound, lookaheadN: cfg.lookaheadN });
-
-    let u1 = stateUtility({ game:s1.game, players:s1.players, meId: me.id, flagsRound:s1.flagsRound, cfg, nextEventId: intel1.nextId });
-
-    // discount Kick Up Dust optimism
-    if (play0.name === "Kick Up Dust") {
-      const disc = Number(s1._kickDiscount || 0.35);
-      u1 = baseU + (u1 - baseU) * disc;
-    }
-
-    u1 -= (cfg.wResource||0) * holdPen;
-
-    if (u1 > bestSingle.u) bestSingle = { u: u1, play: play0 };
-  }
-
-  // score combo A->B (max 2 kaarten)
-  const p2 = clamp(Number(cfg.comboSecondTurnBaseProb||0.55), 0, 1);
-  let bestCombo = { u: -Infinity, playA: null };
-
-  for (const a0 of plays) {
-    const A = withTarget(a0);
-    const sA = applyActionDryRun(baseState, A, cfg);
-    const intelA = getPeekIntel({ game:sA.game, player: sA.players.find(x=>String(x.id)===String(me.id)), flagsRound:sA.flagsRound, lookaheadN: cfg.lookaheadN });
-    const uA = stateUtility({ game:sA.game, players:sA.players, meId: me.id, flagsRound:sA.flagsRound, cfg, nextEventId: intelA.nextId });
-
-    for (const b0 of plays) {
-      if (String(b0.name) === String(A.name)) continue; // zelfde kaart 2x: kan, maar skip voor nu
-      const B = withTarget(b0);
-
-      const sAB = applyActionDryRun(sA, B, cfg);
-      const intelAB = getPeekIntel({ game:sAB.game, player: sAB.players.find(x=>String(x.id)===String(me.id)), flagsRound:sAB.flagsRound, lookaheadN: cfg.lookaheadN });
-      const uAB = stateUtility({ game:sAB.game, players:sAB.players, meId: me.id, flagsRound:sAB.flagsRound, cfg, nextEventId: intelAB.nextId });
-
-      // combo utility = uA nu + kans op tweede * (uAB - uA)
-      const uCombo = uA + p2 * (uAB - uA);
-
-      if (uCombo > bestCombo.u) bestCombo = { u: uCombo, playA: A };
-    }
-  }
-
-  const best = (bestCombo.u > bestSingle.u + (cfg.comboMinGain||0)) ? { u: bestCombo.u, play: bestCombo.playA } : bestSingle;
-
-  // PASS als geen duidelijke winst vs baseline
-  if (!best.play) return null;
-  if (best.u < baseU + 0.25) return null;
-
-  return best.play;
+  return used ? s / used : 0.8;
 }
-// js/bots/core/strategy.js (vervolg)
 
-export function evaluateDecision({ game, bot, players, flagsRound, cfg = BOT_UTILITY_CFG }) {
-  const g = game || {};
-  const me = bot || {};
-  const P = Array.isArray(players) ? players.map(p => (String(p.id)===String(me.id) ? me : p)) : [me];
-  const flags = flagsRound || {};
+export function evaluateMoveOptions({ game, me, players, flagsRound = null, cfg = null }) {
+  const c = { ...DEFAULTS, ...(cfg || {}) };
+  const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
+  const intel = getPeekIntel({ game, me, flagsRound: flags, lookaheadN: c.lookaheadN });
 
-  const intel = getPeekIntel({ game:g, player:me, flagsRound:flags, lookaheadN: cfg.lookaheadN });
-  const nextId = intel.nextId;
+  const lootDeck = safeArr(game?.lootDeck);
+  const actionDeck = safeArr(game?.actionDeck);
+  const loot = safeArr(me?.loot);
 
-  // forced by Hold Still?
-  const hs = flags?.holdStill || {};
-  if (hs && hs[String(me.id)]) return { decision: "LURK", reason: "HOLD_STILL_FORCED" };
+  const carry = sumLootPoints(me);
+  const dashPush = dashPushFromCarry(carry, c);
+  const ctx = { game, me, players, flags, intel, carry, dashPush };
 
-  const isLead = computeIsLead({ game:g, player:me, players:P });
+  const options = [];
 
-  const dashPush = estimateDashPush({ player: me, cfg, game:g });
+  // SNATCH: draw 1 loot
+  if (lootDeck.length > 0) {
+    const exp = avgLootDeckValue(game);
+    let u = c.wLoot * exp;
 
-  const lurkSurv = survivalProbNextEvent({ eventId: nextId, decision:"LURK", game:g, player:me, flagsRound:flags, isLead });
-  const dashSurv = survivalProbNextEvent({ eventId: nextId, decision:"DASH", game:g, player:me, flagsRound:flags, isLead });
+    // hard-ish guard: next is Gate Toll + 0 loot => SNATCH becomes very valuable
+    const next0 = safeArr(intel?.events)[0] || nextEventId(game, 0);
+    if (String(next0) === "GATE_TOLL" && carry <= 0) u += 2.0;
 
-  const canBurrow = !me.burrowUsed;
-  const burSurv = canBurrow
-    ? survivalProbNextEvent({ eventId: nextId, decision:"BURROW", game:g, player:me, flagsRound:flags, isLead })
-    : 0;
-
-  const stayRisk = (1 - Math.max(lurkSurv, burSurv || 0)) * 10;
-  const dashRisk = (1 - dashSurv) * 10;
-  const burRisk  = (1 - burSurv) * 10;
-
-  // ---- HARD RULE: anti-suicide lurk ----
-  if (stayRisk >= (cfg.panicStayRisk||7.5) && dashRisk <= (cfg.safeDashRisk||3.0)) {
-    return { decision: "DASH", reason: "ANTI_SUICIDE_LURK" };
+    options.push({ move: "SNATCH", utility: u, expLoot: exp, note: "draw 1 loot" });
   }
 
-  // ---- Evaluate utility explicitly (zelf) ----
-  const lootPts = sumLootPoints(me.loot);
-  const alarmDash = silentAlarmLootPenalty({ eventId: nextId, decision:"DASH", player:me, isLead });
-  const alarmLurk = silentAlarmLootPenalty({ eventId: nextId, decision:"LURK", player:me, isLead });
-  const alarmBur  = silentAlarmLootPenalty({ eventId: nextId, decision:"BURROW", player:me, isLead });
+  // FORAGE: draw up to 2 action cards
+  if (actionDeck.length > 0) {
+    const drawn = Math.min(2, actionDeck.length);
+    const expCard = avgActionDeckValue(game, ctx, c);
+    const exp = expCard * drawn;
+    options.push({ move: "FORAGE", utility: exp, expAction: exp, note: `draw ${drawn} action(s)` });
+  }
 
-  const uDash = dashSurv * lootPts - (1-dashSurv)*lootPts - alarmDash + (dashPush/10)*0.8;
-  const uLurk = lurkSurv * lootPts - (1-lurkSurv)*lootPts - alarmLurk;
-  const uBur  = canBurrow ? (burSurv * lootPts - (1-burSurv)*lootPts - alarmBur - 0.5) : -Infinity;
+  // SCOUT: low in peek-mode; higher only when noPeek=true
+  if (!flags.scatter) {
+    const v = flags.noPeek ? 3.0 : c.scoutBaseValue;
+    options.push({ move: "SCOUT", utility: v, note: flags.noPeek ? "reveal upcoming events" : "low value (peek)" });
+  }
 
-  // ---- dash trigger ----
-  const dashTriggered = dashPush >= (cfg.dashPushThreshold||6.2) && dashRisk <= stayRisk + 0.5;
+  // SHIFT: swap 2 upcoming events, pay cost: highest loot to bottom deck
+  if (!flags.lockEvents && loot.length > 0 && intel.events.length >= 2) {
+    const plan = evaluateShiftPlan({ game, me, players, flagsRound: flags, cfg: c, peekIntel: intel });
+    if (plan) {
+      const idxHighest = highestLootCardIndex(loot);
+      const costV = idxHighest >= 0 ? lootCardValue(loot[idxHighest]) : 0;
+      const net = plan.utilityGain - c.wResource * costV;
+      options.push({ move: "SHIFT", utility: net, plan, costV, note: "swap upcoming events + pay loot" });
+    }
+  }
 
-  // ---- burrow trigger ----
-  const burSafetyGain = stayRisk - burRisk;
-  const burTriggered =
-    canBurrow &&
-    stayRisk >= (cfg.panicStayRisk||7.5) &&
-    dashRisk >= (cfg.panicStayRisk||7.5) &&
-    burSafetyGain >= (cfg.burrowMinSafetyGain||2.0);
+  if (!options.length) return { best: { move: "SNATCH", utility: 0, note: "fallback" }, ranked: [], intel };
 
-  if (burTriggered) return { decision:"BURROW", reason:"BURROW_SAFETY_WINDOW" };
-  if (dashTriggered) return { decision:"DASH", reason:"DASH_PUSH_TRIGGER" };
+  const ranked = options.slice().sort((a, b) => b.utility - a.utility);
+  let best = ranked[0];
 
-  // anders hoogste utility
-  let best = { decision:"LURK", u:uLurk, reason:"MAX_U" };
-  if (uDash > best.u) best = { decision:"DASH", u:uDash, reason:"MAX_U" };
-  if (uBur  > best.u) best = { decision:"BURROW", u:uBur, reason:"MAX_U" };
+  // SHIFT gating
+  if (best.move === "SHIFT") {
+    const second = ranked[1] || null;
+    const gainOverSecond = best.utility - (second?.utility ?? -1e9);
+    if (gainOverSecond < c.shiftMinGain) best = second || best;
+  }
 
-  // HARD RULE: burrowUsed => nooit BURROW
-  if (best.decision === "BURROW" && !canBurrow) return { decision:"LURK", reason:"BURROW_FORBIDDEN" };
+  // hard guard (runner-style): Gate Toll + 0 loot => prefer SNATCH if possible
+  const next0 = safeArr(intel?.events)[0] || nextEventId(game, 0);
+  if (String(next0) === "GATE_TOLL" && carry <= 0) {
+    const sn = ranked.find((x) => x.move === "SNATCH");
+    if (sn) best = sn;
+  }
 
-  return { decision: best.decision, reason: best.reason, debug: { dashPush, stayRisk, dashRisk, burRisk } };
+  return { best, ranked, intel };
+}
+
+/** =========================
+ *  OPS(ACTIONS)
+ *  ========================= */
+
+// If rulesIndex marks these “unimplemented” but botRunner DOES apply them, treat as implemented here.
+const RUNNER_IMPLEMENTED = new Set([
+  "DEN_SIGNAL",
+  "NO_GO_ZONE",
+  "BURROW_BEACON",
+  "SCATTER",
+  "SCENT_CHECK",
+  "FOLLOW_THE_TAIL",
+  "MOLTING_MASK",
+  "NOSE_FOR_TROUBLE",
+  "MASK_SWAP",
+  "PACK_TINKER",
+  "KICK_UP_DUST",
+  "HOLD_STILL", // still downweighted by rulesIndex, but at least doesn't get annihilated
+]);
+
+function mulberry32(seed) {
+  let t = seed >>> 0;
+  return function () {
+    t += 0x6D2B79F5;
+    let x = t;
+    x = Math.imul(x ^ (x >>> 15), x | 1);
+    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function hashSeed(s) {
+  const str = String(s || "");
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+function shuffleArraySeeded(arr, rnd) {
+  const a = safeArr(arr).slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function pickPackTinkerSwapLikeRunner(game) {
+  const track = safeArr(game?.eventTrack).slice();
+  const idx = Number.isFinite(Number(game?.eventIndex)) ? Number(game.eventIndex) : 0;
+  if (track.length < 2) return null;
+  if (idx >= track.length - 1) return null;
+
+  const nextId = track[idx];
+  const nextType = classifyEvent(nextId);
+  let j = -1;
+
+  for (let k = track.length - 1; k > idx; k--) {
+    const t = classifyEvent(track[k]);
+    if (nextType.type === "DOG") {
+      if (t.type !== "DOG") { j = k; break; }
+    } else {
+      j = k; break;
+    }
+  }
+  if (j <= idx) return null;
+  return [idx, j];
+}
+
+function simulateActionOnce({ play, game, me, players, flagsRound, cfg, seedTag = "" }) {
+  const g = structuredCloneSafe(game || {});
+  const flags = getFlags(flagsRound || g?.flagsRound, String(me?.id || ""));
+  const simPlayers = structuredCloneSafe(safeArr(players || []));
+  const p = structuredCloneSafe(me || {});
+  const meId = String(p?.id || "");
+
+  const actionId = String(play?.actionId || "");
+  const targetId = play?.targetId ? String(play.targetId) : null;
+
+  // helpers
+  const idxOf = (pid) => simPlayers.findIndex((x) => String(x?.id || "") === String(pid || ""));
+
+  // Apply effects like botRunner does:
+  if (actionId === "DEN_SIGNAL") {
+    const myDen = normColor(p?.color || p?.den || p?.denColor);
+    const di = { ...(flags.denImmune || {}) };
+    if (myDen) di[myDen] = true;
+    flags.denImmune = di;
+  }
+
+  if (actionId === "NO_GO_ZONE") {
+    flags.opsLocked = true;
+  }
+
+  if (actionId === "BURROW_BEACON") {
+    flags.lockEvents = true;
+  }
+
+  if (actionId === "SCATTER") {
+    flags.scatter = true;
+  }
+
+  if (actionId === "HOLD_STILL") {
+    if (targetId) {
+      const hs = { ...(flags.holdStill || {}) };
+      hs[targetId] = true;
+      flags.holdStill = hs;
+    }
+  }
+
+  if (actionId === "SCENT_CHECK") {
+    const arr = safeArr(flags.scentChecks).slice();
+    if (meId && !arr.includes(meId)) arr.push(meId);
+    flags.scentChecks = arr;
+  }
+
+  if (actionId === "FOLLOW_THE_TAIL") {
+    if (meId && targetId) {
+      const ft = { ...(flags.followTail || {}) };
+      ft[meId] = targetId;
+      flags.followTail = ft;
+    }
+  }
+
+  if (actionId === "MOLTING_MASK") {
+    flags.noPeek = true;
+  }
+
+  if (actionId === "NOSE_FOR_TROUBLE") {
+    const ev = nextEventId(g, 0) || nextEventId(g, 1);
+    if (ev && meId) {
+      const preds = safeArr(flags.predictions).slice();
+      const filtered = preds.filter((x) => String(x?.playerId || "") !== meId);
+      filtered.push({ playerId: meId, eventId: String(ev), at: Date.now() });
+      flags.predictions = filtered;
+    }
+  }
+
+  if (actionId === "MASK_SWAP" && targetId) {
+    const ti = idxOf(targetId);
+    if (ti >= 0) {
+      const t = simPlayers[ti];
+      const a = normColor(p.color);
+      const b = normColor(t.color);
+      if (a && b && a !== b) {
+        // swap colors locally
+        t.color = a; t.den = a;
+        p.color = b; p.den = b;
+
+        // also update simPlayers me entry
+        const mi = idxOf(meId);
+        if (mi >= 0) {
+          simPlayers[mi].color = p.color;
+          simPlayers[mi].den = p.color;
+        }
+      }
+    }
+  }
+
+  if (actionId === "PACK_TINKER") {
+    if (!flags.lockEvents) {
+      const pair = pickPackTinkerSwapLikeRunner(g);
+      if (pair) {
+        const [i1, i2] = pair;
+        const trackNow = safeArr(g.eventTrack).slice();
+        if (trackNow[i1] && trackNow[i2]) {
+          [trackNow[i1], trackNow[i2]] = [trackNow[i2], trackNow[i1]];
+          g.eventTrack = trackNow;
+        }
+      }
+    }
+  }
+
+  if (actionId === "KICK_UP_DUST") {
+    if (!flags.lockEvents) {
+      const track = safeArr(g.eventTrack).slice();
+      const idx = Number.isFinite(Number(g?.eventIndex)) ? Number(g.eventIndex) : 0;
+      const locked = track.slice(0, idx);
+      const future = track.slice(idx);
+      if (future.length > 1) {
+        const seed = hashSeed(`${seedTag}|${meId}|${g.round}|${g.eventIndex}|${track.length}`);
+        const rnd = mulberry32(seed);
+        g.eventTrack = [...locked, ...shuffleArraySeeded(future, rnd)];
+      }
+    }
+  }
+
+  // return simulated snapshot
+  return { game: g, me: p, players: simPlayers, flagsRound: flags };
+}
+
+function actionCandidates({ actionId, actionName, game, me, players }) {
+  const inYard = safeArr(players).filter(isInYard);
+  const enemies = inYard.filter((p) => !isSameDen(p, me) && String(p.id) !== String(me.id));
+  const allies = inYard.filter((p) => isSameDen(p, me) && String(p.id) !== String(me.id));
+
+  // target pickers
+  const richest = (arr) => arr.slice().sort((a, b) => sumLootPoints(b) - sumLootPoints(a))[0]?.id || null;
+
+  if (actionId === "MASK_SWAP" || actionId === "HOLD_STILL") {
+    const t = richest(enemies);
+    return t ? [{ actionId, name: actionName, targetId: t }] : [];
+  }
+
+  if (actionId === "SCENT_CHECK") {
+    // mimic runner: target with most knownUpcomingEvents else richest
+    const intelTarget =
+      inYard
+        .filter((x) => x?.id && x.id !== me.id)
+        .map((x) => ({
+          id: x.id,
+          k: Array.isArray(x?.knownUpcomingEvents) ? x.knownUpcomingEvents.length : 0,
+          loot: sumLootPoints(x),
+        }))
+        .sort((a, b) => (b.k - a.k) || (b.loot - a.loot))[0]?.id || null;
+
+    const t = intelTarget || richest(enemies) || richest(allies);
+    return t ? [{ actionId, name: actionName, targetId: t }] : [];
+  }
+
+  if (actionId === "FOLLOW_THE_TAIL") {
+    // prefer safest target; fallback richest
+    let best = null;
+    const intel = getPeekIntel({ game, me, flagsRound: game?.flagsRound, lookaheadN: DEFAULTS.lookaheadN });
+
+    const candidates = enemies.concat(allies);
+    for (const t of candidates) {
+      const res = evaluateDecision({ game, me: t, players, flagsRound: game?.flagsRound, cfg: DEFAULTS, peekIntel: intel });
+      const risk = Number(res?.ranked?.[0]?.riskNow ?? 0);
+      const score = -risk + 0.25 * sumLootPoints(t);
+      if (!best || score > best.score) best = { id: t.id, score };
+    }
+    const pick = best?.id || richest(enemies) || richest(allies);
+    return pick ? [{ actionId, name: actionName, targetId: pick }] : [];
+  }
+
+  // no target
+  return [{ actionId, name: actionName, targetId: null }];
+}
+
+function scoreOpsPlay({ play, game, me, players, flagsRound, cfg }) {
+  const c = cfg || DEFAULTS;
+  const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
+  const intel0 = getPeekIntel({ game, me, flagsRound: flags, lookaheadN: c.lookaheadN });
+
+  const baseDecision = evaluateDecision({ game, me, players, flagsRound: flags, cfg: c, peekIntel: intel0 });
+  const baseU = Number(baseDecision?.ranked?.[0]?.utility ?? 0);
+
+  const actionId = String(play?.actionId || "");
+
+  // Kick Up Dust: average over samples (because real is random)
+  const sims =
+    actionId === "KICK_UP_DUST" && !flags.lockEvents
+      ? Array.from({ length: Math.max(2, Number(c.kickUpDustSamples || 6)) }, (_, i) =>
+          simulateActionOnce({ play, game, me, players, flagsRound: flags, cfg: c, seedTag: `KUD#${i}` })
+        )
+      : [simulateActionOnce({ play, game, me, players, flagsRound: flags, cfg: c, seedTag: "ONE" })];
+
+  // aggregate deltas
+  let utilitySum = 0;
+
+  for (const sim of sims) {
+    const intel1 = getPeekIntel({ game: sim.game, me: sim.me, flagsRound: sim.flagsRound, lookaheadN: c.lookaheadN });
+
+    const afterDecision = evaluateDecision({ game: sim.game, me: sim.me, players: sim.players, flagsRound: sim.flagsRound, cfg: c, peekIntel: intel1 });
+    const afterU = Number(afterDecision?.ranked?.[0]?.utility ?? 0);
+
+    // team/enemy deltas
+    const inYard = safeArr(sim.players).filter(isInYard);
+    const allies = inYard.filter((p) => isSameDen(p, sim.me) && String(p.id) !== String(sim.me.id));
+    const enemies = inYard.filter((p) => !isSameDen(p, sim.me));
+
+    let teamDelta = 0;
+    for (const a of allies) {
+      const bi = getPeekIntel({ game, me: a, flagsRound: flags, lookaheadN: c.lookaheadN });
+      const b = evaluateDecision({ game, me: a, players, flagsRound: flags, cfg: c, peekIntel: bi });
+      const bU = Number(b?.ranked?.[0]?.utility ?? 0);
+
+      const ai = getPeekIntel({ game: sim.game, me: a, flagsRound: sim.flagsRound, lookaheadN: c.lookaheadN });
+      const a2 = evaluateDecision({ game: sim.game, me: a, players: sim.players, flagsRound: sim.flagsRound, cfg: c, peekIntel: ai });
+      const aU = Number(a2?.ranked?.[0]?.utility ?? 0);
+
+      teamDelta += aU - bU;
+    }
+
+    let denyDelta = 0;
+    for (const e of enemies) {
+      const bi = getPeekIntel({ game, me: e, flagsRound: flags, lookaheadN: c.lookaheadN });
+      const b = evaluateDecision({ game, me: e, players, flagsRound: flags, cfg: c, peekIntel: bi });
+      const bU = Number(b?.ranked?.[0]?.utility ?? 0);
+
+      const ai = getPeekIntel({ game: sim.game, me: e, flagsRound: sim.flagsRound, lookaheadN: c.lookaheadN });
+      const a2 = evaluateDecision({ game: sim.game, me: e, players: sim.players, flagsRound: sim.flagsRound, cfg: c, peekIntel: ai });
+      const aU = Number(a2?.ranked?.[0]?.utility ?? 0);
+
+      denyDelta += (bU - aU); // enemy utility down => positive deny
+    }
+
+    // implementation multiplier
+    let implMult = 1;
+    const facts = getActionFacts(actionId);
+    if (facts?.engineImplemented === false && !RUNNER_IMPLEMENTED.has(actionId)) implMult = c.actionUnimplementedMult;
+
+    let u = implMult * ((afterU - baseU) + c.wTeam * teamDelta + c.wDeny * denyDelta);
+
+    // apply optimism for random shuffle (avoid overfitting to one sample)
+    if (actionId === "KICK_UP_DUST") {
+      u = (c.kickUpDustOptimism * u) + ((1 - c.kickUpDustOptimism) * 0.0);
+    }
+
+    utilitySum += u;
+  }
+
+  const utility = utilitySum / sims.length;
+
+  return { play, utility, baseU };
+}
+
+export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg = null }) {
+  const c = { ...DEFAULTS, ...(cfg || {}) };
+  const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
+
+  if (flags.opsLocked) return { best: { kind: "PASS", utility: 0, reason: "opsLocked" }, ranked: [] };
+
+  const hand = safeArr(me?.hand);
+  if (!hand.length) return { best: { kind: "PASS", utility: 0, reason: "emptyHand" }, ranked: [] };
+
+  // --- urgent defense override: Den Signal vs DOG / own DEN when not immune ---
+  const den = normColor(me?.color || me?.den || me?.denColor);
+  const immune = !!flags?.denImmune?.[den];
+  const next0 = nextEventId(game, 0);
+  const t0 = classifyEvent(next0);
+  const urgentDefense =
+    !immune &&
+    hasActionIdInHand(hand, "DEN_SIGNAL") &&
+    (t0.type === "DOG" || (t0.type === "DEN" && normColor(t0.color) === den));
+
+  // baseline = PASS utility (decision best)
+  const intel = getPeekIntel({ game, me, flagsRound: flags, lookaheadN: c.lookaheadN });
+  const baseDecision = evaluateDecision({ game, me, players, flagsRound: flags, cfg: c, peekIntel: intel });
+  const passU = Number(baseDecision?.ranked?.[0]?.utility ?? 0);
+
+  if (urgentDefense) {
+    return {
+      best: { kind: "PLAY", plays: [{ actionId: "DEN_SIGNAL", name: "Den Signal", targetId: null }], utility: passU + 9, reason: "urgentDenSignal" },
+      baseline: { passUtility: passU, decision: baseDecision?.decision || null },
+      ranked: [{ play: { actionId: "DEN_SIGNAL", name: "Den Signal", targetId: null }, utility: passU + 9 }],
+      comboBest: null,
+    };
+  }
+
+  // build candidate plays
+  const plays = [];
+  for (const raw of hand) {
+    const name = String(raw?.name || raw || "").trim();
+    if (!name) continue;
+    const def = getActionDefByName(name);
+    if (!def?.id) continue;
+
+    const actionId = String(def.id);
+
+    // reserve logic: keep some cards unless they’re “core” tools
+    if (hand.length <= c.actionReserveMinHand) {
+      const ok = new Set([
+        "DEN_SIGNAL",
+        "NOSE_FOR_TROUBLE",
+        "BURROW_BEACON",
+        "PACK_TINKER",
+        "KICK_UP_DUST",
+        "FOLLOW_THE_TAIL",
+        "NO_GO_ZONE",
+      ]);
+      if (!ok.has(actionId)) continue;
+    }
+
+    const cand = actionCandidates({ actionId, actionName: name, game, me, players });
+    for (const p of cand) plays.push(p);
+  }
+
+  if (!plays.length) return { best: { kind: "PASS", utility: passU, reason: "noPlayableCards" }, ranked: [] };
+
+  // score singles
+  const scored = plays.map((play) => scoreOpsPlay({ play, game, me, players, flagsRound: flags, cfg: c }));
+  scored.sort((a, b) => b.utility - a.utility);
+
+  const bestSingle = scored[0];
+
+  // combo search (2 cards)
+  let bestCombo = null;
+  if (c.allowComboSearch && scored.length >= 2) {
+    const pairs = [];
+    const maxPairs = Math.max(4, Number(c.comboMaxPairs || 20));
+    const topK = Math.min(6, scored.length);
+
+    for (let i = 0; i < topK; i++) {
+      for (let j = 0; j < scored.length; j++) {
+        if (i === j) continue;
+        const a = scored[i].play;
+        const b = scored[j].play;
+        if (String(a.actionId) === String(b.actionId)) continue;
+        pairs.push([a, b]);
+        if (pairs.length >= maxPairs) break;
+      }
+      if (pairs.length >= maxPairs) break;
+    }
+
+    for (const [a, b] of pairs) {
+      const simA = simulateActionOnce({ play: a, game, me, players, flagsRound: flags, cfg: c, seedTag: "C1" });
+      const scoreB = scoreOpsPlay({ play: b, game: simA.game, me: simA.me, players: simA.players, flagsRound: simA.flagsRound, cfg: c });
+
+      const scoreA = scoreOpsPlay({ play: a, game, me, players, flagsRound: flags, cfg: c });
+      const comboU = scoreA.utility + scoreB.utility;
+
+      if (!bestCombo || comboU > bestCombo.utility) bestCombo = { plays: [a, b], utility: comboU };
+    }
+  }
+
+  // choose PASS vs single vs combo
+  let best = { kind: "PASS", utility: passU, reason: "default" };
+
+  if (bestSingle && bestSingle.utility >= passU + c.actionPlayMinGain) {
+    best = { kind: "PLAY", plays: [bestSingle.play], utility: bestSingle.utility, reason: "bestSingle" };
+  }
+  if (bestCombo && bestCombo.utility >= (bestSingle?.utility ?? -1e9) + c.comboMinGain && bestCombo.utility >= passU + c.actionPlayMinGain) {
+    best = { kind: "PLAY", plays: bestCombo.plays, utility: bestCombo.utility, reason: "bestCombo" };
+  }
+
+  return {
+    best,
+    baseline: { passUtility: passU, decision: baseDecision?.decision || null },
+    ranked: scored.slice(0, 12).map((x) => ({ play: x.play, utility: x.utility })),
+    comboBest: bestCombo,
+  };
+}
+
+/** =========================
+ *  Convenience
+ *  ========================= */
+export function evaluatePhase({ phase, game, me, players, flagsRound = null, cfg = null }) {
+  const p = String(phase || "").toUpperCase();
+  if (p === "MOVE") return evaluateMoveOptions({ game, me, players, flagsRound, cfg });
+  if (p === "OPS" || p === "ACTIONS") return evaluateOpsActions({ game, me, players, flagsRound, cfg });
+  if (p === "DECISION") {
+    const intel = getPeekIntel({ game, me, flagsRound, lookaheadN: (cfg?.lookaheadN ?? DEFAULTS.lookaheadN) });
+    return evaluateDecision({ game, me, players, flagsRound, cfg, peekIntel: intel });
+  }
+  return { error: `Unknown phase: ${phase}` };
 }
