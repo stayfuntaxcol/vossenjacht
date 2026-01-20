@@ -3321,37 +3321,54 @@ async function playPackTinker(game, player, playedIndex) {
   setActionFeedback?.(`Pack Tinker: "${giveName}" gewisseld met "${takeName}" uit de aflegstapel.`);
   return true;
 }
-
 async function playMaskSwap(game, player) {
-  const players = await fetchPlayersForGame();
-  const inYard = players.filter(isInYardLocal);
-  if (inYard.length < 2) {
-    alert("Te weinig vossen in de Yard om Mask Swap uit te voeren.");
+  const target = await chooseOtherPlayerPrompt(
+    "Mask Swap – kies een vos in de Yard om Den-kleur mee te wisselen"
+  );
+  if (!target) return false;
+
+  const meRef = doc(db, "games", gameId, "players", playerId);
+  const tRef = doc(db, "games", gameId, "players", target.id);
+
+  try {
+    await runTransaction(db, async (tx) => {
+      const meSnap = await tx.get(meRef);
+      const tSnap = await tx.get(tRef);
+      if (!meSnap.exists() || !tSnap.exists()) throw new Error("player_missing");
+
+      const me = { id: playerId, ...meSnap.data() };
+      const t = { id: target.id, ...tSnap.data() };
+
+      // safety: beide moeten nog in de Yard zijn
+      if (!isInYardLocal(me) || !isInYardLocal(t)) throw new Error("not_in_yard");
+
+      const a = (me.color || "").toUpperCase();
+      const b = (t.color || "").toUpperCase();
+      if (!a || !b) throw new Error("missing_color");
+      if (a === b) throw new Error("same_color");
+
+      // swap (ook den mee voor consistentie met bots)
+      tx.update(meRef, { color: b, den: b });
+      tx.update(tRef, { color: a, den: a });
+    });
+
+    await addLog(gameId, {
+      round: game.round || 0,
+      phase: "ACTIONS",
+      kind: "ACTION",
+      playerId,
+      message: `${player.name || "Speler"} speelt Mask Swap – wisselt Den-kleur met ${target.name || "een vos"}.`,
+    });
+
+    setActionFeedback(
+      `Mask Swap: jij wisselde Den-kleur met ${target.name || "de gekozen vos"}.`
+    );
+    return true;
+  } catch (err) {
+    console.error("Mask Swap error", err);
+    alert("Mask Swap mislukt: " + (err?.message || err));
     return false;
   }
-
-  const colors = inYard.map((p) => (p.color || "").toUpperCase());
-  for (let i = colors.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [colors[i], colors[j]] = [colors[j], colors[i]];
-  }
-
-  const updates = [];
-  inYard.forEach((p, idx) => {
-    const pref = doc(db, "games", gameId, "players", p.id);
-    updates.push(updateDoc(pref, { color: colors[idx] || null }));
-  });
-  await Promise.all(updates);
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Mask Swap – alle Den-kleuren in de Yard worden gehusseld.`,
-  });
-  setActionFeedback("Mask Swap: Den-kleuren van alle vossen in de Yard zijn gehusseld.");
-  return true;
 }
 
 // ===== INIT / LISTENERS =====
