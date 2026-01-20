@@ -2932,6 +2932,10 @@ await updateDoc(playerRef, { hand: handToConsume });
     // ---- log (fail-safe) ----
     await safeLogMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
 
+// ✅ bepaal actionId (zodat singleton rules op ID werken)
+const def = getActionDefByName?.(cardName);
+const actionId = String(def?.id || "");
+    
     // ---- advance OPS turn + reset passes ----
     const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
     const gUpdate = {
@@ -2939,6 +2943,11 @@ await updateDoc(playerRef, { hand: handToConsume });
       opsConsecutivePasses: 0,
     };
 
+    // ✅ registreer dat deze actionId deze ronde al gespeeld is
+if (actionId && typeof arrayUnion === "function") {
+  gUpdate.discardThisRoundActionIds = arrayUnion(actionId);
+}
+    
   // optional: discard pile (zelfde write)
 if (typeof arrayUnion === "function") {
   const meta = {
