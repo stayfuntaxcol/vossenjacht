@@ -2005,12 +2005,16 @@ if (!removed) {
     // keep discard pile bounded
     if (actionDiscard.length > 30) actionDiscard.splice(0, actionDiscard.length - 30);
 
-    const extraGameUpdates = {
-      // host/board kan hiermee de top-discard tonen
-      lastActionPlayed: { name: cardName, by: botId, round: roundNum, at: nowMs },
-      // bots wachten zodat de kaart minimaal 3s zichtbaar is
-      opsHoldUntilMs: nowMs + OPS_DISCARD_VISIBLE_MS,
-    };
+const playedId = String(play?.actionId || "");
+const dIds = Array.isArray(g?.discardThisRoundActionIds) ? [...g.discardThisRoundActionIds] : [];
+if (playedId && !dIds.includes(playedId)) dIds.push(playedId);
+if (dIds.length > 30) dIds.splice(0, dIds.length - 30);
+
+const extraGameUpdates = {
+  lastActionPlayed: { name: cardName, by: botId, round: Number(g.round || 0), at: nowMs },
+  opsHoldUntilMs: nowMs + 650,
+  discardThisRoundActionIds: dIds,
+};
 
     // effects
     if (effName === "Den Signal") {
