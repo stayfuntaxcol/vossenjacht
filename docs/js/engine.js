@@ -560,16 +560,35 @@ export async function resolveAfterReveal(gameId) {
         });
         continue;
       }
-
+      
       if (p.decision === "BURROW") {
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: p.id,
-          message: `${p.name || "Vos"} duikt onder de grond en ontwijkt de herderhond.`,
-        });
-        continue;
+        const pRef = doc(db, "games", gameId, "players", p.id);
+        const already = !!p.burrowUsedThisRaid;
+
+        if (already) {
+          // HARD RULE: 2e burrow = geweigerd → speler krijgt het event gewoon
+          await addLog(gameId, {
+            round,
+            phase: "REVEAL",
+            kind: "EVENT",
+            playerId: p.id,
+            message: `${p.name || "Vos"} probeert opnieuw te burrowen, maar dat mag maar 1× per raid.`,
+          });
+          // géén continue → laat de normale event-afhandeling hieronder doorgaan
+        } else {
+          // 1e burrow = toegestaan → markeer in Firestore en skip event
+          await updateDoc(pRef, { burrowUsedThisRaid: true });
+
+          await addLog(gameId, {
+            round,
+            phase: "REVEAL",
+            kind: "EVENT",
+            playerId: p.id,
+            message: `${p.name || "Vos"} duikt onder de grond en ontwijkt de herderhond.`,
+          });
+
+          continue; // event ontwijken (zoals je nu al doet)
+        }
       }
 
       if (p.decision === "DASH") continue;
