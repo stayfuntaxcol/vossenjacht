@@ -2027,7 +2027,8 @@ async function handleNextPhase({ silent = false, force = false } = {}) {
   phase: "ACTIONS",
   opsTurnOrder,
   opsTurnIndex: 0,
-  opsConsecutivePasses: 0,
+  opsConsecutivePasses: 0
+  discardThisRoundActionIds: [],
   opsActiveCount: opsTurnOrder.length,     // ✅ nieuw: hard target
   opsEndedAtMs: null,                      // ✅ optioneel
   flagsRound: { ...(game.flagsRound || {}), opsLocked: false }, // ✅ reset
@@ -2252,6 +2253,7 @@ initAuth(async (authUser) => {
         opsTurnOrder: [],
         opsTurnIndex: 0,
         opsConsecutivePasses: 0,
+        discardThisRoundActionIds: [],
         flagsRound: {
           lockEvents: false,
           scatter: false,
