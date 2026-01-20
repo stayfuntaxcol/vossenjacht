@@ -121,13 +121,31 @@ if (gameId) {
     if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
 });
 
-  // BONUS: hou spelerscache ook live voor advisor (lastPlayers)
-  const playersRef = collection(db, "games", gameId, "players");
-  onSnapshot(playersRef, (qs) => {
-    lastPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
-  
-    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
+async function ensureBurrowFlagForAllPlayers(gameId) {
+  const playersCol = collection(db, "games", gameId, "players");
+  const qs = await getDocs(playersCol);
+
+  const fixes = [];
+  qs.forEach((d) => {
+    const data = d.data() || {};
+    if (data.burrowUsedThisRaid == null) {
+      fixes.push(updateDoc(d.ref, { burrowUsedThisRaid: false }));
+    }
+  });
+
+  if (fixes.length) await Promise.all(fixes);
+}
+
+// --- ergens in je init (binnen async functie!) ---
+await ensureBurrowFlagForAllPlayers(gameId);
+
+// BONUS: cache live
+const playersCol = collection(db, "games", gameId, "players");
+onSnapshot(playersCol, (qs) => {
+  lastPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+  if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
 });
+
 } else {
   console.warn("[LOG] gameId ontbreekt in URL (?game=...)");
 }
@@ -284,6 +302,22 @@ function renderLeadCommandCenterUI(round, players, logs) {
     block.appendChild(headerRow);
     block.appendChild(phaseGrid);
     leadCommandContent.appendChild(block);
+  });
+}
+
+async function ensureBurrowFlag(gameId, playerId) {
+  const pRef = doc(db, "games", gameId, "players", playerId);
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(pRef);
+
+    // als player doc nog niet bestaat: niks doen (jouw create flow zet het dan)
+    if (!snap.exists()) return;
+
+    const data = snap.data() || {};
+    if (data.burrowUsedThisRaid == null) {
+      tx.update(pRef, { burrowUsedThisRaid: false });
+    }
   });
 }
 
