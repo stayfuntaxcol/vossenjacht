@@ -1904,8 +1904,7 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     const actionDiscard = Array.isArray(g.actionDiscard) ? [...g.actionDiscard] : [];
 
     const play = await pickBestActionFromHand({ db, gameId, game: g, bot: p, players: latestPlayers || [] });
-
-
+    
 
     // =========================
     // PASS
@@ -1996,6 +1995,9 @@ if (!removed) {
   };
   return;
 }
+    
+    // ✅ canonical name alleen voor effects (safe: discard/log blijft cardName)     
+    const effName = getActionDefByName(cardName)?.name || cardName;
 
     // discard (face-up): kaart gaat direct op de Discard Pile
     const nowMs = Date.now();
@@ -2011,20 +2013,20 @@ if (!removed) {
     };
 
     // effects
-    if (cardName === "Den Signal") {
+    if (effName === "Den Signal") {
       const myColor = normColor(p.color);
       const denImmune = { ...(flagsRound.denImmune || {}) };
       if (myColor) denImmune[myColor] = true;
       flagsRound.denImmune = denImmune;
     }
 
-    if (cardName === "No-Go Zone") {
+    if (effName === "No-Go Zone") {
       flagsRound.opsLocked = true;
       extraGameUpdates.opsConsecutivePasses = target; // ✅ einde OPS (past bij PhaseGate)
       extraGameUpdates.opsEndedAtMs = Date.now();
     }
 
-    if (cardName === "Hold Still") {
+    if (effName === "Hold Still") {
       const targetId = play.targetId;
       if (targetId) {
         const hs = { ...(flagsRound.holdStill || {}) };
@@ -2034,14 +2036,14 @@ if (!removed) {
       }
     }
 
-    if (cardName === "Kick Up Dust") {
+    if (effName === "Kick Up Dust") {
       if (!flagsRound.lockEvents) {
         const newTrack = shuffleFutureTrack(g);
         if (newTrack) extraGameUpdates.eventTrack = newTrack;
       }
     }
 
-    if (cardName === "Pack Tinker") {
+    if (effName === "Pack Tinker") {
       if (!flagsRound.lockEvents) {
         const pair = pickPackTinkerSwap(g);
         if (pair) {
