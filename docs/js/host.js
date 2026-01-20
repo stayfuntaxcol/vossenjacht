@@ -2027,7 +2027,7 @@ async function handleNextPhase({ silent = false, force = false } = {}) {
   phase: "ACTIONS",
   opsTurnOrder,
   opsTurnIndex: 0,
-  opsConsecutivePasses: 0
+  opsConsecutivePasses: 0,
   discardThisRoundActionIds: [],
   opsActiveCount: opsTurnOrder.length,     // ✅ nieuw: hard target
   opsEndedAtMs: null,                      // ✅ optioneel
