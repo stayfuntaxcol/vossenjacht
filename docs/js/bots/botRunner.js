@@ -13,6 +13,13 @@ import {
   recommendDecision,
 } from "./botHeuristics.js";
 
+import {
+  BOT_UTILITY_CFG,
+  evaluateMoveOptions,
+  evaluateOpsActions,
+  evaluateDecision,
+} from "./core/strategy.js";
+
 import { computeDangerMetrics, computeCarryValue, computeCarryValueRec } from "./core/metrics.js";
 
 import {
@@ -1043,6 +1050,7 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
         return null;
       })
       .filter(Boolean);
+ 
     // ---------- flags / next event / knowledge ----------
     const flags = fillFlags(game?.flagsRound);
     const noPeek = !!flags.noPeek;
@@ -1073,7 +1081,8 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
         : knownUpcomingCount >= 1
         ? "SOFT_SCOUT"
         : "NO_SCOUT";
-// ---------- rooster timing: danger boost only AFTER 2nd rooster REVEALED ----------
+
+    // ---------- rooster timing: danger boost only AFTER 2nd rooster REVEALED ----------
     const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
     const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
 
