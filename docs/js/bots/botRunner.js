@@ -1209,175 +1209,93 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
     // handHas_* flags (for actionStrategies)
     for (const id of ids) ctx["handHas_" + id] = true;
 
-    // ---------- ranking ----------
-    let pick = null;
-    if (typeof pickActionOrPass === "function") {
-      pick = pickActionOrPass(ids, { presetKey, denColor, game, me: bot, ctx });
-    } else {
-      const rankedTmp = rankActions(ids, { presetKey, denColor, game, me: bot, ctx });
-      pick = { play: rankedTmp[0]?.id || null, ranked: rankedTmp, reason: "fallback_rankActions" };
-    }
+    // ---------- ranking (strategy.js) ----------
+const usedIds =
+  (Array.isArray(game?.discardThisRoundActionIds) && game.discardThisRoundActionIds.length)
+    ? game.discardThisRoundActionIds.map((x) => String(x))
+    : (discardThisRoundActionIds || []);
 
-    const ranked = Array.isArray(pick?.ranked)
-      ? pick.ranked
-      : rankActions(ids, { presetKey, denColor, game, me: bot, ctx });
+const res = evaluateOpsActions({
+  game,
+  me: bot,
+  players: list,         // jij hebt 'list' al eerder gemaakt (players met id)
+  flagsRound: flags,
+  cfg: BOT_UTILITY_CFG,
+});
 
-    if (!pick?.play) return null;
+// candidates: best eerst, daarna ranked
+const candidates = [];
+if (res?.best?.kind === "PLAY") candidates.push(...(res.best.plays || []));
+for (const r of (res?.ranked || [])) if (r?.play) candidates.push(r.play);
 
-    // candidates: chosen first, then ranking
-    const candidateIds = [
-      String(pick.play),
-      ...ranked.map((r) => r?.id).filter((x) => x && x !== pick.play),
-    ]
-      .map((x) => String(x || "").trim())
-      .filter(Boolean);
+// Anti-duplicate: bot itself not twice same action in same round
+const botPlayedSet = new Set(botPlayedActionIdsThisRound);
 
-    // Anti-duplicate: bot itself not twice same action in same round
-    const botPlayedSet = new Set(botPlayedActionIdsThisRound);
+// Anti-duplicate: global singleton (per ronde)
+const GLOBAL_SINGLETON_ACTIONS = new Set([
+  "KICK_UP_DUST",
+  "PACK_TINKER",
+  "NO_GO_ZONE",
+  "SCATTER",
+]);
 
-    // Anti-duplicate: global singleton (bots only)
-    const GLOBAL_SINGLETON_ACTIONS = new Set([
-      "KICK_UP_DUST",
-      "PACK_TINKER",
-      "NO_GO_ZONE",
-      "SCATTER",
-    ]);
+for (const play of candidates) {
+  const id = String(play?.actionId || "").trim();
+  if (!id) continue;
 
-    // ✅ safe defaults for optional core logging (prevents ReferenceError if core logger exists)
-    const cfg =
-      (BOT_PRESETS && presetKey && BOT_PRESETS[presetKey]) ? BOT_PRESETS[presetKey] : null;
-    const comboInfo = null;
+  if (botPlayedSet.has(id)) continue;
+  if (GLOBAL_SINGLETON_ACTIONS.has(id) && usedIds.includes(id)) continue;
 
-    for (const id of candidateIds) {
-      if (botPlayedSet.has(id)) continue;
-      if (GLOBAL_SINGLETON_ACTIONS.has(id) && discardThisRoundActionIds.includes(id)) continue;
+  // legality checks (zelfde als jouw huidige)
+  if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
+    if (lockEventsActive) continue;
+    if (!Array.isArray(game?.eventTrack)) continue;
+    if (!Number.isFinite(Number(game?.eventIndex))) continue;
+    if (Number(game.eventIndex) >= game.eventTrack.length - 1) continue;
+  }
+  if (id === "HOLD_STILL" && opsLockedActive) continue;
 
-      // legality checks
-      if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
-        if (lockEventsActive) continue;
-        if (!Array.isArray(game?.eventTrack)) continue;
-        if (!Number.isFinite(Number(game?.eventIndex))) continue;
-        if (Number(game.eventIndex) >= game.eventTrack.length - 1) continue;
-      }
-      if (id === "HOLD_STILL" && opsLockedActive) continue;
+  // Kies naam die echt in hand zit (entries komt uit jouw code)
+  const chosenName =
+    entries.find((e) => String(e.def?.id || "").trim() === id)?.name ||
+    String(play?.name || "").trim();
 
-      // targets
-      let targetId = null;
+  if (!chosenName) continue;
 
-      if (id === "MASK_SWAP" || id === "HOLD_STILL") {
-        targetId = pickRichestTarget(players || [], bot.id);
-        if (!targetId) continue;
-      }
+  // Targets: strategy geeft meestal targetId; anders jouw fallbacks
+  let targetId = play?.targetId || null;
 
-      if (id === "FOLLOW_THE_TAIL") {
-        targetId = followPick.targetId || pickRichestTarget(players || [], bot.id);
-        if (!targetId) continue;
-      }
+  if ((id === "MASK_SWAP" || id === "HOLD_STILL") && !targetId) {
+    targetId = pickRichestTarget(players || [], bot.id);
+    if (!targetId) continue;
+  }
 
-      if (id === "SCENT_CHECK") {
-        const intelTarget =
-          (players || [])
-            .filter((x) => x?.id && x.id !== bot.id && isInYard(x))
-            .map((x) => ({
-              id: x.id,
-              k: Array.isArray(x?.knownUpcomingEvents) ? x.knownUpcomingEvents.length : 0,
-              loot: sumLootPoints(x),
-            }))
-            .sort((a, b) => (b.k - a.k) || (b.loot - a.loot))[0]?.id || null;
+  if (id === "FOLLOW_THE_TAIL" && !targetId) {
+    targetId = followPick.targetId || pickRichestTarget(players || [], bot.id);
+    if (!targetId) continue;
+  }
 
-        targetId = intelTarget || pickRichestTarget(players || [], bot.id);
-        if (!targetId) continue;
-      }
+  if (id === "SCENT_CHECK" && !targetId) {
+    const intelTarget =
+      (players || [])
+        .filter((x) => x?.id && x.id !== bot.id && isInYard(x))
+        .map((x) => ({
+          id: x.id,
+          k: Array.isArray(x?.knownUpcomingEvents) ? x.knownUpcomingEvents.length : 0,
+          loot: sumLootPoints(x),
+        }))
+        .sort((a, b) => (b.k - a.k) || (b.loot - a.loot))[0]?.id || null;
 
-      // ---- metrics voor logging (vlak vóór logBotDecision) ----
-      const carryNowExact = computeCarryValue(bot);
-      const carryRecObj2 = computeCarryValueRec({ game, player: bot, players: players || [], mode: "publicSafe" });
-      const carryNowRec = Number(carryRecObj2?.carryValueRec || 0);
-      ctx.carryValueExact = carryNowExact;
-      ctx.carryValueRec = carryNowRec;
-      ctx.carryValue = carryNowRec;// core gebruikt this
+    targetId = intelTarget || pickRichestTarget(players || [], bot.id);
+    if (!targetId) continue;
+  }
 
-      let core = null;
-      try {
-        if (typeof evaluateCorePolicy === "function") {
-          core = evaluateCorePolicy(ctx, comboInfo, cfg);
-        }
-      } catch (e) {
-        core = null;
-      }
+  return { name: chosenName, actionId: id, targetId };
+}
 
-      const dangerVec = ctx?.nextEventFacts
-        ? {
-            dash: Number(ctx.nextEventFacts.dangerDash || 0),
-            lurk: Number(ctx.nextEventFacts.dangerLurk || 0),
-            burrow: Number(ctx.nextEventFacts.dangerBurrow || 0),
-          }
-        : null;
+// nothing legal -> PASS
+return null;
 
-      const dangerPeak = dangerVec
-        ? Math.max(dangerVec.dash, dangerVec.lurk, dangerVec.burrow)
-        : Number(ctx?.dangerNext || 0);
-
-      const dangerStay = dangerVec ? Math.min(dangerVec.lurk, dangerVec.burrow) : 0;
-
-      // ---- decision log (OPS only) ----
-      if (String(game?.phase || "") === "OPS") {
-        await logBotDecision(db, gameId, {
-          phase: ctx?.phase || String(game?.phase || ""),
-          round: Number(game?.round || ctx?.round || 0),
-          opsTurnIndex: Number(game?.opsTurnIndex || 0),
-
-          by: bot.id,
-          presetKey,
-          denColor,
-
-          pick: { actionId: id, targetId: targetId || null },
-
-          rankedTop: (Array.isArray(ranked) ? ranked : []).slice(0, 6).map((r) => ({
-            id: r?.id,
-            total: Number(r?.total || 0),
-            coreDelta: Number(r?.s?.coreDelta || 0),
-            stratDelta: Number(r?.s?.stratDelta || 0),
-          })),
-
-          ctxMini: {
-            carryValue: Number(carryNowExact || 0),
-            carryValueRec: Number(carryNowRec || 0),
-            carryDebug: {
-                eggs: Number(bot?.eggs || 0),
-                hens: Number(bot?.hens || 0),
-                prize: Number(bot?.prize || 0),
-                lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
-                lootSample: Array.isArray(bot?.loot) ? bot.loot[0] : null,
-              },
-            dangerNext: Number(ctx?.dangerNext || 0),
-            dangerPeak: Number(dangerPeak || 0),
-            dangerStay: Number(dangerStay || 0),
-            dangerVec: dangerVec || null,
-
-            dangerEffective: Number(core?.dangerEffective ?? 0),
-            cashoutBias: Number(core?.cashoutBias ?? 0),
-
-            scoutTier: ctx?.scoutTier || "NO_SCOUT",
-            nextKnown: !!ctx?.nextKnown,
-            postRooster2Window: !!ctx?.postRooster2Window,
-            actionsPlayedThisRound: Number(ctx?.actionsPlayedThisRound || 0),
-          },
-        });
-      }
-
-      // ✅ IMPORTANT: actually return the playable card
-      const chosenName =
-        entries.find((e) => String(e.def?.id || "").trim() === String(id).trim())?.name ||
-        null;
-
-      if (!chosenName) continue;
-
-      return { name: chosenName, actionId: id, targetId: targetId || null };
-    }
-
-    // nothing legal -> PASS
-    return null;
   } catch (err) {
     console.warn("[BOTS] pickBestActionFromHand crashed -> PASS", err);
     return null;
