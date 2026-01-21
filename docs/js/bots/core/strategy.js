@@ -52,9 +52,10 @@ export const BOT_UTILITY_CFG = {
   // Share modeling
   dashersLikelyThreshold: 6.0,
 
-  // Hidden Nest coordination (anti-herding)
-  hiddenNestCoordination: true,
-  hiddenNestDashPenalty: 4.0, // how hard we discourage DASH if not in slot
+ // Hidden Nest coordination (anti-herding)
+hiddenNestCoordination: true,
+hiddenNestDashPenalty: 4.0,        // discourage DASH if not in slot
+hiddenNestBurrowPenalty: 6.0,      // discourage BURROW on Hidden Nest
 };
 
 const DEFAULTS = BOT_UTILITY_CFG;
@@ -401,6 +402,10 @@ function decisionUtility({ decision, game, me, players, flagsRound, peekIntel, c
   ) {
     utility -= Number(c.hiddenNestDashPenalty || 4.0);
   }
+  // Hidden Nest: discourage BURROW (you miss the bonus opportunity; prefer LURK or DASH)
+if (String(nextId) === "HIDDEN_NEST" && decision === "BURROW") {
+  utility -= Number(c.hiddenNestBurrowPenalty || 6.0);
+}  
 
   return { utility, surviveP, riskNow, futurePressure, carry, dashPush, sharePenalty, expectedCarryAfter };
 }
