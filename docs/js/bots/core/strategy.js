@@ -1275,7 +1275,7 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
 
       const scoreA = scoreOpsPlay({ play: a, game, me, players, flagsRound: flags, cfg: c });
       
-   // choose PASS vs single vs combo (use adjusted utilities)
+  // choose PASS vs single vs combo (use adjusted utilities)
   let best = { kind: "PASS", utility: passU, reason: "default" };
 
   if (bestSingle && bestSingle.utilityAdj >= passU + minGain) {
@@ -1308,10 +1308,10 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
   };
 }
 
-
 /** =========================
  *  Convenience
  *  ========================= */
+    
 export function evaluatePhase({ phase, game, me, players, flagsRound = null, cfg = null }) {
   const p = String(phase || "").toUpperCase();
   if (p === "MOVE") return evaluateMoveOptions({ game, me, players, flagsRound, cfg });
