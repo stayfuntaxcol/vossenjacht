@@ -4,6 +4,8 @@
 
 import { getEventFacts, getActionFacts } from "../rulesIndex.js";
 import { getActionDefByName, getLootDef } from "../../cards.js";
+import { comboScore } from "../actionComboMatrix.js";
+
 
 /** =========================
  *  TUNING (edit here)
@@ -41,6 +43,25 @@ export const BOT_UTILITY_CFG = {
   comboMinGain: 2.0,
   allowComboSearch: true,
   comboMaxPairs: 20,
+  
+  // OPS discipline: avoid dumping cards early; save for combos
+  opsEarlyRounds: 2,               // rounds 1..2 are “early raid”
+  opsReserveHandEarly: 4,          // try to keep this many cards early
+  opsReserveHandMid: 3,
+  opsReserveHandLate: 2,
+
+  opsHighComboScore: 8,            // comboScore >= this => “save for combo”
+  opsReserveComboBoost: 1,         // if hand has high combo potential: reserve +1
+
+  opsSpendCostBase: 0.9,           // opportunity cost per spent card (scaled by avgActionDeckValue)
+  opsSpendCostEarlyMult: 1.35,
+  opsSpendCostLateMult: 0.75,
+
+  opsReserveMissPenalty: 1.0,      // extra penalty per card under reserveTarget after play
+  opsSoloBreakComboPenalty: 1.25,  // penalty if you spend a “combo key” as single
+
+  actionPlayMinGainEarlyBonus: 0.8, // harder to play early (adds to actionPlayMinGain)
+
 
   // “implemented” safety
   actionUnimplementedMult: 0.15,
@@ -702,6 +723,82 @@ export function evaluateMoveOptions({ game, me, players, flagsRound = null, cfg 
  *  OPS(ACTIONS)
  *  ========================= */
 
+function opsStageFromGame(game, cfg) {
+  const c = cfg || DEFAULTS;
+  const r = Number(game?.round || 0);
+  const idx = Number.isFinite(Number(game?.eventIndex)) ? Number(game.eventIndex) : 0;
+  const len = safeArr(game?.eventTrack).length || 1;
+  const pct = clamp(idx / len, 0, 1);
+
+  const early = (r > 0 && r <= Number(c.opsEarlyRounds || 2)) || pct < 0.25;
+  const late = pct >= 0.75;
+
+  const stage = early ? "early" : (late ? "late" : "mid");
+  const reserveTarget =
+    stage === "early" ? Number(c.opsReserveHandEarly || 4) :
+    stage === "late" ? Number(c.opsReserveHandLate || 2) :
+    Number(c.opsReserveHandMid || 3);
+
+  const spendMult =
+    stage === "early" ? Number(c.opsSpendCostEarlyMult || 1.35) :
+    stage === "late" ? Number(c.opsSpendCostLateMult || 0.75) : 1.0;
+
+  return { stage, pct, idx, len, round: r, reserveTarget, spendMult };
+}
+
+function discardActionIdsFromGame(game) {
+  const disc = safeArr(game?.actionDiscard || game?.actionDiscardPile || game?.actionDiscarded || []);
+  const ids = [];
+  for (const raw of disc) {
+    const name = String(raw?.name || raw || "").trim();
+    if (!name) continue;
+    const def = getActionDefByName(name);
+    const id = String(def?.id || "").trim();
+    if (id) ids.push(id);
+  }
+  return ids;
+}
+
+function handActionIds(hand) {
+  const ids = [];
+  for (const raw of safeArr(hand)) {
+    const name = String(raw?.name || raw || "").trim();
+    if (!name) continue;
+    const def = getActionDefByName(name);
+    const id = String(def?.id || "").trim();
+    if (id) ids.push(id);
+  }
+  return ids;
+}
+
+function computeComboMeta(actionIds, ctxCombo, cfg) {
+  const c = cfg || DEFAULTS;
+  const ids = safeArr(actionIds).map((x) => String(x || "")).filter(Boolean);
+  const keyScoreById = {};
+  let maxComboScore = 0;
+
+  for (let i = 0; i < ids.length; i++) {
+    const a = ids[i];
+    let best = 0;
+    for (let j = 0; j < ids.length; j++) {
+      if (i === j) continue;
+      const b = ids[j];
+
+      const s = Math.max(
+        Number(comboScore(a, b, ctxCombo) || 0),
+        Number(comboScore(b, a, ctxCombo) || 0),
+      );
+
+      if (s > best) best = s;
+      if (s > maxComboScore) maxComboScore = s;
+    }
+    keyScoreById[a] = best;
+  }
+
+  const highCombo = ids.length >= 2 && maxComboScore >= Number(c.opsHighComboScore || 8);
+  return { maxComboScore, keyScoreById, highCombo };
+}
+
 // If rulesIndex marks these “unimplemented” but botRunner DOES apply them, treat as implemented here.
 const RUNNER_IMPLEMENTED = new Set([
   "DEN_SIGNAL",
@@ -1049,6 +1146,65 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
       comboBest: null,
     };
   }
+  
+  // ---- Spending discipline (early raid hoarding + combo saving) ----
+  const stage0 = opsStageFromGame(game, c);
+  let reserveTarget = stage0.reserveTarget;
+
+  const nextIdC = nextEventId(game, 0);
+  const denC = normColor(me?.color || me?.den || me?.denColor);
+  const isLeadC = computeIsLead(game, me, players);
+  const facts0 = nextIdC ? getEventFacts(String(nextIdC), { game, me, denColor: denC, isLead: isLeadC }) : null;
+
+  const ctxCombo = {
+    nextKnown: !flags.noPeek,
+    knownUpcomingEvents: flags.noPeek ? safeArr(me?.knownUpcomingEvents) : safeArr(intel?.events),
+    nextEventFacts: facts0
+      ? {
+          dangerDash: Number(facts0?.dangerDash || 0),
+          dangerLurk: Number(facts0?.dangerLurk || 0),
+          dangerBurrow: Number(facts0?.dangerBurrow || 0),
+        }
+      : null,
+    lockEventsActive: !!flags.lockEvents,
+    opsLockedActive: !!flags.opsLocked,
+    discardActionIds: discardActionIdsFromGame(game),
+  };
+
+  const comboMeta = computeComboMeta(handActionIds(hand), ctxCombo, c);
+  if (comboMeta.highCombo) reserveTarget += Number(c.opsReserveComboBoost || 0);
+
+  const carry0 = sumLootPoints(me);
+  const dashPush0 = dashPushFromCarry(carry0, c);
+  const expFutureCard = Math.max(
+    0.4,
+    avgActionDeckValue(game, { game, me, players, flags, intel, carry: carry0, dashPush: dashPush0 }, c) || 0.8
+  );
+
+  const minGain =
+    Number(c.actionPlayMinGain || 1.2) +
+    (stage0.stage === "early" ? Number(c.actionPlayMinGainEarlyBonus || 0.8) : 0) +
+    (comboMeta.highCombo ? 0.4 : 0);
+
+  const spendMult = stage0.spendMult;
+
+  const spendCost = (nCards, primaryActionId = null, isCombo = false) => {
+    const spent = Math.max(0, Number(nCards || 1));
+    const base = Number(c.opsSpendCostBase || 0) * expFutureCard * spendMult * spent;
+
+    const post = Math.max(0, hand.length - spent);
+    const miss = Math.max(0, reserveTarget - post);
+    const reservePenalty = miss * Number(c.opsReserveMissPenalty || 0);
+
+    const soloComboPenalty =
+      !isCombo &&
+      primaryActionId &&
+      (comboMeta.keyScoreById?.[String(primaryActionId)] || 0) >= Number(c.opsHighComboScore || 8)
+        ? Number(c.opsSoloBreakComboPenalty || 0)
+        : 0;
+
+    return base + reservePenalty + soloComboPenalty;
+  };
 
   // build candidate plays
   const plays = [];
@@ -1061,7 +1217,8 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
     const actionId = String(def.id);
 
     // reserve logic: keep some cards unless they’re “core” tools
-    if (hand.length <= c.actionReserveMinHand) {
+    // + stronger hoard: if we'd drop under reserveTarget, only allow high-impact tools or real combo-keys
+    if (hand.length <= Math.max(c.actionReserveMinHand, reserveTarget)) {
       const ok = new Set([
         "DEN_SIGNAL",
         "NOSE_FOR_TROUBLE",
@@ -1071,7 +1228,9 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
         "FOLLOW_THE_TAIL",
         "NO_GO_ZONE",
       ]);
-      if (!ok.has(actionId)) continue;
+
+      const keyScore = Number(comboMeta?.keyScoreById?.[actionId] || 0);
+      if (!ok.has(actionId) && keyScore < Number(c.opsHighComboScore || 8)) continue;
     }
 
     const cand = actionCandidates({ actionId, actionName: name, game, me, players });
@@ -1080,9 +1239,14 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
 
   if (!plays.length) return { best: { kind: "PASS", utility: passU, reason: "noPlayableCards" }, ranked: [] };
 
-  // score singles
-  const scored = plays.map((play) => scoreOpsPlay({ play, game, me, players, flagsRound: flags, cfg: c }));
-  scored.sort((a, b) => b.utility - a.utility);
+    // score singles (adjusted with spend-cost so bots don't dump cards early)
+  const scoredRaw = plays.map((play) => scoreOpsPlay({ play, game, me, players, flagsRound: flags, cfg: c }));
+  const scored = scoredRaw
+    .map((x) => ({
+      ...x,
+      utilityAdj: Number(x.utility || 0) - spendCost(1, String(x.play?.actionId || ""), false),
+    }))
+    .sort((a, b) => b.utilityAdj - a.utilityAdj);
 
   const bestSingle = scored[0];
 
@@ -1110,29 +1274,22 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
       const scoreB = scoreOpsPlay({ play: b, game: simA.game, me: simA.me, players: simA.players, flagsRound: simA.flagsRound, cfg: c });
 
       const scoreA = scoreOpsPlay({ play: a, game, me, players, flagsRound: flags, cfg: c });
-      const comboU = scoreA.utility + scoreB.utility;
-
-      if (!bestCombo || comboU > bestCombo.utility) bestCombo = { plays: [a, b], utility: comboU };
-    }
-  }
-
-  // choose PASS vs single vs combo
+      
+  // choose PASS vs single vs combo (use adjusted utilities)
   let best = { kind: "PASS", utility: passU, reason: "default" };
 
-  if (bestSingle && bestSingle.utility >= passU + c.actionPlayMinGain) {
-    best = { kind: "PLAY", plays: [bestSingle.play], utility: bestSingle.utility, reason: "bestSingle" };
+  if (bestSingle && bestSingle.utilityAdj >= passU + minGain) {
+    best = { kind: "PLAY", plays: [bestSingle.play], utility: bestSingle.utilityAdj, reason: "bestSingle" };
   }
-  if (bestCombo && bestCombo.utility >= (bestSingle?.utility ?? -1e9) + c.comboMinGain && bestCombo.utility >= passU + c.actionPlayMinGain) {
+  if (
+    bestCombo &&
+    bestCombo.utility >= (bestSingle?.utilityAdj ?? -1e9) + c.comboMinGain &&
+    bestCombo.utility >= passU + minGain
+  ) {
     best = { kind: "PLAY", plays: bestCombo.plays, utility: bestCombo.utility, reason: "bestCombo" };
   }
 
-  return {
-    best,
-    baseline: { passUtility: passU, decision: baseDecision?.decision || null },
-    ranked: scored.slice(0, 12).map((x) => ({ play: x.play, utility: x.utility })),
-    comboBest: bestCombo,
-  };
-}
+    ranked: scored.slice(0, 12).map((x) => ({ play: x.play, utility: x.utilityAdj })),
 
 /** =========================
  *  Convenience
