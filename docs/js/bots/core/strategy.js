@@ -1250,7 +1250,7 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
 
   const bestSingle = scored[0];
 
-  // combo search (2 cards)
+    // combo search (2 cards)
   let bestCombo = null;
   if (c.allowComboSearch && scored.length >= 2) {
     const pairs = [];
@@ -1263,6 +1263,7 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
         const a = scored[i].play;
         const b = scored[j].play;
         if (String(a.actionId) === String(b.actionId)) continue;
+
         pairs.push([a, b]);
         if (pairs.length >= maxPairs) break;
       }
@@ -1270,11 +1271,36 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
     }
 
     for (const [a, b] of pairs) {
-      const simA = simulateActionOnce({ play: a, game, me, players, flagsRound: flags, cfg: c, seedTag: "C1" });
-      const scoreB = scoreOpsPlay({ play: b, game: simA.game, me: simA.me, players: simA.players, flagsRound: simA.flagsRound, cfg: c });
+      const simA = simulateActionOnce({
+        play: a,
+        game,
+        me,
+        players,
+        flagsRound: flags,
+        cfg: c,
+        seedTag: "C1",
+      });
 
       const scoreA = scoreOpsPlay({ play: a, game, me, players, flagsRound: flags, cfg: c });
-      
+
+      const scoreB = scoreOpsPlay({
+        play: b,
+        game: simA.game,
+        me: simA.me,
+        players: simA.players,
+        flagsRound: simA.flagsRound,
+        cfg: c,
+      });
+
+      const comboRaw = Number(scoreA.utility || 0) + Number(scoreB.utility || 0);
+      const comboU = comboRaw - spendCost(2, null, true);
+
+      if (!bestCombo || comboU > bestCombo.utility) {
+        bestCombo = { plays: [a, b], utility: comboU, raw: comboRaw };
+      }
+    }
+  }
+
   // choose PASS vs single vs combo (use adjusted utilities)
   let best = { kind: "PASS", utility: passU, reason: "default" };
 
@@ -1289,7 +1315,7 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
 
   if (
     bestCombo &&
-    bestCombo.utility >= (bestSingle?.utilityAdj ?? -1e9) + c.comboMinGain &&
+    bestCombo.utility >= (bestSingle?.utilityAdj ?? -1e9) + Number(c.comboMinGain || 0) &&
     bestCombo.utility >= passU + minGain
   ) {
     best = {
