@@ -1275,21 +1275,39 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
 
       const scoreA = scoreOpsPlay({ play: a, game, me, players, flagsRound: flags, cfg: c });
       
-  // choose PASS vs single vs combo (use adjusted utilities)
+   // choose PASS vs single vs combo (use adjusted utilities)
   let best = { kind: "PASS", utility: passU, reason: "default" };
 
   if (bestSingle && bestSingle.utilityAdj >= passU + minGain) {
-    best = { kind: "PLAY", plays: [bestSingle.play], utility: bestSingle.utilityAdj, reason: "bestSingle" };
+    best = {
+      kind: "PLAY",
+      plays: [bestSingle.play],
+      utility: bestSingle.utilityAdj,
+      reason: "bestSingle",
+    };
   }
+
   if (
     bestCombo &&
     bestCombo.utility >= (bestSingle?.utilityAdj ?? -1e9) + c.comboMinGain &&
     bestCombo.utility >= passU + minGain
   ) {
-    best = { kind: "PLAY", plays: bestCombo.plays, utility: bestCombo.utility, reason: "bestCombo" };
+    best = {
+      kind: "PLAY",
+      plays: bestCombo.plays,
+      utility: bestCombo.utility,
+      reason: "bestCombo",
+    };
   }
 
+  return {
+    best,
+    baseline: { passUtility: passU, decision: baseDecision?.decision || null },
     ranked: scored.slice(0, 12).map((x) => ({ play: x.play, utility: x.utilityAdj })),
+    comboBest: bestCombo,
+  };
+}
+
 
 /** =========================
  *  Convenience
