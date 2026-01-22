@@ -216,20 +216,21 @@ const rawChoice =
 if (!rawChoice || !d.playerId || !d.phase) continue;
 
 const pid = d.playerId;
-const phase = d.phase;
+let phase = String(d.phase || "").toUpperCase().trim();
 
-const row = { ...d, choice: rawChoice };
-
-let bucket = perPlayer.get(pid);
-if (!bucket) {
-  bucket = { moves: [], actions: [], decisions: [] };
-  perPlayer.set(pid, bucket);
+if (!phase) {
+  if (/^MOVE_/i.test(rawChoice)) phase = "MOVE";
+  else if (/^(OPS|ACTION|ACTIONS)_/i.test(rawChoice)) phase = "OPS";
+  else if (/^DECISION_/i.test(rawChoice)) phase = "DECISION";
 }
 
+if (!rawChoice || !pid || !phase) continue;
+
+const row = { ...d, choice: rawChoice, phase };
+
 if (phase === "MOVE") bucket.moves.push(row);
-else if (phase === "ACTIONS") bucket.actions.push(row);
+else if (phase === "ACTIONS" || phase === "OPS") bucket.actions.push(row);
 else if (phase === "DECISION") bucket.decisions.push(row);
-  }
 
   // sort binnen buckets (oud->nieuw)
   for (const bucket of perPlayer.values()) {
@@ -422,19 +423,26 @@ async function openLeadCommandCenter() {
   });
   leadCCUnsubs.push(unsubPlayers);
 
-  // 2) Logs live (single source)
-  const logCol = collection(db, "games", gameId, "log");
-  const logQ = query(
-    logCol,
-    orderBy("createdAt", "desc"),
-    limit(800)
+  // 2) Actions live (stabiel, geen composite index nodig)
+  const actionsCol = collection(db, "games", gameId, "actions");
+  const actionsQ = query(actionsCol, orderBy("createdAt", "desc"), limit(800));
+
+  const unsubActions = onSnapshot(
+    actionsQ,
+    (qs) => {
+      leadCCLogs = qs.docs.map((d) => d.data()); // zelfde shape: round/phase/choice/playerId
+      renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
+    },
+    (err) => {
+      console.error("[LCC] actions snapshot failed", err);
+      if (leadCommandContent) {
+        leadCommandContent.innerHTML =
+          `<p style="opacity:.8">LCC kan actions niet lezen: ${String(err?.message || err)}</p>`;
+      }
+    }
   );
-const unsubLogs = onSnapshot(logQ, (qs) => {
-    leadCCLogs = qs.docs.map((d) => d.data());
-    renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
-  });
-  leadCCUnsubs.push(unsubLogs);
-}
+
+  leadCCUnsubs.push(unsubActions);
 
 function closeLeadCommandCenter() {
   stopLeadCommandCenterLive();
