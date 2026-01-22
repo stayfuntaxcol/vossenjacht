@@ -87,6 +87,25 @@ function _fnv1aHex(str) {
   return h.toString(16).padStart(8, "0");
 }
 
+let btnHint = null;
+let _hintUpdateScheduled = false;
+
+function getBtnHintEl() {
+  if (btnHint && btnHint.isConnected) return btnHint;
+  const el = document.getElementById("btnHint");
+  if (el) btnHint = el;
+  return el;
+}
+
+function scheduleHintUpdate() {
+  if (_hintUpdateScheduled) return;
+  _hintUpdateScheduled = true;
+  requestAnimationFrame(() => {
+    _hintUpdateScheduled = false;
+    updateHintButtonFromState();
+  });
+}
+
 (function initUiPulseMemoryOnce() {
   // run vroeg, maar veilig (localStorage kan geblokkeerd zijn)
   _lootSeenHash = _safeLSGet(_uiKey("lootSeenHash")) || null;
@@ -138,7 +157,8 @@ lastActions = rows
 // hint UI kan veranderen door nieuwe logs/actions
     if (typeof updateHintButtonFromState === "function") {
     setTimeout(() => {
-      try { updateHintButtonFromState(); } catch (e) { console.warn("[hint] update failed", e); }
+      try { scheduleHintUpdate();
+ } catch (e) { console.warn("[hint] update failed", e); }
     }, 0);
   }
 });
@@ -166,7 +186,8 @@ onSnapshot(playersCol, (qs) => {
   lastPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
   if (typeof updateHintButtonFromState === "function") {
     setTimeout(() => {
-      try { updateHintButtonFromState(); } catch (e) { console.warn("[hint] update failed", e); }
+      try { scheduleHintUpdate();
+ } catch (e) { console.warn("[hint] update failed", e); }
     }, 0);
   }
 });
@@ -1141,9 +1162,8 @@ function _computeAdvisorHintSafe() {
 }
 
 function updateHintButtonFromState() {
-  const el = btnHint || document.getElementById("btnHint");
-  if (!el) return;
-  btnHint = el;
+  const el = getBtnHintEl();
+  if (!el) return; // géén warn meer, gewoon skip
 
   const g = lastGame || currentGame || null;
   const hint = _computeAdvisorHintSafe();
@@ -1170,7 +1190,6 @@ function updateHintButtonFromState() {
 
   _setBtnPulse(el, roundIsNew || hashIsNew);
 }
-
 
 function markHintSeenIfOps(hintObj, gameObj) {
   const g = gameObj || lastGame || null;
@@ -3617,7 +3636,8 @@ initAuth(async () => {
 
     if (typeof updateHintButtonFromState === "function") {
     setTimeout(() => {
-      try { updateHintButtonFromState(); } catch (e) { console.warn("[hint] update failed", e); }
+      try { scheduleHintUpdate();
+ } catch (e) { console.warn("[hint] update failed", e); }
     }, 0);
   }
 renderGame();
@@ -3643,7 +3663,8 @@ renderGame();
 
     if (typeof updateHintButtonFromState === "function") {
     setTimeout(() => {
-      try { updateHintButtonFromState(); } catch (e) { console.warn("[hint] update failed", e); }
+      try { scheduleHintUpdate();
+ } catch (e) { console.warn("[hint] update failed", e); }
     }, 0);
   }
 renderPlayer();
