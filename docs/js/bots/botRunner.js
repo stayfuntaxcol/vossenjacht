@@ -2006,6 +2006,11 @@ const extraGameUpdates = {
       flagsRound.scentChecks = arr;
     }
 
+    if (cardName === "No-Go Zone") {
+      // No-Go Zone: hide the next event info for everyone this round
+      flagsRound.noPeek = true;
+    }
+
     if (cardName === "Follow the Tail") {
       const targetId = pickRichestTarget(latestPlayers || [], botId);
       if (targetId) {
@@ -2016,7 +2021,19 @@ const extraGameUpdates = {
     }
 
     if (cardName === "Molting Mask") {
-      flagsRound.noPeek = true;
+      // Molting Mask: change my den color randomly (strategic reset). This does NOT affect noPeek.
+      const COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
+      const cur = normColor(p.color);
+      const pool = COLORS.filter((c) => c && c !== cur);
+      const pickFrom = pool.length ? pool : COLORS;
+      const next = pickFrom[Math.floor(Math.random() * pickFrom.length)] || cur;
+      if (next && next !== cur) {
+        // keep ephemeral debug for message/log only (NOT written to Firestore)
+        p.__moltingFrom = cur;
+        p.__moltingTo = next;
+        p.color = next;
+        p.den = next;
+      }
     }
 
     if (cardName === "Nose for Trouble") {
@@ -2072,8 +2089,14 @@ const extraGameUpdates = {
     if (cardName === "Den Signal") {
       msg = `BOT speelt Den Signal (DEN ${normColor(p.color) || "?"} immune)`;
     }
+    if (cardName === "Molting Mask") {
+      const from = p.__moltingFrom;
+      const to = p.__moltingTo;
+      if (from && to) msg = `BOT speelt Molting Mask (${from} → ${to})`;
+      else msg = "BOT speelt Molting Mask (den kleur gewijzigd)";
+    }
     if (cardName === "No-Go Zone") {
-      msg = "BOT speelt No-Go Zone (OPS locked)";
+      msg = "BOT speelt No-Go Zone (noPeek actief: event info verborgen deze ronde)";
     }
 
     const gAfter = {
