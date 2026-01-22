@@ -316,7 +316,11 @@ function renderLeadCommandCenterUI(round, players, logs) {
         items.forEach((a) => {
           const line = document.createElement("div");
           line.className = "lead-phase-line";
-          line.textContent = formatChoiceForDisplay(phaseKey, a.choice, a.payload || a.ctx || null);
+          line.textContent =
+   (typeof formatChoiceForDisplay === "function")
+    ? formatChoiceForDisplay(phaseKey, a.choice, a.payload || a.ctx || null)
+    : String(a.choice || "");
+
           col.appendChild(line);
         });
       }
