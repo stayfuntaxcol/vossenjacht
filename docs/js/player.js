@@ -48,18 +48,6 @@ let lastMe = null;
 let lastPlayers = [];
 let lastActions = [];
 
-
-// ===== CORE RUNTIME STATE (declared early to avoid TDZ during early snapshots) =====
-let gameRef = null;
-let playerRef = null;
-let currentGame = null;
-let currentPlayer = null;
-
-// Buttons (declare early; bind later after DOM exists)
-let btnSnatch=null, btnForage=null, btnScout=null, btnShift=null;
-let btnLurk=null, btnBurrow=null, btnDash=null;
-let btnPass=null, btnHand=null, btnLead=null, btnLoot=null;
-
 // ===== UI PULSE MEMORY (LOOT/HINT) =====
 const _uiKey = (k) => `VJ_${k}_${gameId || "?"}_${playerId || "?"}`;
 
@@ -85,25 +73,6 @@ function _fnv1aHex(str) {
     h = (h * 0x01000193) >>> 0; // 16777619
   }
   return h.toString(16).padStart(8, "0");
-}
-
-let btnHint = null;
-let _hintUpdateScheduled = false;
-
-function getBtnHintEl() {
-  if (btnHint && btnHint.isConnected) return btnHint;
-  const el = document.getElementById("btnHint");
-  if (el) btnHint = el;
-  return el;
-}
-
-function scheduleHintUpdate() {
-  if (_hintUpdateScheduled) return;
-  _hintUpdateScheduled = true;
-  requestAnimationFrame(() => {
-    _hintUpdateScheduled = false;
-    updateHintButtonFromState();
-  });
 }
 
 (function initUiPulseMemoryOnce() {
@@ -134,12 +103,12 @@ if (gameId) {
     // (je advisor krijgt dan nog steeds acties-context, maar uit /log)
     
 lastActions = rows
-  .filter((e) => ["ACTIONS","OPS"].includes(String(e.phase || "").toUpperCase()))
+  .filter((e) => (e.phase || "") === "ACTIONS")
   .map((e) => {
     // compat: sommige logs hebben geen `choice`, maar wel message "Naam: ACTION_X"
     const msg = typeof e.message === "string" ? e.message.trim() : "";
     const after = msg && msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
-    const choiceFallback = /^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(after) ? after : "";
+    const choiceFallback = /^(MOVE|ACTION|DECISION)_/i.test(after) ? after : "";
     return {
       id: e.id,
       createdAt: e.createdAt,
@@ -155,12 +124,7 @@ lastActions = rows
   })
   .filter((e) => !!e.choice);
 // hint UI kan veranderen door nieuwe logs/actions
-    if (typeof updateHintButtonFromState === "function") {
-    setTimeout(() => {
-      try { scheduleHintUpdate();
- } catch (e) { console.warn("[hint] update failed", e); }
-    }, 0);
-  }
+    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
 });
 
 async function ensureBurrowFlagForAllPlayers(gameId) {
@@ -179,17 +143,13 @@ async function ensureBurrowFlagForAllPlayers(gameId) {
 }
 
 // --- ergens in je init (binnen async functie!) ---
-ensureBurrowFlagForAllPlayers(gameId).catch((e) => console.warn("[burrowFlag] ensure failed", e));
+await ensureBurrowFlagForAllPlayers(gameId);
+
 // BONUS: cache live
 const playersCol = collection(db, "games", gameId, "players");
 onSnapshot(playersCol, (qs) => {
   lastPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
-  if (typeof updateHintButtonFromState === "function") {
-    setTimeout(() => {
-      try { scheduleHintUpdate();
- } catch (e) { console.warn("[hint] update failed", e); }
-    }, 0);
-  }
+  if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
 });
 
 } else {
@@ -203,15 +163,11 @@ const gameStatusDiv = document.getElementById("gameStatus");
 const hostStatusLine = document.getElementById("hostStatusLine");
 const hostFeedbackLine = document.getElementById("hostFeedbackLine");
 
-// ===== BUTTONS =====
-
 // ===== LEAD FOX COMMAND CENTER (LIVE, SINGLE SOURCE: /log) =====
 
 let leadCCUnsubs = [];
 let leadCCPlayers = [];
 let leadCCLogs = [];
-let leadCCLogsLog = [];
-let leadCCLogsActions = [];
 
 function stopLeadCommandCenterLive() {
   for (const fn of leadCCUnsubs) {
@@ -220,8 +176,6 @@ function stopLeadCommandCenterLive() {
   leadCCUnsubs = [];
   leadCCPlayers = [];
   leadCCLogs = [];
-  leadCCLogsLog = [];
-  leadCCLogsActions = [];
 }
 
 function tsToMs(t) {
@@ -242,14 +196,7 @@ function renderLeadCommandCenterUI(round, players, logs) {
   const perPlayer = new Map();
 
   for (const d of (logs || [])) {
-    const dRound =
-      Number.isFinite(Number(d?.round)) ? Number(d.round) :
-      Number.isFinite(Number(d?.roundIndex)) ? Number(d.roundIndex) :
-      Number.isFinite(Number(d?.r)) ? Number(d.r) :
-      Number.isFinite(Number(d?.payload?.round)) ? Number(d.payload.round) :
-      Number.isFinite(Number(d?.ctx?.round)) ? Number(d.ctx.round) :
-      NaN;
-
+    const dRound = Number(d?.round);
     if (Number.isFinite(dRound) && dRound !== Number(round)) continue;
 
     // nieuw: d.choice
@@ -363,11 +310,7 @@ function renderLeadCommandCenterUI(round, players, logs) {
         items.forEach((a) => {
           const line = document.createElement("div");
           line.className = "lead-phase-line";
-          line.textContent =
-   (typeof formatChoiceForDisplay === "function")
-    ? formatChoiceForDisplay(phaseKey, a.choice, a.payload || a.ctx || null)
-    : String(a.choice || "");
-
+          line.textContent = formatChoiceForDisplay(phaseKey, a.choice, a.payload || a.ctx || null);
           col.appendChild(line);
         });
       }
@@ -423,39 +366,20 @@ async function openLeadCommandCenter() {
   );
   leadCCUnsubs.push(unsubPlayers);
 
-  // 2) log live (bots schrijven meestal hier)
-  const logCol = collection(db, "games", gameId, "log");
-  const logQ = query(logCol, orderBy("createdAt", "desc"), limit(1200));
-
-  const unsubLog = onSnapshot(
-    logQ,
-    (qs) => {
-      leadCCLogsLog = qs.docs.map((d) => ({ id: d.id, ...d.data(), __src: "log" }));
-      leadCCLogs = [...leadCCLogsLog, ...leadCCLogsActions];
-      renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
-    },
-    (err) => {
-      console.error("[LCC] log snapshot failed", err);
-      leadCommandContent.innerHTML =
-        `<p style="opacity:.8">LCC kan log niet lezen: ${String(err?.message || err)}</p>`;
-    }
-  );
-  leadCCUnsubs.push(unsubLog);
-
-  // 3) actions live (legacy / humans)
+  // 2) actions live (geen where -> geen composite index)
   const actionsCol = collection(db, "games", gameId, "actions");
   const actionsQ = query(actionsCol, orderBy("createdAt", "desc"), limit(800));
 
   const unsubActions = onSnapshot(
     actionsQ,
     (qs) => {
-      leadCCLogsActions = qs.docs.map((d) => ({ id: d.id, ...d.data(), __src: "actions" }));
-      leadCCLogs = [...leadCCLogsLog, ...leadCCLogsActions];
+      leadCCLogs = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
       renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
     },
     (err) => {
       console.error("[LCC] actions snapshot failed", err);
-      // niet fatal; /log kan al genoeg zijn
+      leadCommandContent.innerHTML =
+        `<p style="opacity:.8">LCC kan actions niet lezen: ${String(err?.message || err)}</p>`;
     }
   );
 
@@ -511,22 +435,20 @@ const actionsStateText = document.getElementById("actionsStateText");
 const decisionStateText = document.getElementById("decisionStateText");
 
 // Buttons (MOVE / DECISION / ACTIONS)
-function initUiButtons() {
-  btnSnatch = document.getElementById("btnSnatch");
-  btnForage = document.getElementById("btnForage");
-  btnScout  = document.getElementById("btnScout");
-  btnShift  = document.getElementById("btnShift");
+const btnSnatch = document.getElementById("btnSnatch");
+const btnForage = document.getElementById("btnForage");
+const btnScout = document.getElementById("btnScout");
+const btnShift = document.getElementById("btnShift");
 
-  btnLurk   = document.getElementById("btnLurk");
-  btnBurrow = document.getElementById("btnBurrow");
-  btnDash   = document.getElementById("btnDash");
+const btnLurk = document.getElementById("btnLurk");
+const btnBurrow = document.getElementById("btnBurrow");
+const btnDash = document.getElementById("btnDash");
 
-  btnPass   = document.getElementById("btnPass");
-  btnHand   = document.getElementById("btnHand");
-  btnLead   = document.getElementById("btnLead");
-  btnHint   = document.getElementById("btnHint");
-  btnLoot   = document.getElementById("btnLoot");
-}
+const btnPass = document.getElementById("btnPass");
+const btnHand = document.getElementById("btnHand");
+const btnLead = document.getElementById("btnLead");
+const btnHint = document.getElementById("btnHint");
+const btnLoot = document.getElementById("btnLoot");
 
 // Modals (HAND / LOOT)
 const handModalOverlay = document.getElementById("handModalOverlay");
@@ -762,7 +684,11 @@ function hostInitUI() {
 }
 
 // ===== FIRESTORE REFS / STATE =====
-// (declared near top to avoid TDZ)
+let gameRef = null;
+let playerRef = null;
+
+let currentGame = null;
+let currentPlayer = null;
 
 let prevGame = null;
 let prevPlayer = null;
@@ -1162,23 +1088,23 @@ function _computeAdvisorHintSafe() {
 }
 
 function updateHintButtonFromState() {
-  const el = getBtnHintEl();
-  if (!el) return; // géén warn meer, gewoon skip
+  if (!btnHint) return;
 
   const g = lastGame || currentGame || null;
   const hint = _computeAdvisorHintSafe();
 
+  // Bright als er (waarschijnlijk) een hint is
   const hasHint = _hintHasContent(hint) || (!!lastGame && !!lastMe);
-  _setBtnGlow(el, hasHint);
+  _setBtnGlow(btnHint, hasHint);
 
   const phase = String(g?.phase || "").toUpperCase();
   if (!g || (phase !== "OPS" && phase !== "ACTIONS")) {
-    _setBtnPulse(el, false);
+    _setBtnPulse(btnHint, false);
     return;
   }
 
   if (!_hintHasContent(hint)) {
-    _setBtnPulse(el, false);
+    _setBtnPulse(btnHint, false);
     return;
   }
 
@@ -1188,7 +1114,7 @@ function updateHintButtonFromState() {
   const roundIsNew = round != null && _hintSeenOpsRound != null ? round > _hintSeenOpsRound : false;
   const hashIsNew = !!_hintCurrentHash && (!_hintSeenOpsHash || _hintCurrentHash !== _hintSeenOpsHash);
 
-  _setBtnPulse(el, roundIsNew || hashIsNew);
+  _setBtnPulse(btnHint, roundIsNew || hashIsNew);
 }
 
 function markHintSeenIfOps(hintObj, gameObj) {
@@ -3023,56 +2949,6 @@ if (typeof arrayUnion === "function") {
   }
 }
 
-async function applyOpsActionAndAdvanceTurn({ db, gameRef, actorId, isPass }) {
-  const now = Date.now();
-
-  await runTransaction(db, async (tx) => {
-    const snap = await tx.get(gameRef);
-    if (!snap.exists()) return;
-
-    const g = snap.data();
-    if (g.phase !== "ACTIONS") return;
-
-    const order = Array.isArray(g.opsTurnOrder) ? g.opsTurnOrder : [];
-    if (!order.length) return;
-
-    const idx = Number.isFinite(g.opsTurnIndex) ? g.opsTurnIndex : 0;
-    const expected = order[idx];
-
-    // alleen speler die aan de beurt is
-    if (expected !== actorId) return;
-
-    const opsLocked = !!g.flagsRound?.opsLocked;
-    const target = Number(g.opsActiveCount || order.length);
-    const passesNow = Number(g.opsConsecutivePasses || 0);
-
-// blokkeer alleen action-cards, niet PASS
-if (opsLocked && !isPass) return;
-
-if (passesNow >= target) return;
-
-    const nextIdx = (idx + 1) % order.length;
-    let nextPasses = isPass ? passesNow + 1 : 0;
-    if (nextPasses > target) nextPasses = target;
-
-    const ended = nextPasses >= target;
-
-    tx.update(gameRef, {
-      opsTurnIndex: nextIdx,
-      opsConsecutivePasses: nextPasses,
-      ...(ended
-        ? {
-            flagsRound: { ...(g.flagsRound || {}), opsLocked: true },
-            opsEndedAtMs: now,
-          }
-        : {}),
-    });
-  });
-}
-
-// handig voor debugging / legacy calls
-globalThis.applyOpsActionAndAdvanceTurn = applyOpsActionAndAdvanceTurn;
-
 // ===== PASS =====
 // Returns boolean: true = pass recorded, false = not (not your turn etc.)
 async function passAction() {
@@ -3099,6 +2975,9 @@ async function passAction() {
       return false;
     }
 
+    const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
+    const newPasses = Number(game.opsConsecutivePasses || 0) + 1;
+
     await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: true });
 
     await safeLogMoveAction(game, player, "ACTION_PASS", "ACTIONS");
@@ -3121,6 +3000,7 @@ async function playScatter(game, player) {
   const flags = mergeRoundFlags(game);
   flags.scatter = true;
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -3147,6 +3027,7 @@ async function playDenSignal(game, player) {
   flags.denImmune[color] = true;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -3180,6 +3061,7 @@ async function playNoGoZone(game, player) {
   flags.noPeek = noPeek;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -3207,6 +3089,7 @@ async function playBurrowBeacon(game, player) {
   flags.lockEvents = true;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -3244,6 +3127,7 @@ async function playHoldStill(game, player) {
   flags.opsLocked = true;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -3293,6 +3177,7 @@ async function playNoseForTrouble(game, player) {
   flags.predictions = preds;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -3326,6 +3211,7 @@ async function playScentCheck(game, player) {
   flags.scentChecks = list;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -3347,6 +3233,7 @@ async function playFollowTail(game, player) {
   flags.followTail = ft;
 
   await updateDoc(gameRef, { flagsRound: flags });
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -3378,6 +3265,8 @@ async function playAlphaCall(game, player) {
 
   await updateDoc(gameRef, { leadIndex: idx });
   resetLeadCache();
+  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
+
   await addLog(gameId, {
     round: game.round || 0,
     phase: "ACTIONS",
@@ -3634,13 +3523,9 @@ initAuth(async () => {
     prevGame = newGame;
     lastGame = newGame;
 
-    if (typeof updateHintButtonFromState === "function") {
-    setTimeout(() => {
-      try { scheduleHintUpdate();
- } catch (e) { console.warn("[hint] update failed", e); }
-    }, 0);
-  }
-renderGame();
+    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
+
+    renderGame();
   });
 
   onSnapshot(playerRef, (snap) => {
@@ -3661,13 +3546,9 @@ renderGame();
     prevPlayer = newPlayer;
     lastMe = newPlayer;
 
-    if (typeof updateHintButtonFromState === "function") {
-    setTimeout(() => {
-      try { scheduleHintUpdate();
- } catch (e) { console.warn("[hint] update failed", e); }
-    }, 0);
-  }
-renderPlayer();
+    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
+
+    renderPlayer();
   });
 
   // MOVE
@@ -3755,4 +3636,3 @@ console.log("[advisor] hint object:", hint);
   console.warn("[HINT] btnHint niet gevonden in DOM");
 }
 });
-
