@@ -48,6 +48,18 @@ let lastMe = null;
 let lastPlayers = [];
 let lastActions = [];
 
+
+// ===== CORE RUNTIME STATE (declared early to avoid TDZ during early snapshots) =====
+let gameRef = null;
+let playerRef = null;
+let currentGame = null;
+let currentPlayer = null;
+
+// Buttons (declare early; bind later after DOM exists)
+let btnSnatch=null, btnForage=null, btnScout=null, btnShift=null;
+let btnLurk=null, btnBurrow=null, btnDash=null;
+let btnPass=null, btnHand=null, btnLead=null, btnHint=null, btnLoot=null;
+
 // ===== UI PULSE MEMORY (LOOT/HINT) =====
 const _uiKey = (k) => `VJ_${k}_${gameId || "?"}_${playerId || "?"}`;
 
@@ -103,12 +115,12 @@ if (gameId) {
     // (je advisor krijgt dan nog steeds acties-context, maar uit /log)
     
 lastActions = rows
-  .filter((e) => (e.phase || "") === "ACTIONS")
+  .filter((e) => ["ACTIONS","OPS"].includes(String(e.phase || "").toUpperCase()))
   .map((e) => {
     // compat: sommige logs hebben geen `choice`, maar wel message "Naam: ACTION_X"
     const msg = typeof e.message === "string" ? e.message.trim() : "";
     const after = msg && msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
-    const choiceFallback = /^(MOVE|ACTION|DECISION)_/i.test(after) ? after : "";
+    const choiceFallback = /^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(after) ? after : "";
     return {
       id: e.id,
       createdAt: e.createdAt,
@@ -124,7 +136,11 @@ lastActions = rows
   })
   .filter((e) => !!e.choice);
 // hint UI kan veranderen door nieuwe logs/actions
-    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
+    if (typeof updateHintButtonFromState === "function") {
+    setTimeout(() => {
+      try { updateHintButtonFromState(); } catch (e) { console.warn("[hint] update failed", e); }
+    }, 0);
+  }
 });
 
 async function ensureBurrowFlagForAllPlayers(gameId) {
@@ -143,13 +159,16 @@ async function ensureBurrowFlagForAllPlayers(gameId) {
 }
 
 // --- ergens in je init (binnen async functie!) ---
-await ensureBurrowFlagForAllPlayers(gameId);
-
+ensureBurrowFlagForAllPlayers(gameId).catch((e) => console.warn("[burrowFlag] ensure failed", e));
 // BONUS: cache live
 const playersCol = collection(db, "games", gameId, "players");
 onSnapshot(playersCol, (qs) => {
   lastPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
-  if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
+  if (typeof updateHintButtonFromState === "function") {
+    setTimeout(() => {
+      try { updateHintButtonFromState(); } catch (e) { console.warn("[hint] update failed", e); }
+    }, 0);
+  }
 });
 
 } else {
@@ -165,15 +184,13 @@ const hostFeedbackLine = document.getElementById("hostFeedbackLine");
 
 // ===== BUTTONS =====
 
-let btnSnatch=null, btnForage=null, btnScout=null, btnShift=null;
-let btnLurk=null, btnBurrow=null, btnDash=null;
-let btnPass=null, btnHand=null, btnLead=null, btnHint=null, btnLoot=null;
-
 // ===== LEAD FOX COMMAND CENTER (LIVE, SINGLE SOURCE: /log) =====
 
 let leadCCUnsubs = [];
 let leadCCPlayers = [];
 let leadCCLogs = [];
+let leadCCLogsLog = [];
+let leadCCLogsActions = [];
 
 function stopLeadCommandCenterLive() {
   for (const fn of leadCCUnsubs) {
@@ -182,6 +199,8 @@ function stopLeadCommandCenterLive() {
   leadCCUnsubs = [];
   leadCCPlayers = [];
   leadCCLogs = [];
+  leadCCLogsLog = [];
+  leadCCLogsActions = [];
 }
 
 function tsToMs(t) {
@@ -202,7 +221,14 @@ function renderLeadCommandCenterUI(round, players, logs) {
   const perPlayer = new Map();
 
   for (const d of (logs || [])) {
-    const dRound = Number(d?.round ?? d?.roundIndex ?? d?.r ?? d?.ctx?.round ?? d?.payload?.round);
+    const dRound =
+      Number.isFinite(Number(d?.round)) ? Number(d.round) :
+      Number.isFinite(Number(d?.roundIndex)) ? Number(d.roundIndex) :
+      Number.isFinite(Number(d?.r)) ? Number(d.r) :
+      Number.isFinite(Number(d?.payload?.round)) ? Number(d.payload.round) :
+      Number.isFinite(Number(d?.ctx?.round)) ? Number(d.ctx.round) :
+      NaN;
+
     if (Number.isFinite(dRound) && dRound !== Number(round)) continue;
 
     // nieuw: d.choice
@@ -375,15 +401,16 @@ async function openLeadCommandCenter() {
     (err) => console.error("[LCC] players snapshot failed", err)
   );
   leadCCUnsubs.push(unsubPlayers);
-  // 2) log live (geen where -> geen composite index)
-  // Bots + humans schrijven hier hun keuzes; LCC filtert client-side op ronde.
+
+  // 2) log live (bots schrijven meestal hier)
   const logCol = collection(db, "games", gameId, "log");
-  const logQ = query(logCol, orderBy("createdAt", "desc"), limit(800));
+  const logQ = query(logCol, orderBy("createdAt", "desc"), limit(1200));
 
   const unsubLog = onSnapshot(
     logQ,
     (qs) => {
-      leadCCLogs = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+      leadCCLogsLog = qs.docs.map((d) => ({ id: d.id, ...d.data(), __src: "log" }));
+      leadCCLogs = [...leadCCLogsLog, ...leadCCLogsActions];
       renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
     },
     (err) => {
@@ -392,8 +419,26 @@ async function openLeadCommandCenter() {
         `<p style="opacity:.8">LCC kan log niet lezen: ${String(err?.message || err)}</p>`;
     }
   );
-
   leadCCUnsubs.push(unsubLog);
+
+  // 3) actions live (legacy / humans)
+  const actionsCol = collection(db, "games", gameId, "actions");
+  const actionsQ = query(actionsCol, orderBy("createdAt", "desc"), limit(800));
+
+  const unsubActions = onSnapshot(
+    actionsQ,
+    (qs) => {
+      leadCCLogsActions = qs.docs.map((d) => ({ id: d.id, ...d.data(), __src: "actions" }));
+      leadCCLogs = [...leadCCLogsLog, ...leadCCLogsActions];
+      renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
+    },
+    (err) => {
+      console.error("[LCC] actions snapshot failed", err);
+      // niet fatal; /log kan al genoeg zijn
+    }
+  );
+
+  leadCCUnsubs.push(unsubActions);
 }
 
 function closeLeadCommandCenter() {
@@ -696,11 +741,7 @@ function hostInitUI() {
 }
 
 // ===== FIRESTORE REFS / STATE =====
-let gameRef = null;
-let playerRef = null;
-
-let currentGame = null;
-let currentPlayer = null;
+// (declared near top to avoid TDZ)
 
 let prevGame = null;
 let prevPlayer = null;
@@ -3574,9 +3615,12 @@ initAuth(async () => {
     prevGame = newGame;
     lastGame = newGame;
 
-    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
-
-    renderGame();
+    if (typeof updateHintButtonFromState === "function") {
+    setTimeout(() => {
+      try { updateHintButtonFromState(); } catch (e) { console.warn("[hint] update failed", e); }
+    }, 0);
+  }
+renderGame();
   });
 
   onSnapshot(playerRef, (snap) => {
@@ -3597,9 +3641,12 @@ initAuth(async () => {
     prevPlayer = newPlayer;
     lastMe = newPlayer;
 
-    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
-
-    renderPlayer();
+    if (typeof updateHintButtonFromState === "function") {
+    setTimeout(() => {
+      try { updateHintButtonFromState(); } catch (e) { console.warn("[hint] update failed", e); }
+    }, 0);
+  }
+renderPlayer();
   });
 
   // MOVE
