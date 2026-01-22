@@ -6,7 +6,6 @@ import { getEventFacts, getActionFacts } from "../rulesIndex.js";
 import { getActionDefByName, getLootDef } from "../../cards.js";
 import { comboScore } from "../actionComboMatrix.js";
 
-
 /** =========================
  *  TUNING (edit here)
  *  ========================= */
@@ -37,31 +36,30 @@ export const BOT_UTILITY_CFG = {
   // MOVE expected values (cheap but stable)
   actionDeckSampleN: 30,
 
-  // OPS
-  actionReserveMinHand: 2,
-  actionPlayMinGain: 1.2,
-  comboMinGain: 2.0,
+  // OPS (minder krampachtig sparen, maar nog steeds combo-bewust)
+  actionReserveMinHand: 1,
+  actionPlayMinGain: 0.9,
+  comboMinGain: 1.4,
   allowComboSearch: true,
   comboMaxPairs: 20,
-  
-  // OPS discipline: avoid dumping cards early; save for combos
+
+  // OPS discipline: avoid dumping cards early; save for combos (SOFTER)
   opsEarlyRounds: 2,               // rounds 1..2 are “early raid”
-  opsReserveHandEarly: 4,          // try to keep this many cards early
-  opsReserveHandMid: 3,
-  opsReserveHandLate: 2,
+  opsReserveHandEarly: 3,          // keep ~3 early
+  opsReserveHandMid: 2,
+  opsReserveHandLate: 1,
 
-  opsHighComboScore: 8,            // comboScore >= this => “save for combo”
-  opsReserveComboBoost: 1,         // if hand has high combo potential: reserve +1
+  opsHighComboScore: 9,            // stricter definition of “combo key”
+  opsReserveComboBoost: 0,         // don't auto-increase reserve just because a combo exists
 
-  opsSpendCostBase: 0.9,           // opportunity cost per spent card (scaled by avgActionDeckValue)
-  opsSpendCostEarlyMult: 1.35,
-  opsSpendCostLateMult: 0.75,
+  opsSpendCostBase: 0.55,          // softer opportunity cost per spent card
+  opsSpendCostEarlyMult: 1.05,
+  opsSpendCostLateMult: 0.8,
 
-  opsReserveMissPenalty: 1.0,      // extra penalty per card under reserveTarget after play
-  opsSoloBreakComboPenalty: 1.25,  // penalty if you spend a “combo key” as single
+  opsReserveMissPenalty: 0.55,     // softer penalty if you dip under reserveTarget
+  opsSoloBreakComboPenalty: 0.6,   // softer penalty for spending a key solo
 
-  actionPlayMinGainEarlyBonus: 0.8, // harder to play early (adds to actionPlayMinGain)
-
+  actionPlayMinGainEarlyBonus: 0.25, // slightly harder early, but not paralyzing
 
   // “implemented” safety
   actionUnimplementedMult: 0.15,
@@ -73,10 +71,10 @@ export const BOT_UTILITY_CFG = {
   // Share modeling
   dashersLikelyThreshold: 6.0,
 
- // Hidden Nest coordination (anti-herding)
-hiddenNestCoordination: true,
-hiddenNestDashPenalty: 4.0,        // discourage DASH if not in slot
-hiddenNestBurrowPenalty: 3.0,      // discourage BURROW on Hidden Nest
+  // Hidden Nest coordination (anti-herding)
+  hiddenNestCoordination: true,
+  hiddenNestDashPenalty: 4.0,        // discourage DASH if not in slot
+  hiddenNestBurrowPenalty: 3.0,      // discourage BURROW on Hidden Nest
 };
 
 const DEFAULTS = BOT_UTILITY_CFG;
@@ -1297,22 +1295,20 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
 
     const actionId = String(def.id);
 
-    // reserve logic: keep some cards unless they’re “core” tools
-    // + stronger hoard: if we'd drop under reserveTarget, only allow high-impact tools or real combo-keys
-    if (hand.length <= Math.max(c.actionReserveMinHand, reserveTarget)) {
-      const ok = new Set([
-        "DEN_SIGNAL",
-        "NOSE_FOR_TROUBLE",
-        "BURROW_BEACON",
-        "PACK_TINKER",
-        "KICK_UP_DUST",
-        "FOLLOW_THE_TAIL",
-        "NO_GO_ZONE",
-      ]);
-
-      const keyScore = Number(comboMeta?.keyScoreById?.[actionId] || 0);
-      if (!ok.has(actionId) && keyScore < Number(c.opsHighComboScore || 8)) continue;
-    }
+// Only hard-skip when hand is *really* small.
+// ReserveTarget is handled by spendCost() (soft penalty), so DON'T continue here.
+if (hand.length <= Number(c.actionReserveMinHand || 1)) {
+  const ok = new Set([
+    "DEN_SIGNAL",
+    "NOSE_FOR_TROUBLE",
+    "BURROW_BEACON",
+    "PACK_TINKER",
+    "KICK_UP_DUST",
+    "FOLLOW_THE_TAIL",
+    "NO_GO_ZONE",
+  ]);
+  if (!ok.has(actionId)) continue;
+}
 
     const cand = actionCandidates({ actionId, actionName: name, game, me, players });
     for (const p of cand) plays.push(p);
