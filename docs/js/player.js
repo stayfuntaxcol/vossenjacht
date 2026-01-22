@@ -58,7 +58,7 @@ let currentPlayer = null;
 // Buttons (declare early; bind later after DOM exists)
 let btnSnatch=null, btnForage=null, btnScout=null, btnShift=null;
 let btnLurk=null, btnBurrow=null, btnDash=null;
-let btnPass=null, btnHand=null, btnLead=null, btnHint=null, btnLoot=null;
+let btnPass=null, btnHand=null, btnLead=null, btnLoot=null;
 
 // ===== UI PULSE MEMORY (LOOT/HINT) =====
 const _uiKey = (k) => `VJ_${k}_${gameId || "?"}_${playerId || "?"}`;
