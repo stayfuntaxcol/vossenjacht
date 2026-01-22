@@ -1218,10 +1218,24 @@ const usedIds =
 const res = evaluateOpsActions({
   game,
   me: bot,
-  players: list,         // jij hebt 'list' al eerder gemaakt (players met id)
+  players: list,
   flagsRound: flags,
   cfg: BOT_UTILITY_CFG,
 });
+
+if (game?.debugBots) {
+  console.log(
+    "[OPS]",
+    bot.id,
+    "hand", (bot.hand || []).length,
+    "best", res?.best?.kind, res?.best?.reason,
+    "bestU", res?.best?.utility,
+    "topU", res?.ranked?.[0]?.utility
+  );
+}
+
+    
+console.log("[OPS]", bot.id, "hand", (bot.hand || []).length, "best", res?.best, "top", res?.ranked?.[0]);
 
 // candidates: best eerst, daarna ranked
 const candidates = [];
