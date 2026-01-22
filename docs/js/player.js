@@ -191,52 +191,44 @@ function tsToMs(t) {
 
 function renderLeadCommandCenterUI(round, players, logs) {
   if (!leadCommandContent) return;
+
   leadCommandContent.innerHTML = "";
 
   const perPlayer = new Map();
 
   for (const d of (logs || [])) {
-    const dRound = Number(d?.round);
-    if (Number.isFinite(dRound) && dRound !== Number(round)) continue;
+    if ((d.round || 0) !== round) continue;
 
-    // nieuw: d.choice
-    // legacy: d.message "Naam: ACTION_X"
-    const rawChoice =
-      (typeof d.choice === "string" && d.choice.trim())
-        ? d.choice.trim()
-        : (() => {
-            const msg = typeof d.message === "string" ? d.message.trim() : "";
-            if (!msg) return "";
-            const after = msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
-            return /^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(after) ? after : "";
-          })();
+    
+// Werk met zowel oud als nieuw:
+// - nieuw: kind === "CHOICE" + choice aanwezig
+// - legacy: message kan "Naam: ACTION_X" bevatten
+const rawChoice =
+  typeof d.choice === "string" && d.choice.trim()
+    ? d.choice.trim()
+    : (() => {
+        const msg = typeof d.message === "string" ? d.message.trim() : "";
+        if (!msg) return "";
+        const after = msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
+        return /^(MOVE|ACTION|DECISION)_/i.test(after) ? after : "";
+      })();
 
-    const pid = String(d.playerId || d.actorId || d.ownerId || "").trim();
-    if (!rawChoice || !pid) continue;
+if (!rawChoice || !d.playerId || !d.phase) continue;
 
-    let phase = String(d.phase || "").toUpperCase().trim();
+const pid = d.playerId;
+const phase = d.phase;
 
-    // phase afleiden als die ontbreekt
-    if (!phase) {
-      if (/^MOVE_/i.test(rawChoice)) phase = "MOVE";
-      else if (/^(OPS|ACTION|ACTIONS)_/i.test(rawChoice)) phase = "OPS";
-      else if (/^DECISION_/i.test(rawChoice)) phase = "DECISION";
-    }
+const row = { ...d, choice: rawChoice };
 
-    // normaliseer
-    if (phase === "ACTIONS" || phase === "ACTION") phase = "OPS";
+let bucket = perPlayer.get(pid);
+if (!bucket) {
+  bucket = { moves: [], actions: [], decisions: [] };
+  perPlayer.set(pid, bucket);
+}
 
-    let bucket = perPlayer.get(pid);
-    if (!bucket) {
-      bucket = { moves: [], actions: [], decisions: [] };
-      perPlayer.set(pid, bucket);
-    }
-
-    const row = { ...d, playerId: pid, phase, choice: rawChoice };
-
-    if (phase === "MOVE") bucket.moves.push(row);
-    else if (phase === "OPS") bucket.actions.push(row);
-    else if (phase === "DECISION") bucket.decisions.push(row);
+if (phase === "MOVE") bucket.moves.push(row);
+else if (phase === "ACTIONS") bucket.actions.push(row);
+else if (phase === "DECISION") bucket.decisions.push(row);
   }
 
   // sort binnen buckets (oud->nieuw)
@@ -252,6 +244,7 @@ function renderLeadCommandCenterUI(round, players, logs) {
   leadCommandContent.appendChild(header);
 
   const orderedPlayers = sortPlayersByJoinOrder(players || []);
+
   if (!orderedPlayers.length) {
     const msg = document.createElement("p");
     msg.textContent = "Er zijn nog geen spelers gevonden.";
@@ -310,7 +303,7 @@ function renderLeadCommandCenterUI(round, players, logs) {
         items.forEach((a) => {
           const line = document.createElement("div");
           line.className = "lead-phase-line";
-          line.textContent = formatChoiceForDisplay(phaseKey, a.choice, a.payload || a.ctx || null);
+          line.textContent = formatChoiceForDisplay(phaseKey, a.choice, a.payload || null);
           col.appendChild(line);
         });
       }
@@ -319,12 +312,77 @@ function renderLeadCommandCenterUI(round, players, logs) {
     }
 
     phaseGrid.appendChild(buildPhaseCol("MOVE", "MOVE", group.moves));
-    phaseGrid.appendChild(buildPhaseCol("ACTIONS", "ACTIONS", group.actions)); // actions bucket == OPS
+    phaseGrid.appendChild(buildPhaseCol("ACTIONS", "ACTIONS", group.actions));
     phaseGrid.appendChild(buildPhaseCol("DECISION", "DECISION", group.decisions));
 
     block.appendChild(headerRow);
     block.appendChild(phaseGrid);
     leadCommandContent.appendChild(block);
+  });
+}
+
+async function ensureBurrowFlag(gameId, playerId) {
+  const pRef = doc(db, "games", gameId, "players", playerId);
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(pRef);
+
+    // als player doc nog niet bestaat: niks doen (jouw create flow zet het dan)
+    if (!snap.exists()) return;
+
+    const data = snap.data() || {};
+    if (data.burrowUsedThisRaid == null) {
+      tx.update(pRef, { burrowUsedThisRaid: false });
+    }
+  });
+}
+
+async function applyOpsActionAndAdvanceTurn({ db, gameRef, actorId, isPass }) {
+  const now = Date.now();
+
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(gameRef);
+    if (!snap.exists()) return;
+
+    const g = snap.data();
+    if (g.phase !== "ACTIONS") return;
+
+    const order = Array.isArray(g.opsTurnOrder) ? g.opsTurnOrder : [];
+    if (!order.length) return;
+
+    const idx = Number.isFinite(g.opsTurnIndex) ? g.opsTurnIndex : 0;
+    const expected = order[idx];
+
+    // ✅ alleen de speler die aan de beurt is mag iets doen
+    if (expected !== actorId) return;
+
+    const opsLocked = !!g.flagsRound?.opsLocked;
+    const target = Number(g.opsActiveCount || order.length);
+    const passesNow = Number(g.opsConsecutivePasses || 0);
+
+    // ✅ als OPS al klaar is: blokkeer alle nieuwe acties
+    if (opsLocked || passesNow >= target) return;
+
+    const nextIdx = (idx + 1) % order.length;
+
+    // ✅ PASS telt op, elke echte action reset de teller
+    let nextPasses = isPass ? passesNow + 1 : 0;
+
+    // ✅ clamp: nooit boven target
+    if (nextPasses > target) nextPasses = target;
+
+    const ended = nextPasses >= target;
+
+    tx.update(gameRef, {
+      opsTurnIndex: nextIdx,
+      opsConsecutivePasses: nextPasses,
+      ...(ended
+        ? {
+            flagsRound: { ...(g.flagsRound || {}), opsLocked: true }, // ✅ hard stop
+            opsEndedAtMs: now,
+          }
+        : {}),
+    });
   });
 }
 
@@ -339,10 +397,12 @@ async function openLeadCommandCenter() {
     alert("Er is nog geen Lead Fox aangewezen.");
     return;
   }
+
   if (leadId !== currentPlayer.id) {
-    alert("Alleen de Lead Fox heeft toegang tot het Command Center.");
+    alert("Alleen de Lead Fox heeft toegang tot het Command Center met alle keuzes van deze ronde.");
     return;
   }
+
   if (!leadCommandModalOverlay || !leadCommandContent) {
     alert("Command Center UI ontbreekt in de HTML.");
     return;
@@ -350,41 +410,38 @@ async function openLeadCommandCenter() {
 
   leadCommandModalOverlay.classList.remove("hidden");
 
-  const round = Number(currentGame.round || 0);
+  const round = currentGame.round || 0;
 
   stopLeadCommandCenterLive();
 
-  // 1) players live
+  // 1) Players live (handig voor namen/den)
   const playersRef = collection(db, "games", gameId, "players");
-  const unsubPlayers = onSnapshot(
-    playersRef,
-    (qs) => {
-      leadCCPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
-      renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
-    },
-    (err) => console.error("[LCC] players snapshot failed", err)
-  );
+  const unsubPlayers = onSnapshot(playersRef, (qs) => {
+    leadCCPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+    renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
+  });
   leadCCUnsubs.push(unsubPlayers);
 
-  // 2) actions live (geen where -> geen composite index)
+  // 2) Actions live (stabiel, geen composite index nodig)
   const actionsCol = collection(db, "games", gameId, "actions");
   const actionsQ = query(actionsCol, orderBy("createdAt", "desc"), limit(800));
 
   const unsubActions = onSnapshot(
     actionsQ,
     (qs) => {
-      leadCCLogs = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+      leadCCLogs = qs.docs.map((d) => d.data()); // zelfde shape: round/phase/choice/playerId
       renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
     },
     (err) => {
       console.error("[LCC] actions snapshot failed", err);
-      leadCommandContent.innerHTML =
-        `<p style="opacity:.8">LCC kan actions niet lezen: ${String(err?.message || err)}</p>`;
+      if (leadCommandContent) {
+        leadCommandContent.innerHTML =
+          `<p style="opacity:.8">LCC kan actions niet lezen: ${String(err?.message || err)}</p>`;
+      }
     }
   );
 
   leadCCUnsubs.push(unsubActions);
-}
 
 function closeLeadCommandCenter() {
   stopLeadCommandCenterLive();
