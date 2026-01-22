@@ -163,6 +163,12 @@ const gameStatusDiv = document.getElementById("gameStatus");
 const hostStatusLine = document.getElementById("hostStatusLine");
 const hostFeedbackLine = document.getElementById("hostFeedbackLine");
 
+// ===== BUTTONS =====
+
+let btnSnatch=null, btnForage=null, btnScout=null, btnShift=null;
+let btnLurk=null, btnBurrow=null, btnDash=null;
+let btnPass=null, btnHand=null, btnLead=null, btnHint=null, btnLoot=null;
+
 // ===== LEAD FOX COMMAND CENTER (LIVE, SINGLE SOURCE: /log) =====
 
 let leadCCUnsubs = [];
@@ -435,20 +441,22 @@ const actionsStateText = document.getElementById("actionsStateText");
 const decisionStateText = document.getElementById("decisionStateText");
 
 // Buttons (MOVE / DECISION / ACTIONS)
-const btnSnatch = document.getElementById("btnSnatch");
-const btnForage = document.getElementById("btnForage");
-const btnScout = document.getElementById("btnScout");
-const btnShift = document.getElementById("btnShift");
+function initUiButtons() {
+  btnSnatch = document.getElementById("btnSnatch");
+  btnForage = document.getElementById("btnForage");
+  btnScout  = document.getElementById("btnScout");
+  btnShift  = document.getElementById("btnShift");
 
-const btnLurk = document.getElementById("btnLurk");
-const btnBurrow = document.getElementById("btnBurrow");
-const btnDash = document.getElementById("btnDash");
+  btnLurk   = document.getElementById("btnLurk");
+  btnBurrow = document.getElementById("btnBurrow");
+  btnDash   = document.getElementById("btnDash");
 
-const btnPass = document.getElementById("btnPass");
-const btnHand = document.getElementById("btnHand");
-const btnLead = document.getElementById("btnLead");
-const btnHint = document.getElementById("btnHint");
-const btnLoot = document.getElementById("btnLoot");
+  btnPass   = document.getElementById("btnPass");
+  btnHand   = document.getElementById("btnHand");
+  btnLead   = document.getElementById("btnLead");
+  btnHint   = document.getElementById("btnHint");
+  btnLoot   = document.getElementById("btnLoot");
+}
 
 // Modals (HAND / LOOT)
 const handModalOverlay = document.getElementById("handModalOverlay");
@@ -1088,23 +1096,24 @@ function _computeAdvisorHintSafe() {
 }
 
 function updateHintButtonFromState() {
-  if (!btnHint) return;
+  const el = btnHint || document.getElementById("btnHint");
+  if (!el) return;
+  btnHint = el;
 
   const g = lastGame || currentGame || null;
   const hint = _computeAdvisorHintSafe();
 
-  // Bright als er (waarschijnlijk) een hint is
   const hasHint = _hintHasContent(hint) || (!!lastGame && !!lastMe);
-  _setBtnGlow(btnHint, hasHint);
+  _setBtnGlow(el, hasHint);
 
   const phase = String(g?.phase || "").toUpperCase();
   if (!g || (phase !== "OPS" && phase !== "ACTIONS")) {
-    _setBtnPulse(btnHint, false);
+    _setBtnPulse(el, false);
     return;
   }
 
   if (!_hintHasContent(hint)) {
-    _setBtnPulse(btnHint, false);
+    _setBtnPulse(el, false);
     return;
   }
 
@@ -1114,8 +1123,9 @@ function updateHintButtonFromState() {
   const roundIsNew = round != null && _hintSeenOpsRound != null ? round > _hintSeenOpsRound : false;
   const hashIsNew = !!_hintCurrentHash && (!_hintSeenOpsHash || _hintCurrentHash !== _hintSeenOpsHash);
 
-  _setBtnPulse(btnHint, roundIsNew || hashIsNew);
+  _setBtnPulse(el, roundIsNew || hashIsNew);
 }
+
 
 function markHintSeenIfOps(hintObj, gameObj) {
   const g = gameObj || lastGame || null;
