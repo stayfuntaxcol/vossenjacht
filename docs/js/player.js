@@ -48,6 +48,26 @@ let lastMe = null;
 let lastPlayers = [];
 let lastActions = [];
 
+// ===== EARLY STATE (avoid TDZ when snapshots fire immediately) =====
+let gameRef = null;
+let playerRef = null;
+
+let currentGame = null;
+let currentPlayer = null;
+
+let prevGame = null;
+let prevPlayer = null;
+
+// Lead Fox cache
+let cachedLeadId = null;
+let cachedLeadIndex = null;
+
+// Buttons (declare early; snapshot callbacks may run before DOM wiring)
+let btnSnatch=null, btnForage=null, btnScout=null, btnShift=null;
+let btnLurk=null, btnBurrow=null, btnDash=null;
+let btnPass=null, btnHand=null, btnLead=null, btnHint=null, btnLoot=null;
+
+
 // ===== UI PULSE MEMORY (LOOT/HINT) =====
 const _uiKey = (k) => `VJ_${k}_${gameId || "?"}_${playerId || "?"}`;
 
@@ -143,7 +163,11 @@ async function ensureBurrowFlagForAllPlayers(gameId) {
 }
 
 // --- ergens in je init (binnen async functie!) ---
-await ensureBurrowFlagForAllPlayers(gameId);
+try {
+  await ensureBurrowFlagForAllPlayers(gameId);
+} catch (err) {
+  console.warn("[burrowFlag] ensureBurrowFlagForAllPlayers failed (non-fatal)", err);
+}
 
 // BONUS: cache live
 const playersCol = collection(db, "games", gameId, "players");
@@ -164,11 +188,6 @@ const hostStatusLine = document.getElementById("hostStatusLine");
 const hostFeedbackLine = document.getElementById("hostFeedbackLine");
 
 // ===== BUTTONS =====
-
-let btnSnatch=null, btnForage=null, btnScout=null, btnShift=null;
-let btnLurk=null, btnBurrow=null, btnDash=null;
-let btnPass=null, btnHand=null, btnLead=null, btnHint=null, btnLoot=null;
-
 // ===== LEAD FOX COMMAND CENTER (LIVE, SINGLE SOURCE: /log) =====
 
 let leadCCUnsubs = [];
@@ -193,6 +212,49 @@ function tsToMs(t) {
   } catch {
     return 0;
   }
+}
+
+
+function formatChoiceForDisplay(phaseKey, choice, payload) {
+  const c0 = String(choice || "").trim();
+  if (!c0) return "—";
+
+  // Normaliseer prefix
+  let c = c0.replace(/^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i, "");
+  c = c.replace(/_/g, " ").trim();
+
+  // Korte payload hints (optioneel)
+  try {
+    const p = payload && typeof payload === "object" ? payload : null;
+
+    // SCOUT / SHIFT pos
+    if (/^SCOUT/i.test(c0) || /^SCOUT/i.test(c)) {
+      const pos = p?.pos ?? p?.position ?? p?.slot;
+      if (pos != null) return `SCOUT #${pos}`;
+    }
+    if (/^SHIFT/i.test(c0) || /^SHIFT/i.test(c)) {
+      const from = p?.from ?? p?.a ?? p?.posA;
+      const to = p?.to ?? p?.b ?? p?.posB;
+      if (from != null && to != null) return `SHIFT ${from}↔${to}`;
+      const pos = p?.pos ?? p?.position;
+      if (pos != null) return `SHIFT @${pos}`;
+    }
+
+    // DECISION
+    if (/^LURK/i.test(c0) || /^LURK/i.test(c)) return "LURK";
+    if (/^BURROW/i.test(c0) || /^BURROW/i.test(c)) return "BURROW";
+    if (/^DASH/i.test(c0) || /^DASH/i.test(c)) return "DASH";
+
+    // PASS
+    if (/PASS/i.test(c0)) return "PASS";
+
+    // Action cards: probeer nette naam
+    if (/^ACTION/i.test(c0) || phaseKey === "ACTIONS" || phaseKey === "OPS") {
+      return c0.replace(/^ACTION_?/i, "").replace(/_/g, " ").trim() || c;
+    }
+  } catch {}
+
+  return c || c0;
 }
 
 function renderLeadCommandCenterUI(round, players, logs) {
@@ -376,24 +438,26 @@ async function openLeadCommandCenter() {
   );
   leadCCUnsubs.push(unsubPlayers);
 
-  // 2) actions live (geen where -> geen composite index)
-  const actionsCol = collection(db, "games", gameId, "actions");
-  const actionsQ = query(actionsCol, orderBy("createdAt", "desc"), limit(800));
+  // 2) log live (single source of truth)
+  const logCol = collection(db, "games", gameId, "log");
+  const logQ = query(logCol, orderBy("createdAt", "desc"), limit(800));
 
-  const unsubActions = onSnapshot(
-    actionsQ,
+  const unsubLog = onSnapshot(
+    logQ,
     (qs) => {
       leadCCLogs = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
       renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
     },
     (err) => {
-      console.error("[LCC] actions snapshot failed", err);
-      leadCommandContent.innerHTML =
-        `<p style="opacity:.8">LCC kan actions niet lezen: ${String(err?.message || err)}</p>`;
+      console.error("[LCC] log snapshot failed", err);
+      if (leadCommandContent) {
+        leadCommandContent.innerHTML =
+          `<p style="opacity:.8">LCC kan log niet lezen: ${String(err?.message || err)}</p>`;
+      }
     }
   );
 
-  leadCCUnsubs.push(unsubActions);
+  leadCCUnsubs.push(unsubLog);
 }
 
 function closeLeadCommandCenter() {
@@ -696,18 +760,19 @@ function hostInitUI() {
 }
 
 // ===== FIRESTORE REFS / STATE =====
-let gameRef = null;
-let playerRef = null;
+// (declaraties staan bovenaan om TDZ bugs te voorkomen)
+gameRef = null;
+playerRef = null;
 
-let currentGame = null;
-let currentPlayer = null;
+currentGame = null;
+currentPlayer = null;
 
-let prevGame = null;
-let prevPlayer = null;
+prevGame = null;
+prevPlayer = null;
 
 // Lead Fox cache
-let cachedLeadId = null;
-let cachedLeadIndex = null;
+cachedLeadId = null;
+cachedLeadIndex = null;
 
 function resetLeadCache() {
   cachedLeadId = null;
@@ -3601,6 +3666,8 @@ initAuth(async () => {
 
     renderPlayer();
   });
+  // init DOM buttons (required)
+  initUiButtons();
 
   // MOVE
   if (btnSnatch) btnSnatch.addEventListener("click", performSnatch);
@@ -3687,4 +3754,3 @@ console.log("[advisor] hint object:", hint);
   console.warn("[HINT] btnHint niet gevonden in DOM");
 }
 });
-
