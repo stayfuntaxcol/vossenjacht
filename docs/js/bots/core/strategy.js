@@ -510,23 +510,11 @@ if (String(nextId) === "HIDDEN_NEST" && decision === "BURROW") {
 }
 
 export function evaluateDecision({ game, me, players, flagsRound = null, cfg = null, peekIntel = null }) {
-  const c = { ...DEFAULTS, ...(cfg || {}) };
+  const cfg0 = { ...DEFAULTS, ...(cfg || {}) };
   const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
-  const c = { ...DEFAULTS, ...(cfg || {}) };
+  const intel = peekIntel || getPeekIntel({ game, me, flagsRound: flags, lookaheadN: cfg0.lookaheadN });
 
-// DECISION: only consider next event (N=1)
-const intel = getPeekIntel({ game, me, flagsRound, lookaheadN: 1 });
-
-return evaluateDecision({
-  game,
-  me,
-  players,
-  flagsRound,
-  cfg: { ...c, decisionUseFutureEvents: false }, // force: ignore later events
-  peekIntel: intel,
-});
-
-  const predictedDashers = estimateLikelyDashers({ game, players, me, cfg: c });
+  const predictedDashers = estimateLikelyDashers({ game, players, me, cfg: cfg0 });
   const burrowUsed = me?.burrowUsed === true;
 
   const options = [
@@ -548,7 +536,7 @@ return evaluateDecision({
       players,
       flagsRound: flags,
       peekIntel: intel,
-      cfg: c,
+      cfg: cfg0,
       predictedDashers,
     });
     scored.push({ decision: o.decision, illegal: false, ...res });
@@ -564,15 +552,18 @@ return evaluateDecision({
 
   // HARD RULE: anti-suicide lurk
   let forced = null;
-  if (stayRisk >= c.panicStayRisk && dashRisk + c.suicideMargin <= stayRisk) forced = "DASH";
+  if (stayRisk >= cfg0.panicStayRisk && dashRisk + cfg0.suicideMargin <= stayRisk) forced = "DASH";
 
   // BURROW gating: only if it really helps
   if (!forced && !burrowUsed && burrow && !burrow.illegal) {
     const bestNonBurrow = [dash, lurk].slice().sort((a, b) => b.utility - a.utility)[0];
     const safetyGain = (bestNonBurrow?.riskNow ?? 0) - (burrowRisk ?? 0);
-    if (!(safetyGain >= c.burrowMinSafetyGain && (burrow.utility ?? -1e9) >= (bestNonBurrow?.utility ?? -1e9) - 1.5)) {
-      burrow.utility -= 3.5;
-    }
+
+    const ok =
+      safetyGain >= cfg0.burrowMinSafetyGain &&
+      (burrow.utility ?? -1e9) >= (bestNonBurrow?.utility ?? -1e9) - 1.5;
+
+    if (!ok) burrow.utility -= 3.5;
   }
 
   // pick best
@@ -590,7 +581,7 @@ return evaluateDecision({
       stayRisk,
       dashRisk,
       burrowRisk,
-      dashPush: best?.dashPush ?? dashPushFromCarry(sumLootPoints(me), c),
+      dashPush: best?.dashPush ?? dashPushFromCarry(sumLootPoints(me), cfg0),
       carry: best?.carry ?? sumLootPoints(me),
       intel,
       flags,
