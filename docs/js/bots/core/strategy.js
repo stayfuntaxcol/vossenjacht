@@ -462,17 +462,17 @@ function decisionUtility({ decision, game, me, players, flagsRound, peekIntel, c
   }
 
   // future pressure: staying means you face upcoming dangers
-  let futurePressure = 0;
-  if (decision !== "DASH") {
-    const future = events.slice(1);
-    let best = 0;
-    for (let i = 0; i < future.length; i++) {
-      const pd = peakDangerForEvent({ eventId: future[i], game, me, players, flagsRound });
-      const w = i === 0 ? 0.7 : i === 1 ? 0.45 : 0.28;
-      best = Math.max(best, pd * w);
-    }
-    futurePressure = best;
+ let futurePressure = 0;
+if (c.decisionUseFutureEvents && decision !== "DASH") {
+  const future = events.slice(1);
+  let best = 0;
+  for (let i = 0; i < future.length; i++) {
+    const pd = peakDangerForEvent({ eventId: future[i], game, me, players, flagsRound });
+    const w = i === 0 ? 0.7 : i === 1 ? 0.45 : 0.28;
+    best = Math.max(best, pd * w);
   }
+  futurePressure = best;
+}
 
   // rooster pressure
   const roosters = countRevealedRoosters(game);
@@ -512,7 +512,19 @@ if (String(nextId) === "HIDDEN_NEST" && decision === "BURROW") {
 export function evaluateDecision({ game, me, players, flagsRound = null, cfg = null, peekIntel = null }) {
   const c = { ...DEFAULTS, ...(cfg || {}) };
   const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
-  const intel = peekIntel || getPeekIntel({ game, me, flagsRound: flags, lookaheadN: c.lookaheadN });
+  const c = { ...DEFAULTS, ...(cfg || {}) };
+
+// DECISION: only consider next event (N=1)
+const intel = getPeekIntel({ game, me, flagsRound, lookaheadN: 1 });
+
+return evaluateDecision({
+  game,
+  me,
+  players,
+  flagsRound,
+  cfg: { ...c, decisionUseFutureEvents: false }, // force: ignore later events
+  peekIntel: intel,
+});
 
   const predictedDashers = estimateLikelyDashers({ game, players, me, cfg: c });
   const burrowUsed = me?.burrowUsed === true;
