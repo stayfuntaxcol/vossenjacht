@@ -101,23 +101,29 @@ if (gameId) {
 
     // bewaar alles (handig voor advisor), en maak "lastActions" = alleen actions-fase keuzes
     // (je advisor krijgt dan nog steeds acties-context, maar uit /log)
-    lastActions = rows
-      .filter((e) => (e.phase || "") === "ACTIONS" && (e.kind || "") === "CHOICE")
-      .map((e) => ({
-        id: e.id,
-        createdAt: e.createdAt,
-        round: e.round,
-        phase: e.phase,
-        kind: e.kind,
-        playerId: e.playerId,
-        playerName: e.playerName,
-        choice: e.choice,     // bv "ACTION_Den Signal" / "ACTION_PASS"
-        payload: e.payload || null,
-        message: e.message || "",
-      }));
-  
-
-    // hint UI kan veranderen door nieuwe logs/actions
+    
+lastActions = rows
+  .filter((e) => (e.phase || "") === "ACTIONS")
+  .map((e) => {
+    // compat: sommige logs hebben geen `choice`, maar wel message "Naam: ACTION_X"
+    const msg = typeof e.message === "string" ? e.message.trim() : "";
+    const after = msg && msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
+    const choiceFallback = /^(MOVE|ACTION|DECISION)_/i.test(after) ? after : "";
+    return {
+      id: e.id,
+      createdAt: e.createdAt,
+      round: e.round,
+      phase: e.phase,
+      kind: e.kind,
+      playerId: e.playerId,
+      playerName: e.playerName,
+      choice: e.choice || choiceFallback, // bv "ACTION_Den Signal" / "ACTION_PASS"
+      payload: e.payload || null,
+      message: e.message || "",
+    };
+  })
+  .filter((e) => !!e.choice);
+// hint UI kan veranderen door nieuwe logs/actions
     if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
 });
 
@@ -193,26 +199,36 @@ function renderLeadCommandCenterUI(round, players, logs) {
   for (const d of (logs || [])) {
     if ((d.round || 0) !== round) continue;
 
-    // Werk met zowel oud als nieuw:
-    // - nieuw: kind === "CHOICE" + choice aanwezig
-    // - oud: choice/playerId/phase aanwezig
-    const hasChoice = !!d.choice && !!d.playerId && !!d.phase;
-    const isChoiceKind = (String(d.kind || "") === "CHOICE");
-    if (!hasChoice) continue;
-    if (!isChoiceKind && !hasChoice) continue;
+    
+// Werk met zowel oud als nieuw:
+// - nieuw: kind === "CHOICE" + choice aanwezig
+// - legacy: message kan "Naam: ACTION_X" bevatten
+const rawChoice =
+  typeof d.choice === "string" && d.choice.trim()
+    ? d.choice.trim()
+    : (() => {
+        const msg = typeof d.message === "string" ? d.message.trim() : "";
+        if (!msg) return "";
+        const after = msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
+        return /^(MOVE|ACTION|DECISION)_/i.test(after) ? after : "";
+      })();
 
-    const pid = d.playerId;
-    const phase = d.phase;
+if (!rawChoice || !d.playerId || !d.phase) continue;
 
-    let bucket = perPlayer.get(pid);
-    if (!bucket) {
-      bucket = { moves: [], actions: [], decisions: [] };
-      perPlayer.set(pid, bucket);
-    }
+const pid = d.playerId;
+const phase = d.phase;
 
-    if (phase === "MOVE") bucket.moves.push(d);
-    else if (phase === "ACTIONS") bucket.actions.push(d);
-    else if (phase === "DECISION") bucket.decisions.push(d);
+const row = { ...d, choice: rawChoice };
+
+let bucket = perPlayer.get(pid);
+if (!bucket) {
+  bucket = { moves: [], actions: [], decisions: [] };
+  perPlayer.set(pid, bucket);
+}
+
+if (phase === "MOVE") bucket.moves.push(row);
+else if (phase === "ACTIONS") bucket.actions.push(row);
+else if (phase === "DECISION") bucket.decisions.push(row);
   }
 
   // sort binnen buckets (oud->nieuw)
@@ -410,12 +426,10 @@ async function openLeadCommandCenter() {
   const logCol = collection(db, "games", gameId, "log");
   const logQ = query(
     logCol,
-    where("round", "==", round),
-    orderBy("clientAt", "asc"), // clientAt is direct & stabiel
+    orderBy("createdAt", "desc"),
     limit(800)
   );
-
-  const unsubLogs = onSnapshot(logQ, (qs) => {
+const unsubLogs = onSnapshot(logQ, (qs) => {
     leadCCLogs = qs.docs.map((d) => d.data());
     renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
   });
@@ -1133,7 +1147,8 @@ function updateHintButtonFromState() {
   const hasHint = _hintHasContent(hint) || (!!lastGame && !!lastMe);
   _setBtnGlow(btnHint, hasHint);
 
-  if (!g || g.phase !== "OPS") {
+  const phase = String(g?.phase || "").toUpperCase();
+  if (!g || (phase !== "OPS" && phase !== "ACTIONS")) {
     _setBtnPulse(btnHint, false);
     return;
   }
@@ -1154,7 +1169,8 @@ function updateHintButtonFromState() {
 
 function markHintSeenIfOps(hintObj, gameObj) {
   const g = gameObj || lastGame || null;
-  if (!g || g.phase !== "OPS") return;
+  const phase = String(g?.phase || "").toUpperCase();
+  if (!g || (phase !== "OPS" && phase !== "ACTIONS")) return;
 
   const h = hintObj || _computeAdvisorHintSafe();
   if (!_hintHasContent(h)) return;
@@ -2728,7 +2744,8 @@ if (typeof logMoveAction !== "function") {
         const logCol = collection(db, "games", gameId, "log");
         await addDoc(logCol, {
           ...base,
-          kind: "ACTION",
+          kind: "CHOICE",
+          clientAt: Date.now(),
           message: `${pname}: ${base.choice}`,
         });
       } catch (e) {
@@ -3638,8 +3655,8 @@ console.log("[advisor] hint object:", hint);
       console.log("[advisor] debug:", hint?.debug);
 
       // NEW overlay (Lead Fox style) als default
-      if (typeof openAdvisorHintOverlay === "function") {
-        openAdvisorHintOverlay(hint, { game: lastGame, me: lastMe });
+      if (typeof window.openAdvisorHintOverlay === "function") {
+        window.openAdvisorHintOverlay(hint, { game: lastGame, me: lastMe });
         return;
       }
 
@@ -3669,3 +3686,4 @@ console.log("[advisor] hint object:", hint);
   console.warn("[HINT] btnHint niet gevonden in DOM");
 }
 });
+
