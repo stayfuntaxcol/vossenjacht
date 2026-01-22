@@ -2972,8 +2972,6 @@ async function applyOpsActionAndAdvanceTurn({ db, gameRef, actorId, isPass }) {
     const target = Number(g.opsActiveCount || order.length);
     const passesNow = Number(g.opsConsecutivePasses || 0);
 
-    const opsLocked = !!g.flagsRound?.opsLocked;
-
 // blokkeer alleen action-cards, niet PASS
 if (opsLocked && !isPass) return;
 
