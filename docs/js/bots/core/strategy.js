@@ -235,11 +235,30 @@ function eventDangerForChoice({ eventId, choice, game, me, players, flagsRound }
   const dDash = Number(facts.dangerDash || 0);
   const dLurk = Number(facts.dangerLurk || 0);
   const dBurrow = Number(facts.dangerBurrow || 0);
+    const eid = String(eventId);
+
+  // Rooster Crow escalates: 3rd+ rooster => staying is guaranteed caught (per your engine)
+  if (eid === "ROOSTER_CROW") {
+    const seen = countRevealedRoosters(game); // roosters already happened
+    if (seen >= 2) {
+      if (choice === "DASH") return 0; // only safe choice
+      return 10; // LURK/BURROW guaranteed caught
+    }
+  }
+
+  // Fence Patrol: GREEN burrow gets caught (per your engine observation)
+  if (eid === "FENCE_PATROL") {
+    if (choice === "BURROW" && den === "GREEN") return 10;
+    // Optional: discourage wasting burrow here even for other colors
+    if (choice === "BURROW") return Math.max(dBurrow, 7);
+    if (choice === "LURK") return Math.min(dLurk, 2);
+  }
 
   if (choice === "DASH") return dDash;
   if (choice === "BURROW") return dBurrow;
   return dLurk;
 }
+
 function peakDangerForEvent({ eventId, game, me, players, flagsRound }) {
   const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
   const den = normColor(me?.color || me?.den || me?.denColor);
@@ -251,6 +270,54 @@ function peakDangerForEvent({ eventId, game, me, players, flagsRound }) {
 
   const t = classifyEvent(eventId).type;
   if (immune && (t === "DOG" || t === "DEN")) return 0;
+
+  /** =========================
+ *  Risk model (0..10)
+ *  ========================= */
+function eventDangerForChoice({ eventId, choice, game, me, players, flagsRound }) {
+  if (!eventId) return 0;
+
+  const ch = String(choice || "").toUpperCase();
+  const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
+  const den = normColor(me?.color || me?.den || me?.denColor);
+  const immune = !!flags?.denImmune?.[den];
+  const isLead = computeIsLead(game, me, players);
+
+  const eid = String(eventId);
+
+  const facts = getEventFacts(eid, { game, me, denColor: den, isLead });
+  if (!facts) return 0;
+
+  // Den Signal immunity applies to DEN_* and DOG_CHARGE/SECOND_CHARGE (NOT Sheepdog Patrol)
+  const t = classifyEvent(eid).type;
+  if (immune && (t === "DOG" || t === "DEN")) return 0;
+
+  const dDash = Number(facts.dangerDash || 0);
+  const dLurk = Number(facts.dangerLurk || 0);
+  const dBurrow = Number(facts.dangerBurrow || 0);
+
+  // Rooster Crow escalates: 3rd+ rooster => staying is guaranteed caught
+  if (eid === "ROOSTER_CROW") {
+    const seen = countRevealedRoosters(game); // roosters already happened (before current)
+    if (seen >= 2) {
+      if (ch === "DASH") return 0;
+      return 10; // LURK/BURROW guaranteed caught
+    }
+  }
+
+  // Fence Patrol: GREEN burrow gets caught
+  if (eid === "FENCE_PATROL") {
+    if (ch === "BURROW" && den === "GREEN") return 10;
+    if (ch === "BURROW") return Math.max(dBurrow, 7); // discourage wasting burrow
+    if (ch === "LURK") return Math.min(dLurk, 2);     // lurk generally safer here
+  }
+
+  if (ch === "DASH") return dDash;
+  if (ch === "BURROW") return dBurrow;
+  return dLurk; // default = LURK
+}
+
+  return Math.max(dDash, dLurk, dBurrow);
 
   return Math.max(
     Number(facts.dangerDash || 0),
@@ -268,13 +335,24 @@ function dashPushFromCarry(carryPts, cfg) {
 }
 
 function countRevealedRoosters(game) {
-  const track = safeArr(game?.eventTrack);
-  const rev = safeArr(game?.eventRevealed);
-  const n = Math.min(track.length, rev.length);
+  const track = safeArr(game?.eventTrack).map((x) => String(x));
+  const idx = Number.isFinite(Number(game?.eventIndex)) ? Number(game.eventIndex) : 0;
+
+  // Count roosters that already happened (before current index)
   let c = 0;
-  for (let i = 0; i < n; i++) {
-    if (rev[i] === true && String(track[i]) === "ROOSTER_CROW") c++;
+  for (let i = 0; i < Math.min(idx, track.length); i++) {
+    if (track[i] === "ROOSTER_CROW") c++;
   }
+
+  // Fallback: if you do have eventRevealed, include it too
+  const rev = safeArr(game?.eventRevealed);
+  if (rev.length) {
+    const n = Math.min(track.length, rev.length);
+    for (let i = 0; i < n; i++) {
+      if (rev[i] === true && track[i] === "ROOSTER_CROW") c = Math.max(c, c + 1); // keep nonzero
+    }
+  }
+
   if (c === 0 && Number.isFinite(Number(game?.roosterSeen))) c = Number(game.roosterSeen);
   return c;
 }
