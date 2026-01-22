@@ -422,19 +422,26 @@ async function openLeadCommandCenter() {
   });
   leadCCUnsubs.push(unsubPlayers);
 
-  // 2) Logs live (single source)
-  const logCol = collection(db, "games", gameId, "log");
-  const logQ = query(
-    logCol,
-    orderBy("createdAt", "desc"),
-    limit(800)
+  // 2) Actions live (stabiel, geen composite index nodig)
+  const actionsCol = collection(db, "games", gameId, "actions");
+  const actionsQ = query(actionsCol, orderBy("createdAt", "desc"), limit(800));
+
+  const unsubActions = onSnapshot(
+    actionsQ,
+    (qs) => {
+      leadCCLogs = qs.docs.map((d) => d.data()); // zelfde shape: round/phase/choice/playerId
+      renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
+    },
+    (err) => {
+      console.error("[LCC] actions snapshot failed", err);
+      if (leadCommandContent) {
+        leadCommandContent.innerHTML =
+          `<p style="opacity:.8">LCC kan actions niet lezen: ${String(err?.message || err)}</p>`;
+      }
+    }
   );
-const unsubLogs = onSnapshot(logQ, (qs) => {
-    leadCCLogs = qs.docs.map((d) => d.data());
-    renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
-  });
-  leadCCUnsubs.push(unsubLogs);
-}
+
+  leadCCUnsubs.push(unsubActions);
 
 function closeLeadCommandCenter() {
   stopLeadCommandCenterLive();
