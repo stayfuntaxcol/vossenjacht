@@ -11,7 +11,8 @@
 import { ADVISOR_PROFILES } from "../core/botConfig.js";
 import { buildPlayerView } from "../core/stateView.js";
 import { getUpcomingEvents } from "../core/eventIntel.js";
-import { getEventFacts, rankActions } from "../aiKit.js";
+import { rankActions } from "../botHeuristics.js";
+import { getEventFacts } from "../rulesIndex.js";
 import { scoreMoveMoves, scoreOpsPlays, scoreDecisions } from "../core/scoring.js";
 
 // Action defs + info (1 bron: cards.js)
@@ -358,7 +359,17 @@ function normalizeLogRow(raw) {
   const phaseNorm = normalizePhase(x.phase);
   const playerId = x.playerId || x.actorId || null;
 
-  const choice = typeof x.choice === "string" ? x.choice : x.choice == null ? "" : String(x.choice);
+// choice: prefer explicit field; fallback to parsing message like "Name: ACTION_X"
+let choice = "";
+if (typeof x.choice === "string" && x.choice.trim()) {
+  choice = x.choice.trim();
+} else if (typeof x.message === "string" && x.message.trim()) {
+  const msg = x.message.trim();
+  const after = msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
+  if (/^(MOVE|ACTION|DECISION)_/i.test(after)) choice = after;
+} else if (x.choice != null) {
+  choice = String(x.choice);
+}
 
   const payload = x.payload && typeof x.payload === "object" ? x.payload : null;
 
@@ -1609,3 +1620,4 @@ const riskBullets = [
     debug: { version: VERSION, phase: view.phase, hand: handMeta, roundState: view.roundState || null },
   });
 }
+
