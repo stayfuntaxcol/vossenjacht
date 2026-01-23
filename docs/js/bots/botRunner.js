@@ -1016,6 +1016,18 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
     const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
     const presetKey = presetFromDenColor(denColor);
 
+    // helper: convert discard item -> actionId (hoisted)
+function toActionId(x) {
+  const rawId = String(x?.id || x?.actionId || x?.key || "").trim();
+  if (rawId && /^[A-Z0-9_]+$/.test(rawId) && rawId.includes("_")) return rawId;
+
+  const nm = String(x?.name || "").trim();
+  if (!nm) return null;
+
+  const def = getActionDefByName(nm);
+  return def?.id ? String(def.id) : null;
+}
+    
     // ---------- round + discard ----------
     const roundNum = Number.isFinite(Number(game?.round)) ? Number(game.round) : 0;
     const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
@@ -1025,12 +1037,7 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
     const botPlayedActionIdsThisRound = botPlayedThisRound.map(toActionId).filter(Boolean);
 
     const actionsPlayedThisRound = botPlayedThisRound.length;
-
-    // helper: convert discard item -> actionId
-    const toActionId = (x) => {
-      const rawId = String(x?.id || x?.actionId || x?.key || "").trim();
-      if (rawId && /^[A-Z0-9_]+$/.test(rawId) && rawId.includes("_")) return rawId;
-
+    
       const nm = String(x?.name || "").trim();
       if (!nm) return null;
       const def = getActionDefByName(nm);
