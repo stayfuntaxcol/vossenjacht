@@ -14,14 +14,9 @@
 
 import { getEventFacts } from "../aiKit.js";
 
-function scopeEventFacts(eventId, { denColor, isLead, flagsRound, lootLen, carryExact, roosterSeen } = {}) {
-  return getEventFacts(String(eventId), { denColor, isLead, flagsRound, lootLen, carryExact, roosterSeen });
+function scopeEventFacts(eventId, ctx = {}) {
+  return getEventFacts(String(eventId), ctx);
 }
-
-// in computeDangerMetrics -> scopedCtx:
-roosterSeen: num(intel?.roosterSeen, num(game?.roosterSeen, 0)),
-
-import { getEventFacts } from "../aiKit.js";
 
 function num(x, d = 0) {
   const n = Number(x);
