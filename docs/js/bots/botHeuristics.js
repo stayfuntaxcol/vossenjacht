@@ -29,7 +29,7 @@ export const BOT_PRESETS = {
       dash_reward: 1.1,
 
       maxActionsPerRound: 1,
-      actionReserveEarly: 2,
+      actionReserveEarly: 1,
       actionReserveLate: 1,
       actionPlayMinTotal: 2.6,
       emergencyActionTotal: 7.5,
@@ -51,7 +51,7 @@ export const BOT_PRESETS = {
       LOCK_OPS: 1.1,
 
       maxActionsPerRound: 1,
-      actionReserveEarly: 2,
+      actionReserveEarly: 1,
       actionReserveLate: 1,
       actionPlayMinTotal: 3.2,
       emergencyActionTotal: 7.8,
@@ -70,8 +70,8 @@ export const BOT_PRESETS = {
       reset_sack: 1.35,
 
       maxActionsPerRound: 1,
-      actionReserveEarly: 2,
-      actionReserveLate: 2,
+      actionReserveEarly: 1,
+      actionReserveLate: 1,
       actionPlayMinTotal: 3.6,
       emergencyActionTotal: 7.8,
 
@@ -93,7 +93,7 @@ export const BOT_PRESETS = {
       BLOCK_SCOUT_POS: 1.15,
 
       maxActionsPerRound: 1,
-      actionReserveEarly: 2,
+      actionReserveEarly: 1,
       actionReserveLate: 1,
       actionPlayMinTotal: 3.0,
       emergencyActionTotal: 7.6,
@@ -373,14 +373,44 @@ function getEventFactsScoped(eventKey, opts = {}) {
 
 
   // --- ROOSTER_CROW: only treat as dangerous on 3rd occurrence (raid-end trigger) ---
-  if (id === "ROOSTER_CROW") {
-    const roosterSeenRaw =
-      (ctx && Number.isFinite(Number(ctx?.roosterSeen))) ? Number(ctx.roosterSeen)
-      : (Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0);
-    const roosterSeen = Number.isFinite(roosterSeenRaw) ? roosterSeenRaw : 0;
+if (id === "ROOSTER_CROW") {
+  // Determine which Rooster Crow this is (1st/2nd/3rd) WITHOUT extra Firestore state.
+  // We infer it from eventTrack + eventIndex, with an off-by-one fallback.
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const idxRaw = Number(game?.eventIndex);
+  const idx = Number.isFinite(idxRaw) ? idxRaw : 0;
 
-    // We assume this facts object is used for the *next* event, so occurrence = already seen + 1
-    const occ = roosterSeen + 1;
+  // If caller knows the position (optional), use it.
+  let pos = Number.isFinite(Number(ctx?.nextEventPos)) ? Number(ctx.nextEventPos) : null;
+
+  if (pos == null) {
+    // Try: current index is this event
+    if (track[idx] === "ROOSTER_CROW") pos = idx;
+    // Try: previous index is this event (common off-by-one depending on when eventIndex increments)
+    else if (idx > 0 && track[idx - 1] === "ROOSTER_CROW") pos = idx - 1;
+    else {
+      // Find the nearest Rooster at/after idx-1 (prefer upcoming)
+      const start = Math.max(0, idx - 1);
+      let found = -1;
+      for (let j = start; j < track.length; j++) {
+        if (track[j] === "ROOSTER_CROW") { found = j; break; }
+      }
+      if (found >= 0) pos = found;
+      else {
+        const any = track.findIndex((x) => String(x) === "ROOSTER_CROW");
+        pos = any >= 0 ? any : null;
+      }
+    }
+  }
+
+  const roostersBefore =
+    pos != null && pos >= 0
+      ? track.slice(0, pos).filter((x) => String(x) === "ROOSTER_CROW").length
+      : 0;
+
+  // Occurrence number for THIS Rooster Crow
+  const occ = roostersBefore + 1;
+
 
     if (occ <= 2) {
       // First two Rooster Crow cards are mostly "noise/tempo" — not a capture spike.
