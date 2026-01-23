@@ -1117,32 +1117,28 @@ if (showScoreboardBtn && scoreOverlay) showScoreboardBtn.addEventListener("click
 if (scoreOverlayCloseBtn && scoreOverlay) scoreOverlayCloseBtn.addEventListener("click", closeScoreOverlay);
 
 // ===============================
-// Deck builders
+//  EVENT TRACK BUILDER - RULES
 // ===============================
 
-// Event track: 12 kaarten
-// - pos0 = SHEEPDOG_PATROL (veilig start)
-// - 1x DOG_CHARGE in eerste helft
-// - 1x (SECOND_CHARGE of PAINT_BOMB_NEST) in tweede helft
-// - 1x (MAGPIE_SNITCH of SILENT_ALARM) in de pool
 function buildEventTrack() {
   const SAFE_FIRST_EVENT = "SHEEPDOG_PATROL";
 
+  // ✅ lead-penalty mag NIET in pos 0...4 (0-based)
+  const LEAD_PENALTY_EARLIEST_INDEX = 5;
+
   const pickOne = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-  // ✅ Variants (later makkelijk uitbreiden)
+  // ✅ Variants
   const leadPenalty = pickOne(["MAGPIE_SNITCH", "SILENT_ALARM"]);
   const secondHalfBig = pickOne(["SECOND_CHARGE", "PAINT_BOMB_NEST"]);
 
-  // Pool moet exact 9 kaarten zijn (want 12 totaal, 3 vaste slots)
-  // NB: GATE_TOLL is eruit gehaald om ruimte te maken voor leadPenalty.
+  // Overige pool: 8 kaarten (leadPenalty plaatsen we apart)
   const others = [
     "DEN_RED",
     "DEN_BLUE",
     "DEN_GREEN",
     "DEN_YELLOW",
     "HIDDEN_NEST",
-    leadPenalty,
     "ROOSTER_CROW",
     "ROOSTER_CROW",
     "ROOSTER_CROW",
@@ -1162,13 +1158,87 @@ function buildEventTrack() {
   track[dogIndex] = "DOG_CHARGE";
   track[secondIndex] = secondHalfBig;
 
+  // ✅ plaats leadPenalty pas NA de eerste 4 posities
+  const leadSlots = [];
+  for (let i = LEAD_PENALTY_EARLIEST_INDEX; i < track.length; i++) {
+    if (track[i] === null) leadSlots.push(i);
+  }
+  const leadIndex = leadSlots.length
+    ? leadSlots[Math.floor(Math.random() * leadSlots.length)]
+    : track.findIndex((x, i) => i >= LEAD_PENALTY_EARLIEST_INDEX && x === null);
+
+  // fallback (zou praktisch nooit nodig zijn)
+  track[leadIndex >= 0 ? leadIndex : track.length - 1] = leadPenalty;
+
+  // vul de rest
   let pIdx = 0;
   for (let i = 0; i < track.length; i++) {
     if (track[i] !== null) continue;
     track[i] = pool[pIdx++];
   }
+
   return track;
 }
+function buildEventTrack() {
+  const SAFE_FIRST_EVENT = "SHEEPDOG_PATROL";
+
+  // ✅ lead-penalty mag NIET in pos 0..3 (0-based)
+  const LEAD_PENALTY_EARLIEST_INDEX = 4;
+
+  const pickOne = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+  // ✅ Variants
+  const leadPenalty = pickOne(["MAGPIE_SNITCH", "SILENT_ALARM"]);
+  const secondHalfBig = pickOne(["SECOND_CHARGE", "PAINT_BOMB_NEST"]);
+
+  // Overige pool: 8 kaarten (leadPenalty plaatsen we apart)
+  const others = [
+    "DEN_RED",
+    "DEN_BLUE",
+    "DEN_GREEN",
+    "DEN_YELLOW",
+    "HIDDEN_NEST",
+    "ROOSTER_CROW",
+    "ROOSTER_CROW",
+    "ROOSTER_CROW",
+  ];
+
+  const pool = shuffleArray(others);
+
+  const track = new Array(12).fill(null);
+  track[0] = SAFE_FIRST_EVENT;
+
+  const firstHalfSlots = [1, 2, 3, 4, 5];
+  const secondHalfSlots = [6, 7, 8, 9, 10, 11];
+
+  const dogIndex = firstHalfSlots[Math.floor(Math.random() * firstHalfSlots.length)];
+  const secondIndex = secondHalfSlots[Math.floor(Math.random() * secondHalfSlots.length)];
+
+  track[dogIndex] = "DOG_CHARGE";
+  track[secondIndex] = secondHalfBig;
+
+  // ✅ plaats leadPenalty pas NA de eerste 4 posities
+  const leadSlots = [];
+  for (let i = LEAD_PENALTY_EARLIEST_INDEX; i < track.length; i++) {
+    if (track[i] === null) leadSlots.push(i);
+  }
+  const leadIndex = leadSlots.length
+    ? leadSlots[Math.floor(Math.random() * leadSlots.length)]
+    : track.findIndex((x, i) => i >= LEAD_PENALTY_EARLIEST_INDEX && x === null);
+
+  // fallback (zou praktisch nooit nodig zijn)
+  track[leadIndex >= 0 ? leadIndex : track.length - 1] = leadPenalty;
+
+  // vul de rest
+  let pIdx = 0;
+  for (let i = 0; i < track.length; i++) {
+    if (track[i] !== null) continue;
+    track[i] = pool[pIdx++];
+  }
+
+  return track;
+}
+
 
 // Action deck (zonder countermove)
 function buildActionDeck() {
