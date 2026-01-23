@@ -2343,9 +2343,9 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
     if (!gSnap.exists() || !pSnap.exists()) return;
 
     const g = gSnap.data();
-    const p0 = { id: pSnap.id, ...pSnap.data() };
+    const p = { id: pSnap.id, ...pSnap.data() };
 
-    if (!canBotDecide(g, p0)) return;
+    if (!canBotDecide(g, p)) return;
 
     // Read latest players fresh inside the transaction (prevents herding on HIDDEN_NEST)
     const ids = (latestPlayers || []).map((x) => x?.id).filter(Boolean);
@@ -2355,21 +2355,31 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       if (s.exists()) freshPlayers.push({ id: s.id, ...s.data() });
     }
 
-    const flags = fillFlags(g?.flagsRound);
-    const noPeek = flags?.noPeek === true;
+   const flags = fillFlags(g?.flagsRound);
+const noPeek = flags?.noPeek === true;
 
-    const denColor = normColor(p0?.color || p0?.den || p0?.denColor);
+// canon + backward compat
+const burrowUsedThisRaid = !!(p?.burrowUsedThisRaid ?? p?.burrowUsed);
+
+// strategy verwacht me.burrowUsed
+const meForDecision = {
+  ...p,
+  burrowUsedThisRaid,
+  burrowUsed: burrowUsedThisRaid,
+};
+
+    const denColor = normColor(p?.color || p?.den || p?.denColor);
     const presetKey = presetFromDenColor(denColor);
 
     const dashDecisionsSoFar = countDashDecisions(freshPlayers);
-    const isLead = computeIsLeadForPlayer(g, p0, freshPlayers);
+    const isLead = computeIsLeadForPlayer(g, p, freshPlayers);
 
     // Canon: burrowUsedThisRaid (fallback to legacy burrowUsed if field not present yet)
-    const burrowUsedThisRaid = !!(p0?.burrowUsedThisRaid ?? p0?.burrowUsed);
+    const burrowUsedThisRaid = !!(p?.burrowUsedThisRaid ?? p?.burrowUsed);
 
     // Pass a stable "me" to both systems (strategy expects me.burrowUsed)
     const meForDecision = {
-      ...p0,
+      ...p,
       burrowUsedThisRaid,
       burrowUsed: burrowUsedThisRaid,
     };
@@ -2499,7 +2509,7 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       round: Number(g.round || 0),
       phase: "DECISION",
       playerId: botId,
-      playerName: p0.name || "BOT",
+      playerName: p.name || "BOT",
       choice: `DECISION_${decision}`,
       message: `BOT kiest ${decision}`,
       kind: "BOT_DECISION",
@@ -2713,7 +2723,7 @@ export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLU
     den: color,
     inYard: true,
     dashed: false,
-    burrowUsed: false,
+    burrowUsedThisRaid: false,
     decision: null,
     hand,
     loot: [],
