@@ -95,6 +95,23 @@ function _fnv1aHex(str) {
   _hintSeenOpsRound = Number.isFinite(n) ? n : null;
 })();
 
+async function ensureBurrowFlagForAllPlayers(gameId) {
+  if (!gameId) return;
+
+  const playersCol = collection(db, "games", gameId, "players");
+  const qs = await getDocs(playersCol);
+
+  const fixes = [];
+  qs.forEach((d) => {
+    const data = d.data() || {};
+    if (data.burrowUsedThisRaid == null) {
+      fixes.push(updateDoc(d.ref, { burrowUsedThisRaid: false }));
+    }
+  });
+
+  if (fixes.length) await Promise.all(fixes);
+}
+
 // ===== BOOT =====
 async function boot() {
   if (!gameId) {
