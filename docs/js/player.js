@@ -48,6 +48,10 @@ let lastMe = null;
 let lastPlayers = [];
 let lastActions = [];
 
+// UI refs that may be touched by early snapshots (avoid TDZ)
+let btnHint = null;
+
+
 // ===== UI PULSE MEMORY (LOOT/HINT) =====
 const _uiKey = (k) => `VJ_${k}_${gameId || "?"}_${playerId || "?"}`;
 
@@ -103,12 +107,20 @@ if (gameId) {
     // (je advisor krijgt dan nog steeds acties-context, maar uit /log)
     
 lastActions = rows
-  .filter((e) => (e.phase || "") === "ACTIONS")
+  .filter((e) => {
+    const ph = String(e.phase || "").toUpperCase().trim();
+    if (ph === "ACTIONS" || ph === "OPS") return true;
+    const c = String(e.choice || "").trim();
+    if (/^(OPS|ACTION|ACTIONS)_/i.test(c)) return true;
+    const msg = typeof e.message === "string" ? e.message.trim() : "";
+    const after = msg && msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
+    return /^(OPS|ACTION|ACTIONS)_/i.test(after);
+  })
   .map((e) => {
     // compat: sommige logs hebben geen `choice`, maar wel message "Naam: ACTION_X"
     const msg = typeof e.message === "string" ? e.message.trim() : "";
     const after = msg && msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
-    const choiceFallback = /^(MOVE|ACTION|DECISION)_/i.test(after) ? after : "";
+    const choiceFallback = /^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(after) ? after : "";
     return {
       id: e.id,
       createdAt: e.createdAt,
@@ -196,41 +208,59 @@ function renderLeadCommandCenterUI(round, players, logs) {
 
   const perPlayer = new Map();
 
-  for (const d of (logs || [])) {
-    if ((d.round || 0) !== round) continue;
+  const targetRound = Number(round ?? 0);
 
-    
-// Werk met zowel oud als nieuw:
-// - nieuw: kind === "CHOICE" + choice aanwezig
-// - legacy: message kan "Naam: ACTION_X" bevatten
-const rawChoice =
-  typeof d.choice === "string" && d.choice.trim()
-    ? d.choice.trim()
-    : (() => {
-        const msg = typeof d.message === "string" ? d.message.trim() : "";
-        if (!msg) return "";
-        const after = msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
-        return /^(MOVE|ACTION|DECISION)_/i.test(after) ? after : "";
-      })();
+for (const d of (logs || [])) {
+  const rr = Number(d?.round ?? d?.turn ?? d?.roundNo ?? d?.roundIndex ?? 0);
+  if (rr !== targetRound) continue;
 
-if (!rawChoice || !d.playerId || !d.phase) continue;
+  const pid = d?.playerId || d?.actorId || d?.by || d?.uid || d?.player || null;
+  if (!pid) continue;
 
-const pid = d.playerId;
-let phase = String(d.phase || "").toUpperCase().trim();
+  // Werk met zowel oud als nieuw:
+  // - nieuw: kind === "CHOICE" + choice aanwezig
+  // - legacy: message kan "Naam: ACTION_X" bevatten
+  const rawChoice =
+    typeof d.choice === "string" && d.choice.trim()
+      ? d.choice.trim()
+      : (() => {
+          const msg = typeof d.message === "string" ? d.message.trim() : "";
+          if (msg) {
+            const after = msg.includes(":")
+              ? msg.split(":").slice(1).join(":").trim()
+              : msg;
+            if (/^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(after)) return after;
+          }
+          const a1 = typeof d.action === "string" ? d.action.trim() : "";
+          if (/^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(a1)) return a1;
+          const a2 = typeof d.actionKey === "string" ? d.actionKey.trim() : "";
+          if (/^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(a2)) return a2;
+          return "";
+        })();
 
-if (!phase) {
-  if (/^MOVE_/i.test(rawChoice)) phase = "MOVE";
-  else if (/^(OPS|ACTION|ACTIONS)_/i.test(rawChoice)) phase = "OPS";
-  else if (/^DECISION_/i.test(rawChoice)) phase = "DECISION";
+  if (!rawChoice) continue;
+
+  // phase: direct, of infer uit choice
+  let phase = String(d.phase || d.step || d.stage || "").toUpperCase().trim();
+  if (!phase) {
+    if (/^MOVE_/i.test(rawChoice)) phase = "MOVE";
+    else if (/^(OPS|ACTION|ACTIONS)_/i.test(rawChoice)) phase = "ACTIONS";
+    else if (/^DECISION_/i.test(rawChoice)) phase = "DECISION";
+  }
+  if (phase === "OPS" || phase === "ACTION") phase = "ACTIONS";
+
+  const row = { ...d, playerId: pid, choice: rawChoice, phase };
+
+  let bucket = perPlayer.get(pid);
+  if (!bucket) {
+    bucket = { moves: [], actions: [], decisions: [] };
+    perPlayer.set(pid, bucket);
+  }
+
+  if (phase === "MOVE") bucket.moves.push(row);
+  else if (phase === "ACTIONS") bucket.actions.push(row);
+  else if (phase === "DECISION") bucket.decisions.push(row);
 }
-
-if (!rawChoice || !pid || !phase) continue;
-
-const row = { ...d, choice: rawChoice, phase };
-
-if (phase === "MOVE") bucket.moves.push(row);
-else if (phase === "ACTIONS" || phase === "OPS") bucket.actions.push(row);
-else if (phase === "DECISION") bucket.decisions.push(row);
 
   // sort binnen buckets (oud->nieuw)
   for (const bucket of perPlayer.values()) {
@@ -423,26 +453,19 @@ async function openLeadCommandCenter() {
   });
   leadCCUnsubs.push(unsubPlayers);
 
-  // 2) Actions live (stabiel, geen composite index nodig)
-  const actionsCol = collection(db, "games", gameId, "actions");
-  const actionsQ = query(actionsCol, orderBy("createdAt", "desc"), limit(800));
-
-  const unsubActions = onSnapshot(
-    actionsQ,
-    (qs) => {
-      leadCCLogs = qs.docs.map((d) => d.data()); // zelfde shape: round/phase/choice/playerId
-      renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
-    },
-    (err) => {
-      console.error("[LCC] actions snapshot failed", err);
-      if (leadCommandContent) {
-        leadCommandContent.innerHTML =
-          `<p style="opacity:.8">LCC kan actions niet lezen: ${String(err?.message || err)}</p>`;
-      }
-    }
+  // 2) Logs live (single source)
+  const logCol = collection(db, "games", gameId, "log");
+  const logQ = query(
+    logCol,
+    orderBy("createdAt", "desc"),
+    limit(800)
   );
-
-  leadCCUnsubs.push(unsubActions);
+const unsubLogs = onSnapshot(logQ, (qs) => {
+    leadCCLogs = qs.docs.map((d) => d.data());
+    renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
+  });
+  leadCCUnsubs.push(unsubLogs);
+}
 
 function closeLeadCommandCenter() {
   stopLeadCommandCenterLive();
@@ -505,7 +528,7 @@ const btnDash = document.getElementById("btnDash");
 const btnPass = document.getElementById("btnPass");
 const btnHand = document.getElementById("btnHand");
 const btnLead = document.getElementById("btnLead");
-const btnHint = document.getElementById("btnHint");
+btnHint = document.getElementById("btnHint");
 const btnLoot = document.getElementById("btnLoot");
 
 // Modals (HAND / LOOT)
@@ -1146,34 +1169,38 @@ function _computeAdvisorHintSafe() {
 }
 
 function updateHintButtonFromState() {
-  if (!btnHint) return;
+  const el = btnHint || (btnHint = document.getElementById("btnHint"));
+  if (!el) return;
 
   const g = lastGame || currentGame || null;
   const hint = _computeAdvisorHintSafe();
 
   // Bright als er (waarschijnlijk) een hint is
   const hasHint = _hintHasContent(hint) || (!!lastGame && !!lastMe);
-  _setBtnGlow(btnHint, hasHint);
+  _setBtnGlow(el, hasHint);
 
   const phase = String(g?.phase || "").toUpperCase();
   if (!g || (phase !== "OPS" && phase !== "ACTIONS")) {
-    _setBtnPulse(btnHint, false);
+    _setBtnPulse(el, false);
     return;
   }
 
   if (!_hintHasContent(hint)) {
-    _setBtnPulse(btnHint, false);
+    _setBtnPulse(el, false);
     return;
   }
 
   const round = Number.isFinite(Number(g.round)) ? Number(g.round) : null;
   _hintCurrentHash = _hintHash(hint);
 
-  const roundIsNew = round != null && _hintSeenOpsRound != null ? round > _hintSeenOpsRound : false;
-  const hashIsNew = !!_hintCurrentHash && (!_hintSeenOpsHash || _hintCurrentHash !== _hintSeenOpsHash);
+  const roundIsNew =
+    round != null && _hintSeenOpsRound != null ? round > _hintSeenOpsRound : false;
+  const hashIsNew =
+    !!_hintCurrentHash && (!_hintSeenOpsHash || _hintCurrentHash !== _hintSeenOpsHash);
 
-  _setBtnPulse(btnHint, roundIsNew || hashIsNew);
+  _setBtnPulse(el, roundIsNew || hashIsNew);
 }
+
 
 function markHintSeenIfOps(hintObj, gameObj) {
   const g = gameObj || lastGame || null;
@@ -3694,3 +3721,4 @@ console.log("[advisor] hint object:", hint);
   console.warn("[HINT] btnHint niet gevonden in DOM");
 }
 });
+
