@@ -107,7 +107,25 @@ function deriveEventDanger(ev, ctx) {
     dangerBurrow = 0;
     notes.push("CATCH_DASHERS: DASH is gevaarlijk.");
   }
- 
+  
+ // ROOSTER_CROW: 1e/2e is alleen tempo; pas 3e crow = raid eindigt
+if (ev.id === "ROOSTER_CROW") {
+  const r =
+    Number.isFinite(Number(ctx?.roosterSeen)) ? Number(ctx.roosterSeen)
+    : Number.isFinite(Number(ctx?.game?.roosterSeen)) ? Number(ctx.game.roosterSeen)
+    : 0;
+
+  if (r >= 2) {
+    dangerDash = Math.min(dangerDash, 1);
+    dangerLurk = Math.max(dangerLurk, 10);
+    dangerBurrow = Math.max(dangerBurrow, 10);
+    notes.push("ROOSTER_CROW: 3e crow → raid eindigt; DASH is prioriteit.");
+  } else {
+    dangerDash = 0; dangerLurk = 0; dangerBurrow = 0;
+    notes.push("ROOSTER_CROW: tick-only tot na 2e crow (geen catch).");
+  }
+}
+
   // Sheepdog Patrol is NOT a "general danger" event: it's SAFE for everyone except DASH.
   // Bots should not "panic dash" here; they should prefer staying (LURK) unless other reasons push DASH.
   if (ev.id === "SHEEPDOG_PATROL") {
