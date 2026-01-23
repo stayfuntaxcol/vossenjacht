@@ -1168,7 +1168,8 @@ export function recommendDecision(opts = {}) {
     ? Number(ctx.dangerEffective)
     : dangerStay;
 
-  const canBurrow = !me?.burrowUsed;
+const burrowUsed = !!(me?.burrowUsedThisRaid ?? me?.burrowUsed);
+const canBurrow = !burrowUsed;
 
   // Lead detection: prefer explicit ctx.isLead if passed by botRunner; fallback to game.leadFoxId
   const isLead =
@@ -1286,7 +1287,7 @@ export function recommendDecision(opts = {}) {
     decision = "DASH";
   }
 
-  if (decision === "BURROW" && me?.burrowUsed) decision = "LURK";
+  if (decision === "BURROW" && burrowUsed) decision = "LURK";
 
   return {
     decision,
