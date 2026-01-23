@@ -2343,11 +2343,11 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
     if (!gSnap.exists() || !pSnap.exists()) return;
 
     const g = gSnap.data();
-    const p = { id: pSnap.id, ...pSnap.data() };
+    const p0 = { id: pSnap.id, ...pSnap.data() };
 
-    if (!canBotDecide(g, p)) return;
+    if (!canBotDecide(g, p0)) return;
 
-    // Read latest decisions fresh inside the transaction (prevents herding on HIDDEN_NEST)
+    // Read latest players fresh inside the transaction (prevents herding on HIDDEN_NEST)
     const ids = (latestPlayers || []).map((x) => x?.id).filter(Boolean);
     const freshPlayers = [];
     for (const id of ids) {
@@ -2355,78 +2355,151 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       if (s.exists()) freshPlayers.push({ id: s.id, ...s.data() });
     }
 
-    const denColor = normColor(p?.color || p?.den || p?.denColor);
+    const flags = fillFlags(g?.flagsRound);
+    const noPeek = flags?.noPeek === true;
+
+    const denColor = normColor(p0?.color || p0?.den || p0?.denColor);
     const presetKey = presetFromDenColor(denColor);
+
     const dashDecisionsSoFar = countDashDecisions(freshPlayers);
-    const isLead = computeIsLeadForPlayer(g, p, freshPlayers);
+    const isLead = computeIsLeadForPlayer(g, p0, freshPlayers);
 
-   // Compute danger/carry metrics *before* deciding so DECISION can use probabilistic danger too
-const metricsNow = buildBotMetricsForLog({
-  game: g,
-  bot: p,
-  players: freshPlayers || [],
-});
+    // Canon: burrowUsedThisRaid (fallback to legacy burrowUsed if field not present yet)
+    const burrowUsedThisRaid = !!(p0?.burrowUsedThisRaid ?? p0?.burrowUsed);
 
-const rec = recommendDecision({
-  presetKey,
-  denColor,
-  game: g,
-  me: p,
-  ctx: {
-    round: Number(g.round || 0),
-    isLead,
-    dashDecisionsSoFar,
+    // Pass a stable "me" to both systems (strategy expects me.burrowUsed)
+    const meForDecision = {
+      ...p0,
+      burrowUsedThisRaid,
+      burrowUsed: burrowUsedThisRaid,
+    };
 
-    // rooster context
-    roosterSeen: Number.isFinite(Number(g?.roosterSeen))
-      ? Number(g.roosterSeen)
-      : countRevealedRoosters(g),
-    postRooster2Window: countRevealedRoosters(g) >= 2,
+    // Compute metrics (probabilistic danger works in noPeek mode)
+    const metricsNow = buildBotMetricsForLog({
+      game: g,
+      bot: meForDecision,
+      players: freshPlayers || [],
+    });
 
-    // ✅ feed computed metrics into decision (so it works even without peeking)
-    carryValue: metricsNow?.carryValue,
-    carryValueRec: metricsNow?.carryValueRec, // if you log it
-    dangerVec: metricsNow?.dangerVec,
-    dangerPeak: metricsNow?.dangerPeak,
-    dangerStay: metricsNow?.dangerStay,
-    dangerEffective: metricsNow?.dangerEffective,
-    nextEventIdUsed: metricsNow?.nextEventIdUsed,
-    pDanger: metricsNow?.pDanger,
-    confidence: metricsNow?.confidence,
+    // Build known intel list (own + den-shared intel) for strategy in noPeek
+    const idx = Number.isFinite(Number(g?.eventIndex)) ? Number(g.eventIndex) : null;
+    const denIntelEntry =
+      (flags?.denIntel && typeof flags.denIntel === "object") ? flags.denIntel[denColor] : null;
 
-    // optional: pass flags so decision can respect holdStill/noPeek/opsLocked if you use it there
-    flagsRound: g?.flagsRound || null,
-  },
-});
+    const denEvents =
+      (denIntelEntry &&
+        idx !== null &&
+        Number(denIntelEntry.atEventIndex) === Number(idx) &&
+        Array.isArray(denIntelEntry.events))
+        ? denIntelEntry.events
+        : [];
 
-let decision = rec?.decision || "LURK";
+    const ownKnown = Array.isArray(meForDecision?.knownUpcomingEvents) ? meForDecision.knownUpcomingEvents : [];
+
+    const knownMerged = [...ownKnown, ...denEvents]
+      .map((x) => String(x || "").trim())
+      .filter(Boolean);
+
+    const lookaheadN = Number.isFinite(Number(BOT_UTILITY_CFG?.lookaheadN)) ? Number(BOT_UTILITY_CFG.lookaheadN) : 2;
+
+    const canUseStrategy = !noPeek || (noPeek && knownMerged.length > 0);
+
+    let decision = "LURK";
+
+    if (canUseStrategy) {
+      // If noPeek, pass merged intel explicitly (strategy default only looks at me.knownUpcomingEvents)
+      const peekIntel =
+        noPeek && knownMerged.length
+          ? {
+              mode: "known",
+              confidence:
+                Number.isFinite(Number(denIntelEntry?.confidence))
+                  ? Number(denIntelEntry.confidence)
+                  : Math.min(1, knownMerged.length / lookaheadN),
+              events: knownMerged.slice(0, lookaheadN),
+            }
+          : null;
+
+      const strat = evaluateDecision({
+        game: g,
+        me: meForDecision,
+        players: freshPlayers || [],
+        flagsRound: g?.flagsRound || null,
+        cfg: BOT_UTILITY_CFG,
+        peekIntel,
+      });
+
+      decision = strat?.decision || "LURK";
+    } else {
+      // Fallback: heuristics uses computed metrics (works even when next event is unknown)
+      const rec = recommendDecision({
+        presetKey,
+        denColor,
+        game: g,
+        me: meForDecision,
+        ctx: {
+          round: Number(g.round || 0),
+          isLead,
+          dashDecisionsSoFar,
+
+          roosterSeen: Number.isFinite(Number(g?.roosterSeen)) ? Number(g.roosterSeen) : countRevealedRoosters(g),
+          postRooster2Window: countRevealedRoosters(g) >= 2,
+
+          carryValue: metricsNow?.carryValue,
+          carryValueRec: metricsNow?.carryValueRec,
+          dangerVec: metricsNow?.dangerVec,
+          dangerPeak: metricsNow?.dangerPeak,
+          dangerStay: metricsNow?.dangerStay,
+          dangerEffective: metricsNow?.dangerEffective,
+          nextEventIdUsed: metricsNow?.nextEventIdUsed,
+          pDanger: metricsNow?.pDanger,
+          confidence: metricsNow?.confidence,
+
+          flagsRound: g?.flagsRound || null,
+        },
+      });
+
+      decision = rec?.decision || "LURK";
+    }
 
     // Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
     const nextEvent0 = nextEventId(g, 0);
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
       const picked = pickHiddenNestDashSet({ game: g, gameId, players: freshPlayers || [] });
       const dashSet = picked?.dashSet || null;
-      if (dashSet && !dashSet.has(p.id)) {
-        // fall back to safest stay
-        if (!p.burrowUsed && rec?.dangerVec && Number(rec.dangerVec.burrow || 0) <= Number(rec.dangerVec.lurk || 0)) decision = "BURROW";
+
+      if (dashSet && !dashSet.has(meForDecision.id)) {
+        // fall back to safest stay (prefer BURROW if available and safer than LURK)
+        const dv = metricsNow?.dangerVec || {};
+        const dBurrow = Number(dv?.burrow ?? dv?.BURROW ?? 0);
+        const dLurk = Number(dv?.lurk ?? dv?.LURK ?? 0);
+
+        if (!burrowUsedThisRaid && dBurrow <= dLurk) decision = "BURROW";
         else decision = "LURK";
       }
     }
+
     const update = { decision };
 
-    if (decision === "BURROW" && !p.burrowUsed) {
-      update.burrowUsed = true;
+    // Canon write: burrowUsedThisRaid
+    if (decision === "BURROW" && !burrowUsedThisRaid) {
+      update.burrowUsedThisRaid = true;
     }
 
     tx.update(pRef, update);
 
-    const botAfter = { ...p, ...update };
+    const botAfter = {
+      ...meForDecision,
+      ...update,
+      burrowUsedThisRaid: !!(update.burrowUsedThisRaid ?? burrowUsedThisRaid),
+      burrowUsed: !!(update.burrowUsedThisRaid ?? burrowUsedThisRaid),
+    };
 
     logPayload = {
       round: Number(g.round || 0),
       phase: "DECISION",
       playerId: botId,
-      playerName: p.name || "BOT",
+      playerName: p0.name || "BOT",
       choice: `DECISION_${decision}`,
       message: `BOT kiest ${decision}`,
       kind: "BOT_DECISION",
