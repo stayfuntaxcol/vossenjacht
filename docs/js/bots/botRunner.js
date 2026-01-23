@@ -985,28 +985,52 @@ function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEv
 // - anti-duplicate (self + global singleton per round)
 // - logs ranked choices to games/{gameId}/actions (BOT_DECISION)
 // =====================================================
+
 async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
+  // helper: convert discard item -> actionId (hoisted)
+  function toActionId(x) {
+    const rawId = String(x?.id || x?.actionId || x?.key || "").trim();
+    if (rawId && /^[A-Z0-9_]+$/.test(rawId) && rawId.includes("_")) return rawId;
+
+    const nm = String(x?.name || "").trim();
+    if (!nm) return null;
+
+    const def = getActionDefByName(nm);
+    return def?.id ? String(def.id) : null;
+  }
+
   try {
     const hand = Array.isArray(bot?.hand) ? bot.hand : [];
     if (!hand.length) return null;
 
-    // map hand -> actionIds (supports "Den Signal", "DEN_SIGNAL", {id}, {actionId}, {name})
+    // map hand -> entries with BOTH:
+    // - actionId (canonical)
+    // - handToken (the actual thing that exists in hand for removal)
     const entries = hand
       .map((c) => {
         const rawId = String(c?.id || c?.actionId || c?.key || "").trim();
-        const nm = String(c?.name || c || "").trim();
+        const nm = String(c?.name || (typeof c === "string" ? c : "") || "").trim();
         const key = rawId || nm;
         if (!key) return null;
 
-        // already an id
+        // if already an ID
         if (/^[A-Z0-9_]+$/.test(key) && key.includes("_")) {
-          return { actionId: key, displayName: nm || key };
+          return {
+            actionId: key,
+            displayName: nm || key,
+            handToken: nm || key, // keep removable token
+          };
         }
 
-        // resolve name -> id
+        // resolve name -> id via cards.js defs
         const def = getActionDefByName(key);
         if (!def?.id) return null;
-        return { actionId: String(def.id).trim(), displayName: String(def.name || key).trim() };
+
+        return {
+          actionId: String(def.id).trim(),
+          displayName: String(def.name || key).trim(),
+          handToken: nm || String(def.name || key).trim(),
+        };
       })
       .filter(Boolean);
 
@@ -1016,18 +1040,6 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
     const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
     const presetKey = presetFromDenColor(denColor);
 
-    // helper: convert discard item -> actionId (hoisted)
-function toActionId(x) {
-  const rawId = String(x?.id || x?.actionId || x?.key || "").trim();
-  if (rawId && /^[A-Z0-9_]+$/.test(rawId) && rawId.includes("_")) return rawId;
-
-  const nm = String(x?.name || "").trim();
-  if (!nm) return null;
-
-  const def = getActionDefByName(nm);
-  return def?.id ? String(def.id) : null;
-}
-    
     // ---------- round + discard ----------
     const roundNum = Number.isFinite(Number(game?.round)) ? Number(game.round) : 0;
     const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
@@ -1035,14 +1047,7 @@ function toActionId(x) {
 
     const botPlayedThisRound = discThisRound.filter((x) => x?.by === bot.id);
     const botPlayedActionIdsThisRound = botPlayedThisRound.map(toActionId).filter(Boolean);
-
     const actionsPlayedThisRound = botPlayedThisRound.length;
-    
-      const nm = String(x?.name || "").trim();
-      if (!nm) return null;
-      const def = getActionDefByName(nm);
-      return def?.id ? String(def.id) : null;
-    };
 
     const discardThisRoundActionIds = discThisRound.map(toActionId).filter(Boolean);
 
@@ -1064,7 +1069,7 @@ function toActionId(x) {
         return null;
       })
       .filter(Boolean);
- 
+
     // ---------- flags / next event / knowledge ----------
     const flags = fillFlags(game?.flagsRound);
     const noPeek = !!flags.noPeek;
@@ -1074,12 +1079,40 @@ function toActionId(x) {
       : [];
     const knownUpcomingCount = knownUpcomingEvents.length;
 
-    // if noPeek=true: only know next event if you actually SCOUTed (knownUpcomingEvents)
     const nextKnown = !noPeek || knownUpcomingCount >= 1;
-    const nextId = nextKnown ? (noPeek ? knownUpcomingEvents[0] : nextEventId(game, 0)) : null;
+    const nextId = nextKnown ? String(noPeek ? knownUpcomingEvents[0] : nextEventId(game, 0) || "") : null;
 
     const isLead = String(game?.leadFoxId || game?.leadFox || "") === String(bot?.id || "");
-    const nextEventFacts = nextId ? getEventFacts(nextId, { game, me: bot, denColor, isLead }) : null;
+
+    // ---------- rooster timing: count revealed roosters ----------
+    const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+    const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
+
+    let revealedRoosters = 0;
+    for (let i = 0; i < Math.min(track.length, rev.length); i++) {
+      if (rev[i] === true && String(track[i]) === "ROOSTER_CROW") revealedRoosters++;
+    }
+    const roosterSeen =
+      revealedRoosters ||
+      (Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0);
+
+    const postRooster2Window = revealedRoosters >= 2;
+
+    // carryExact alvast, zodat eventFacts context klopt
+    const carryExact = computeCarryValue(bot);
+    const lootLen = Array.isArray(bot?.loot) ? bot.loot.length : 0;
+
+    // IMPORTANT: pass the ctx shape your rulesIndex expects
+    const nextEventFacts = nextId
+      ? getEventFacts(nextId, {
+          denColor,
+          isLead,
+          flagsRound: flags,
+          lootLen,
+          carryExact,
+          roosterSeen,
+        })
+      : null;
 
     const dangerNext = nextEventFacts
       ? Math.max(
@@ -1090,22 +1123,9 @@ function toActionId(x) {
       : 0;
 
     const scoutTier =
-      knownUpcomingCount >= 2
-        ? "HARD_SCOUT"
-        : knownUpcomingCount >= 1
-        ? "SOFT_SCOUT"
-        : "NO_SCOUT";
-
-    // ---------- rooster timing: danger boost only AFTER 2nd rooster REVEALED ----------
-    const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
-    const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
-
-    let revealedRoosters = 0;
-    for (let i = 0; i < Math.min(track.length, rev.length); i++) {
-      if (rev[i] === true && String(track[i]) === "ROOSTER_CROW") revealedRoosters++;
-    }
-    const roosterSeen = revealedRoosters || (Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0);
-    const postRooster2Window = revealedRoosters >= 2;
+      knownUpcomingCount >= 2 ? "HARD_SCOUT" :
+      knownUpcomingCount >= 1 ? "SOFT_SCOUT" :
+      "NO_SCOUT";
 
     // ---------- score meta (last / behind) ----------
     const list = Array.isArray(players) ? players.filter((x) => x?.id) : [];
@@ -1117,9 +1137,10 @@ function toActionId(x) {
     const sorted = [...list].sort((a, b) => getVal(b) - getVal(a));
     const leaderVal = sorted.length ? getVal(sorted[0]) : 0;
     const myVal = getVal(bot);
-    const carryExact = computeCarryValue(bot);
+
     const carryRecObj3 = computeCarryValueRec({ game, player: bot, players: list, mode: "publicSafe" });
     const carryRec = Number(carryRecObj3?.carryValueRec || 0);
+
     const myRank = sorted.findIndex((x) => x.id === bot.id);
     const isLast = myRank >= 0 ? myRank === sorted.length - 1 : false;
     const scoreBehind = Math.max(0, leaderVal - myVal);
@@ -1149,8 +1170,6 @@ function toActionId(x) {
 
         const sameDen = cDen && cDen === denColor;
         const denRevealed = !!revealedDenEventsByColor[cDen];
-
-        // Follow is useful mainly when next is NOT known, and target has aligned/revealed den
         const eligible = !nextKnown && (sameDen || denRevealed);
 
         let score = 0;
@@ -1158,11 +1177,9 @@ function toActionId(x) {
         if (denRevealed) score += 6;
         if (eligible) score += 4;
 
-        // small bonus if target likely has intel
         const k = Array.isArray(pl?.knownUpcomingEvents) ? pl.knownUpcomingEvents.length : 0;
         score += Math.min(3, k);
 
-        // tie-break: richer target
         score += Math.min(5, sumLootPoints(pl) * 0.4);
 
         if (!best || score > best.score) best = { id: pl.id, score, sameDen, denRevealed, eligible };
@@ -1220,110 +1237,100 @@ function toActionId(x) {
       revealedDenEventsByColor,
     };
 
-    // handHas_* flags (for actionStrategies)
     for (const id of ids) ctx["handHas_" + id] = true;
 
     // ---------- ranking (strategy.js) ----------
-const usedIds =
-  (Array.isArray(game?.discardThisRoundActionIds) && game.discardThisRoundActionIds.length)
-    ? game.discardThisRoundActionIds.map((x) => String(x))
-    : (discardThisRoundActionIds || []);
+    const usedIds =
+      (Array.isArray(game?.discardThisRoundActionIds) && game.discardThisRoundActionIds.length)
+        ? game.discardThisRoundActionIds.map((x) => String(x))
+        : (discardThisRoundActionIds || []);
 
-const res = evaluateOpsActions({
-  game,
-  me: bot,
-  players: list,
-  flagsRound: flags,
-  cfg: BOT_UTILITY_CFG,
-});
+    const res = evaluateOpsActions({
+      game,
+      me: bot,
+      players: list,
+      flagsRound: flags,
+      cfg: BOT_UTILITY_CFG,
+    });
 
-if (game?.debugBots) {
-  console.log(
-    "[OPS]",
-    bot.id,
-    "hand", (bot.hand || []).length,
-    "best", res?.best?.kind, res?.best?.reason,
-    "bestU", res?.best?.utility,
-    "topU", res?.ranked?.[0]?.utility
-  );
-}
+    if (game?.debugBots) {
+      console.log(
+        "[OPS]",
+        bot.id,
+        "hand", (bot.hand || []).length,
+        "best", res?.best?.kind, res?.best?.reason,
+        "bestU", res?.best?.utility,
+        "topU", res?.ranked?.[0]?.utility
+      );
+    }
 
-    
-console.log("[OPS]", bot.id, "hand", (bot.hand || []).length, "best", res?.best, "top", res?.ranked?.[0]);
+    const candidates = [];
+    if (res?.best?.kind === "PLAY") candidates.push(...(res.best.plays || []));
+    for (const r of (res?.ranked || [])) if (r?.play) candidates.push(r.play);
 
-// candidates: best eerst, daarna ranked
-const candidates = [];
-if (res?.best?.kind === "PLAY") candidates.push(...(res.best.plays || []));
-for (const r of (res?.ranked || [])) if (r?.play) candidates.push(r.play);
+    const botPlayedSet = new Set(botPlayedActionIdsThisRound);
 
-// Anti-duplicate: bot itself not twice same action in same round
-const botPlayedSet = new Set(botPlayedActionIdsThisRound);
+    const GLOBAL_SINGLETON_ACTIONS = new Set([
+      "KICK_UP_DUST",
+      "PACK_TINKER",
+      "NO_GO_ZONE",
+      "SCATTER",
+    ]);
 
-// Anti-duplicate: global singleton (per ronde)
-const GLOBAL_SINGLETON_ACTIONS = new Set([
-  "KICK_UP_DUST",
-  "PACK_TINKER",
-  "NO_GO_ZONE",
-  "SCATTER",
-]);
+    for (const play of candidates) {
+      const id = String(play?.actionId || "").trim();
+      if (!id) continue;
 
-for (const play of candidates) {
-  const id = String(play?.actionId || "").trim();
-  if (!id) continue;
+      if (botPlayedSet.has(id)) continue;
+      if (GLOBAL_SINGLETON_ACTIONS.has(id) && usedIds.includes(id)) continue;
 
-  if (botPlayedSet.has(id)) continue;
-  if (GLOBAL_SINGLETON_ACTIONS.has(id) && usedIds.includes(id)) continue;
+      // legality checks
+      if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
+        if (lockEventsActive) continue;
+        if (!Array.isArray(game?.eventTrack)) continue;
+        if (!Number.isFinite(Number(game?.eventIndex))) continue;
+        if (Number(game.eventIndex) >= game.eventTrack.length - 1) continue;
+      }
+      if (id === "HOLD_STILL" && opsLockedActive) continue;
 
-  // legality checks (zelfde als jouw huidige)
-  if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
-    if (lockEventsActive) continue;
-    if (!Array.isArray(game?.eventTrack)) continue;
-    if (!Number.isFinite(Number(game?.eventIndex))) continue;
-    if (Number(game.eventIndex) >= game.eventTrack.length - 1) continue;
-  }
-  if (id === "HOLD_STILL" && opsLockedActive) continue;
+      // IMPORTANT: choose a token that actually exists in hand
+      const chosenName =
+        entries.find((e) => e.actionId === id)?.handToken ||
+        String(play?.name || "").trim();
 
-  // Kies naam die echt in hand zit (entries komt uit jouw code)
-  const chosenName =
-    entries.find((e) => String(e.def?.id || "").trim() === id)?.name ||
-    String(play?.name || "").trim();
+      if (!chosenName) continue;
 
-  if (!chosenName) continue;
+      let targetId = play?.targetId || null;
 
-  // Targets: strategy geeft meestal targetId; anders jouw fallbacks
-  let targetId = play?.targetId || null;
+      if ((id === "MASK_SWAP" || id === "HOLD_STILL") && !targetId) {
+        targetId = pickRichestTarget(players || [], bot.id);
+        if (!targetId) continue;
+      }
 
-  if ((id === "MASK_SWAP" || id === "HOLD_STILL") && !targetId) {
-    targetId = pickRichestTarget(players || [], bot.id);
-    if (!targetId) continue;
-  }
+      if (id === "FOLLOW_THE_TAIL" && !targetId) {
+        targetId = followPick.targetId || pickRichestTarget(players || [], bot.id);
+        if (!targetId) continue;
+      }
 
-  if (id === "FOLLOW_THE_TAIL" && !targetId) {
-    targetId = followPick.targetId || pickRichestTarget(players || [], bot.id);
-    if (!targetId) continue;
-  }
+      if (id === "SCENT_CHECK" && !targetId) {
+        const intelTarget =
+          (players || [])
+            .filter((x) => x?.id && x.id !== bot.id && isInYard(x))
+            .map((x) => ({
+              id: x.id,
+              k: Array.isArray(x?.knownUpcomingEvents) ? x.knownUpcomingEvents.length : 0,
+              loot: sumLootPoints(x),
+            }))
+            .sort((a, b) => (b.k - a.k) || (b.loot - a.loot))[0]?.id || null;
 
-  if (id === "SCENT_CHECK" && !targetId) {
-    const intelTarget =
-      (players || [])
-        .filter((x) => x?.id && x.id !== bot.id && isInYard(x))
-        .map((x) => ({
-          id: x.id,
-          k: Array.isArray(x?.knownUpcomingEvents) ? x.knownUpcomingEvents.length : 0,
-          loot: sumLootPoints(x),
-        }))
-        .sort((a, b) => (b.k - a.k) || (b.loot - a.loot))[0]?.id || null;
+        targetId = intelTarget || pickRichestTarget(players || [], bot.id);
+        if (!targetId) continue;
+      }
 
-    targetId = intelTarget || pickRichestTarget(players || [], bot.id);
-    if (!targetId) continue;
-  }
+      return { name: chosenName, actionId: id, targetId };
+    }
 
-  return { name: chosenName, actionId: id, targetId };
-}
-
-// nothing legal -> PASS
-return null;
-
+    return null;
   } catch (err) {
     console.warn("[BOTS] pickBestActionFromHand crashed -> PASS", err);
     return null;
