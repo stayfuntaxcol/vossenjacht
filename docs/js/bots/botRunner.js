@@ -1579,47 +1579,142 @@ if (share && denColor) {
     const mustHaveLoot =
       upcoming.type === "TOLL" && danger?.intel?.nextKnown === true;
 
-    // Translate (carryValueRec + dangerEffective) into SNATCH vs FORAGE.
-    // Goal: bots aim for high score (keep farming), but invest in survivability so they can keep LURKing later.
+    // Translate (carryValueRec + dangerEffective) into a MOVE choice.
+    // Goal: bots aim for high score (keep farming), but invest in survivability + tools so OPS has real options.
+    // New: allow SCOUT + SHIFT (aligned with player.js rules as close as possible).
+    const roundNum = Number(g.round || 0);
+
+    const track = Array.isArray(g.eventTrack) ? [...g.eventTrack] : [];
+    const eventIdx = Number.isFinite(Number(g.eventIndex)) ? Number(g.eventIndex) : 0;
+
+    // flags.noPeek has 2 meanings in this codebase:
+    // - boolean true => global "no-peek mode"
+    // - array [pos,...] => No-Go Zone blocked scout positions (1-based)
+    const noPeekMode = flags?.noPeek === true;
+    const noGoPositions = (Array.isArray(flags?.noPeek) ? flags.noPeek : [])
+      .map((x) => Number(x))
+      .filter((x) => Number.isFinite(x));
+
+    const canScout = !flags?.scatter && track.length > 0;
+    const canShift = !flags?.lockEvents && track.length >= 2 && eventIdx < track.length - 1;
+
     const dangerHigh = dangerEffective >= 7.0;
     const dangerMid = dangerEffective >= 5.2;
     const uncertain = confidence <= 0.40;
     const cashPressure = carryValueRec >= 8.0;
     const extremePressure = carryValueRec >= 10.5;
 
+    // Stronger: keep a healthy hand early so OPS can actually do something.
+    const desiredHandMin = roundNum <= 1 ? 4 : 3;
+    const desiredHandMax = 6;
+
+    // ---- SCOUT pick (1-based) ----
+    let scoutPos = null;
+    if (canScout) {
+      const startPos = eventIdx + 1; // next event (1-based)
+      const endPos = Math.min(track.length, startPos + 2); // don't scout too far
+      for (let pos = startPos; pos <= endPos; pos++) {
+        if (noGoPositions.includes(pos)) continue;
+        scoutPos = pos;
+        break;
+      }
+    }
+
+    const knownUpcomingEvents = Array.isArray(p?.knownUpcomingEvents)
+      ? p.knownUpcomingEvents.filter(Boolean)
+      : [];
+
+    const wantScout =
+      noPeekMode &&
+      canScout &&
+      scoutPos != null &&
+      knownUpcomingEvents.length < 1; // no intel yet
+
+    // ---- SHIFT pick: swap the next event with a safer one within a small lookahead ----
+    let shiftPick = null;
+    if (canShift) {
+      const nextId = track[eventIdx] ? String(track[eventIdx]) : null;
+      if (nextId) {
+        const nextFacts = getEventFacts(nextId, { game: g, me: meForMetrics, denColor: myColor, isLead });
+        const nextPeak = peakDanger(nextFacts);
+
+        // Only bother shifting if the near-term looks nasty and we don't have defensive tools ready.
+        if (nextPeak >= 7.2 && !defenseReady) {
+          const LOOKAHEAD = 4;
+          let best = null;
+
+          for (let j = eventIdx + 1; j < Math.min(track.length, eventIdx + 1 + LOOKAHEAD); j++) {
+            const candId = track[j] ? String(track[j]) : null;
+            if (!candId) continue;
+
+            const f = getEventFacts(candId, { game: g, me: meForMetrics, denColor: myColor, isLead });
+            const candPeak = peakDanger(f);
+
+            // Benefit: reduce immediate danger, small penalty for swapping too far.
+            const benefit = (nextPeak - candPeak) - 0.25 * (j - eventIdx);
+
+            if (!best || benefit > best.benefit) {
+              best = { j, candId, candPeak, benefit };
+            }
+          }
+
+          if (best && best.benefit >= 1.6) {
+            shiftPick = {
+              i1: eventIdx,
+              i2: best.j,
+              pos1: eventIdx + 1,
+              pos2: best.j + 1,
+              benefit: best.benefit,
+              nextId,
+              nextPeak,
+              candId: best.candId,
+              candPeak: best.candPeak,
+            };
+          }
+        }
+      }
+    }
+
+    // ---- FORAGE desire ----
+    const avoidSnatch =
+      carryValueRec >= 7.5 &&
+      (dangerMid || pDanger >= 0.2 || uncertain) &&
+      !defenseReady;
+
     const wantForage =
       !mustHaveLoot &&
       actionDeck.length > 0 &&
+      hand.length < desiredHandMax &&
       (
-        (dangerHigh && !defenseReady) ||
-        (dangerMid && cashPressure && !defenseReady) ||
-        (extremePressure && (pDanger >= 0.25 || uncertain) && hand.length < 3) ||
-        (hand.length < 2)
+        hand.length < desiredHandMin ||                 // hard minimum hand size
+        (dangerHigh && !defenseReady) ||                // danger, no defense
+        (dangerMid && cashPressure && !defenseReady) || // pressure + danger
+        (extremePressure && (pDanger >= 0.25 || uncertain)) ||
+        avoidSnatch
       );
 
     // Choose MOVE
     let did = null;
 
     if (mustHaveLoot && lootPts <= 0) {
-      if (!lootDeck.length) return;
-      const card = lootDeck.pop();
-      loot.push(card);
-      did = { kind: "SNATCH", detail: `${card.t || "Loot"} ${card.v ?? ""}` };
+      // Must have loot to stay viable (Gate Toll etc.)
+      did = { kind: "SNATCH", detail: "mustHaveLoot" };
+    } else if (wantScout) {
+      did = { kind: "SCOUT", detail: `pos ${scoutPos}` };
+    } else if (actionDeck.length > 0 && hand.length < desiredHandMin) {
+      did = { kind: "FORAGE", detail: `hand<${desiredHandMin}` };
+    } else if (shiftPick) {
+      did = { kind: "SHIFT", detail: `${shiftPick.pos1}<->${shiftPick.pos2} (Δ≈${shiftPick.benefit.toFixed(1)})` };
     } else if (wantForage) {
-      // draw up to 2 action cards
-      let drawn = 0;
-      for (let i = 0; i < 2; i++) {
-        if (!actionDeck.length) break;
-        hand.push(actionDeck.pop());
-        drawn++;
-      }
-      did = {
-        kind: "FORAGE",
-        detail: `${drawn} kaart(en) (rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)})`,
-      };
+      did = { kind: "FORAGE", detail: `rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)}` };
     } else {
-      // Default: SNATCH (farm points). If loot is empty, fallback to FORAGE.
+      did = { kind: "SNATCH", detail: `rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)}` };
+    }
+
+    // Execute MOVE (mutate local copies used for tx.update)
+    if (did.kind === "SNATCH") {
       if (!lootDeck.length) {
+        // fallback to forage if possible
         if (!actionDeck.length) return;
         let drawn = 0;
         for (let i = 0; i < 2; i++) {
@@ -1631,16 +1726,102 @@ if (share && denColor) {
       } else {
         const card = lootDeck.pop();
         loot.push(card);
-        did = {
-          kind: "SNATCH",
-          detail: `${card.t || "Loot"} ${card.v ?? ""} (rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)})`,
+        did.detail = `${card?.t || "Loot"} ${card?.v ?? ""} (${did.detail})`;
+      }
+    } else if (did.kind === "FORAGE") {
+      if (!actionDeck.length) {
+        // fallback to snatch if possible
+        if (!lootDeck.length) return;
+        const card = lootDeck.pop();
+        loot.push(card);
+        did = { kind: "SNATCH", detail: `${card?.t || "Loot"} ${card?.v ?? ""} (action op)` };
+      } else {
+        let drawn = 0;
+        for (let i = 0; i < 2; i++) {
+          if (!actionDeck.length) break;
+          hand.push(actionDeck.pop());
+          drawn++;
+        }
+        did.detail = `${drawn} kaart(en) (${did.detail})`;
+      }
+    } else if (did.kind === "SCOUT") {
+      const pos = Number(scoutPos);
+      const i0 = Number.isFinite(pos) ? pos - 1 : eventIdx;
+      const eventId = track[i0] ? String(track[i0]) : null;
+
+      if (!eventId) {
+        // nothing to scout -> fallback to forage/snatch
+        if (actionDeck.length > 0) {
+          let drawn = 0;
+          for (let i = 0; i < 2; i++) {
+            if (!actionDeck.length) break;
+            hand.push(actionDeck.pop());
+            drawn++;
+          }
+          did = { kind: "FORAGE", detail: `${drawn} kaart(en) (scout fail)` };
+        } else if (lootDeck.length) {
+          const card = lootDeck.pop();
+          loot.push(card);
+          did = { kind: "SNATCH", detail: `${card?.t || "Loot"} ${card?.v ?? ""} (scout fail)` };
+        } else {
+          return;
+        }
+      } else {
+        // save intel for noPeek mode + den share
+        const nextKnown = [eventId, ...knownUpcomingEvents.filter((x) => String(x) !== eventId)].slice(0, 2);
+        // store scoutPeek too (same shape as player) for debugging/UI if needed
+        p._scoutUpdate = {
+          scoutPeek: { round: Number(g.round || 0), index: i0, eventId },
+          knownUpcomingEvents: nextKnown,
         };
+        did.detail = `#${pos}=${eventId}`;
+      }
+    } else if (did.kind === "SHIFT") {
+      if (!shiftPick) return;
+      // only swap future slots (>= eventIdx) like player.js
+      const i1 = shiftPick.i1;
+      const i2 = shiftPick.i2;
+
+      if (i1 < eventIdx || i2 < eventIdx) {
+        // should not happen, but stay safe
+        did = { kind: "FORAGE", detail: "shift invalid" };
+        if (actionDeck.length > 0) {
+          let drawn = 0;
+          for (let i = 0; i < 2; i++) {
+            if (!actionDeck.length) break;
+            hand.push(actionDeck.pop());
+            drawn++;
+          }
+          did.detail += ` (${drawn} kaart(en))`;
+        } else if (lootDeck.length) {
+          const card = lootDeck.pop();
+          loot.push(card);
+          did = { kind: "SNATCH", detail: `${card?.t || "Loot"} ${card?.v ?? ""} (shift invalid)` };
+        } else {
+          return;
+        }
+      } else {
+        const tmp = track[i1];
+        track[i1] = track[i2];
+        track[i2] = tmp;
+        // attach for tx.update below
+        g._shiftTrack = track;
       }
     }
 
 
-    tx.update(pRef, { hand, loot });
-    tx.update(gRef, { actionDeck, lootDeck, movedPlayerIds: [...new Set([...moved, botId])] });
+    // persist player + game changes
+    const pUpdate = { hand, loot };
+    if (p && p._scoutUpdate && typeof p._scoutUpdate === "object") {
+      Object.assign(pUpdate, p._scoutUpdate);
+    }
+    tx.update(pRef, pUpdate);
+
+    const gUpdate = { actionDeck, lootDeck, movedPlayerIds: [...new Set([...moved, botId])] };
+    if (g && Array.isArray(g._shiftTrack)) {
+      gUpdate.eventTrack = g._shiftTrack;
+    }
+    tx.update(gRef, gUpdate);
 
     const botAfter = { ...p, hand, loot };
 
@@ -1666,20 +1847,6 @@ function chooseBotOpsPlay({ game, bot, players }) {
   const p = bot;
 
   const flags = fillFlags(g.flagsRound);
-  // --- Den Intel share (publish) ---
-const denColor = normColor(p.color);
-
-const share = extractIntelForDenShare({ game: g, player: p });
-if (share && denColor) {
-  const prev = flags?.denIntel?.[denColor] || null;
-  const merged = mergeDenIntel(prev, {
-    ...share,
-    by: String(p.id || botId || ""),
-    at: Date.now(),
-  });
-
-  tx.update(gRef, { [`flagsRound.denIntel.${denColor}`]: merged });
-}
 
   const myColor = normColor(p.color);
   const immune = !!flags.denImmune?.[myColor];
