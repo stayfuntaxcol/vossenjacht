@@ -12,8 +12,7 @@
 // - Default mode="publicSafe" uses only counts + a stable average loot value.
 
 
-// Haal de regels op voor Rooster Crow
-import { getEventFacts } from "../rulesIndex.js";
+import { getEventFacts } from "../aiKit.js";
 
 function scopeEventFacts(eventId, { denColor, isLead, flagsRound, lootLen, carryExact, roosterSeen } = {}) {
   return getEventFacts(String(eventId), { denColor, isLead, flagsRound, lootLen, carryExact, roosterSeen });
