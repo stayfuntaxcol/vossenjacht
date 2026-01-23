@@ -262,7 +262,6 @@ function peakDangerForEvent({ eventId, game, me, players, flagsRound }) {
     eventDangerForChoice({ eventId, choice: "DASH",   game, me, players, flagsRound }),
     eventDangerForChoice({ eventId, choice: "LURK",   game, me, players, flagsRound }),
     eventDangerForChoice({ eventId, choice: "BURROW", game, me, players, flagsRound }),
-ii
   );
 }
 
