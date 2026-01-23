@@ -2355,84 +2355,58 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       if (s.exists()) freshPlayers.push({ id: s.id, ...s.data() });
     }
 
-   const flags = fillFlags(g?.flagsRound);
-const noPeek = flags?.noPeek === true;
-
-// canon + backward compat
-const burrowUsedThisRaid = !!(p?.burrowUsedThisRaid ?? p?.burrowUsed);
-
-// strategy verwacht me.burrowUsed
-const meForDecision = {
-  ...p,
-  burrowUsedThisRaid,
-  burrowUsed: burrowUsedThisRaid,
-};
+    const flags = fillFlags(g?.flagsRound);
+    const noPeek = flags?.noPeek === true;
 
     const denColor = normColor(p?.color || p?.den || p?.denColor);
     const presetKey = presetFromDenColor(denColor);
-
     const dashDecisionsSoFar = countDashDecisions(freshPlayers);
     const isLead = computeIsLeadForPlayer(g, p, freshPlayers);
 
-    // Compute metrics (probabilistic danger works in noPeek mode)
+    // ✅ burrowUsed uit Firestore (werkt met burrowUsed of burrowUsedThisRaid)
+    const burrowUsed = !!(p?.burrowUsedThisRaid ?? p?.burrowUsed);
+
+    // ✅ strategy + heuristics verwachten me.burrowUsed
+    const meForDecision = {
+      ...p,
+      burrowUsed,
+      burrowUsedThisRaid: burrowUsed, // harmless alias (voor metrics consistentie)
+    };
+
+    // ✅ metrics altijd berekenen (voor logs + fallback)
     const metricsNow = buildBotMetricsForLog({
       game: g,
       bot: meForDecision,
       players: freshPlayers || [],
+      flagsRoundOverride: flags,
     });
 
-    // Build known intel list (own + den-shared intel) for strategy in noPeek
-    const idx = Number.isFinite(Number(g?.eventIndex)) ? Number(g.eventIndex) : null;
-    const denIntelEntry =
-      (flags?.denIntel && typeof flags.denIntel === "object") ? flags.denIntel[denColor] : null;
-
-    const denEvents =
-      (denIntelEntry &&
-        idx !== null &&
-        Number(denIntelEntry.atEventIndex) === Number(idx) &&
-        Array.isArray(denIntelEntry.events))
-        ? denIntelEntry.events
-        : [];
-
-    const ownKnown = Array.isArray(meForDecision?.knownUpcomingEvents) ? meForDecision.knownUpcomingEvents : [];
-
-    const knownMerged = [...ownKnown, ...denEvents]
-      .map((x) => String(x || "").trim())
-      .filter(Boolean);
-
-    const lookaheadN = Number.isFinite(Number(BOT_UTILITY_CFG?.lookaheadN)) ? Number(BOT_UTILITY_CFG.lookaheadN) : 2;
-
-    const canUseStrategy = !noPeek || (noPeek && knownMerged.length > 0);
-
+    // ---- HYBRID DECISION ----
+    // peek/known -> strategy (dashPush werkt)
+    // noPeek zonder intel -> recommendDecision fallback
     let decision = "LURK";
+    let rec = null;
+    let dec = null;
 
-    if (canUseStrategy) {
-      // If noPeek, pass merged intel explicitly (strategy default only looks at me.knownUpcomingEvents)
-      const peekIntel =
-        noPeek && knownMerged.length
-          ? {
-              mode: "known",
-              confidence:
-                Number.isFinite(Number(denIntelEntry?.confidence))
-                  ? Number(denIntelEntry.confidence)
-                  : Math.min(1, knownMerged.length / lookaheadN),
-              events: knownMerged.slice(0, lookaheadN),
-            }
-          : null;
+    // simpele intel-check (optioneel): als bot knownUpcomingEvents heeft, strategy mag ook in noPeek
+    const hasKnown =
+      Array.isArray(meForDecision?.knownUpcomingEvents) &&
+      meForDecision.knownUpcomingEvents.filter(Boolean).length > 0;
 
-      const strat = evaluateDecision({
+    const useStrategy = !noPeek || hasKnown;
+
+    if (useStrategy) {
+      dec = evaluateDecision({
         game: g,
         me: meForDecision,
         players: freshPlayers || [],
-        flagsRound: g?.flagsRound || null,
+        flagsRound: g.flagsRound,
         cfg: BOT_UTILITY_CFG,
-        peekIntel,
       });
 
-      decision = strat?.decision || "LURK";
+      decision = dec?.decision || "LURK";
     } else {
-      // Fallback: heuristics uses computed metrics (works even when next event is unknown)
-      const rec = recommendDecision({
+      rec = recommendDecision({
         presetKey,
         denColor,
         game: g,
@@ -2442,7 +2416,9 @@ const meForDecision = {
           isLead,
           dashDecisionsSoFar,
 
-          roosterSeen: Number.isFinite(Number(g?.roosterSeen)) ? Number(g.roosterSeen) : countRevealedRoosters(g),
+          roosterSeen: Number.isFinite(Number(g?.roosterSeen))
+            ? Number(g.roosterSeen)
+            : countRevealedRoosters(g),
           postRooster2Window: countRevealedRoosters(g) >= 2,
 
           carryValue: metricsNow?.carryValue,
@@ -2462,38 +2438,52 @@ const meForDecision = {
       decision = rec?.decision || "LURK";
     }
 
-    // Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
+    // ✅ BURROW-FIRST PANIC RULE
+    // Als LURK gevaarlijk wordt (vluchten nodig), dan eerst BURROW (buut-vrij),
+    // behalve bij Hidden Nest: daar mag DASH lonen.
     const nextEvent0 = nextEventId(g, 0);
+    const panicStayRisk = Number(BOT_UTILITY_CFG?.panicStayRisk ?? 7.0);
+
+    // lurk-risk: strategy meta of dangerVec.lurk
+    const lurkRisk = Number(
+      dec?.meta?.stayRisk ??
+      rec?.dangerVec?.lurk ??
+      metricsNow?.dangerVec?.lurk ??
+      0
+    );
+
+    if (String(nextEvent0) !== "HIDDEN_NEST" && !burrowUsed && lurkRisk >= panicStayRisk) {
+      decision = "BURROW";
+    }
+
+    // ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
       const picked = pickHiddenNestDashSet({ game: g, gameId, players: freshPlayers || [] });
       const dashSet = picked?.dashSet || null;
 
-      if (dashSet && !dashSet.has(meForDecision.id)) {
-        // fall back to safest stay (prefer BURROW if available and safer than LURK)
-        const dv = metricsNow?.dangerVec || {};
+      if (dashSet && !dashSet.has(p.id)) {
+        // fall back to safest stay
+        const dv = (rec?.dangerVec || metricsNow?.dangerVec || {});
         const dBurrow = Number(dv?.burrow ?? dv?.BURROW ?? 0);
         const dLurk = Number(dv?.lurk ?? dv?.LURK ?? 0);
 
-        if (!burrowUsedThisRaid && dBurrow <= dLurk) decision = "BURROW";
+        if (!burrowUsed && dBurrow <= dLurk) decision = "BURROW";
         else decision = "LURK";
       }
     }
 
     const update = { decision };
 
-    // Canon write: burrowUsedThisRaid
-    if (decision === "BURROW" && !burrowUsedThisRaid) {
-      update.burrowUsedThisRaid = true;
+    // ✅ schrijf burrowUsed weg als BURROW gekozen is (jouw huidige Firestore veld)
+    if (decision === "BURROW" && !burrowUsed) {
+      update.burrowUsed = true;
+      // (optioneel voor later)
+      // update.burrowUsedThisRaid = true;
     }
 
     tx.update(pRef, update);
 
-    const botAfter = {
-      ...meForDecision,
-      ...update,
-      burrowUsedThisRaid: !!(update.burrowUsedThisRaid ?? burrowUsedThisRaid),
-      burrowUsed: !!(update.burrowUsedThisRaid ?? burrowUsedThisRaid),
-    };
+    const botAfter = { ...meForDecision, ...update };
 
     logPayload = {
       round: Number(g.round || 0),
@@ -2504,7 +2494,7 @@ const meForDecision = {
       message: `BOT kiest ${decision}`,
       kind: "BOT_DECISION",
       at: Date.now(),
-      metrics: buildBotMetricsForLog({ game: g, bot: botAfter, players: freshPlayers || [] }),
+      metrics: buildBotMetricsForLog({ game: g, bot: botAfter, players: freshPlayers || [], flagsRoundOverride: flags }),
     };
   });
 
