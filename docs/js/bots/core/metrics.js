@@ -14,10 +14,6 @@
 
 import { getEventFacts } from "../aiKit.js";
 
-function scopeEventFacts(eventId, ctx = {}) {
-  return getEventFacts(String(eventId), ctx);
-}
-
 function num(x, d = 0) {
   const n = Number(x);
   return Number.isFinite(n) ? n : d;
@@ -227,11 +223,10 @@ function eventAppliesToMeById(eventId, denColor, isLead, flagsRound) {
   return true;
 }
 
-function scopeEventFacts(eventId, { denColor, isLead, flagsRound, lootLen, carryExact } = {}) {
+function scopeEventFacts(eventId, { denColor, isLead, flagsRound, lootLen, carryExact, roosterSeen } = {}) {
   const base = eventId
-    ? getEventFacts(String(eventId), { denColor, isLead, flagsRound, lootLen, carryExact })
+    ? getEventFacts(String(eventId), { denColor, isLead, flagsRound, lootLen, carryExact, roosterSeen })
     : null;
-  if (!base) return null;
 
   const applies = eventAppliesToMeById(base.id || eventId, denColor, isLead, flagsRound);
 
@@ -308,7 +303,10 @@ export function computeDangerMetrics({
   const denColor = normColor(intel?.denColor || player?.color || player?.den || player?.denColor);
 
   // isLead can be passed in intel by botRunner (recommended)
-  const isLead = typeof intel?.isLead === "boolean" ? intel.isLead : false;
+  const isLead =
+  typeof intel?.isLead === "boolean" ? intel.isLead
+  : typeof player?.isLead === "boolean" ? player.isLead
+  : false;
 
   const flags = flagsRound || game?.flagsRound || {};
 
@@ -365,12 +363,13 @@ export function computeDangerMetrics({
   const nextKnown = (!!nextByTrack && !noPeek) || knownList.length > 0;
 
   const scopedCtx = {
-    denColor,
-    isLead,
-    flagsRound: flags,
-    lootLen: Array.isArray(player?.loot) ? player.loot.length : 0,
-    carryExact,
-  };
+  denColor,
+  isLead,
+  flagsRound: flags,
+  lootLen: Array.isArray(player?.loot) ? player.loot.length : 0,
+  carryExact,
+  roosterSeen: num(intel?.roosterSeen, num(game?.roosterSeen, 0)),
+};
 
   let dangerVec = { dash: 0, lurk: 0, burrow: 0 };
   let nextEventIdUsed = null;
@@ -490,8 +489,10 @@ export function computeDangerMetrics({
   const dangerPeak = Math.max(dangerVec.dash, dangerVec.lurk, dangerVec.burrow);
 
   // Staying risk should reflect best defensive option, but if burrow isn't available, prefer lurk.
-  const burrowUsed = bool(player?.burrowUsed) || bool(intel?.burrowUsed);
-  const dangerStay = burrowUsed ? dangerVec.lurk : Math.min(dangerVec.lurk, dangerVec.burrow);
+  const burrowUsed =
+  bool(player?.burrowUsedThisRaid) || bool(intel?.burrowUsedThisRaid) ||
+  bool(player?.burrowUsed) || bool(intel?.burrowUsed);
+const dangerStay = burrowUsed ? dangerVec.lurk : Math.min(dangerVec.lurk, dangerVec.burrow);
 
   // dangerScore: single scalar for UI/logs (weighted toward peak, but includes stay)
   const dangerScore = clamp(dangerPeak * 0.65 + dangerStay * 0.35, 0, 10);
