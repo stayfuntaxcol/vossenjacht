@@ -95,14 +95,15 @@ function _fnv1aHex(str) {
   _hintSeenOpsRound = Number.isFinite(n) ? n : null;
 })();
 
-// ===== LOG LISTENER (NA db + gameId) =====
-// We lezen uit games/{gameId}/actions omdat bots daar ook hun keuzes loggen.
-// lastActions wordt gevuld met keuzes uit phase "ACTIONS" (mens + bots).
+// ===== BOOT =====
+async function boot() {
+  if (!gameId) {
+    console.warn("[INIT] gameId ontbreekt in URL (?game=...)");
+    return;
+  }
 
-if (gameId) {
+  // ===== ACTIONS LISTENER (bots + humans schrijven hier) =====
   const actionsRef = collection(db, "games", gameId, "actions");
-
-  // laatste 400 action logs (nieuwste eerst)
   const actionsQ = query(actionsRef, orderBy("createdAt", "desc"), limit(400));
 
   onSnapshot(
@@ -110,7 +111,6 @@ if (gameId) {
     (qs) => {
       const rows = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-      // lastActions = alleen actions-fase keuzes (met fallback parsing)
       lastActions = rows
         .filter((e) => String(e.phase || "").toUpperCase() === "ACTIONS")
         .map((e) => {
@@ -120,10 +120,10 @@ if (gameId) {
           return {
             id: e.id,
             createdAt: e.createdAt,
-            round: e.round ?? e.turn ?? e.roundNo ?? null,
+            round: e.round ?? e.turn ?? e.roundNo ?? e.roundIndex ?? null,
             phase: e.phase,
             kind: e.kind || e.type || null,
-            playerId: e.playerId || e.actorId || e.by || null,
+            playerId: e.playerId || e.actorId || e.by || e.uid || null,
             playerName: e.playerName || e.name || null,
             choice: e.choice || e.action || e.actionKey || choiceFallback,
             payload: e.payload || null,
@@ -132,44 +132,27 @@ if (gameId) {
         })
         .filter((e) => !!e.choice && !!e.playerId);
 
-      // hint UI kan veranderen door nieuwe logs/actions
       if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
     },
-    (err) => {
-      console.warn("[actions listener] failed", err);
-    }
+    (err) => console.warn("[actions listener] failed", err)
   );
-}
 
+  // ===== ensure burrow flag (1x per raid) =====
+  try {
+    await ensureBurrowFlagForAllPlayers(gameId);
+  } catch (e) {
+    console.warn("[ensureBurrowFlagForAllPlayers] failed", e);
+  }
 
-async function ensureBurrowFlagForAllPlayers(gameId) {
+  // ===== players cache live (advisor + UI) =====
   const playersCol = collection(db, "games", gameId, "players");
-  const qs = await getDocs(playersCol);
-
-  const fixes = [];
-  qs.forEach((d) => {
-    const data = d.data() || {};
-    if (data.burrowUsedThisRaid == null) {
-      fixes.push(updateDoc(d.ref, { burrowUsedThisRaid: false }));
-    }
+  onSnapshot(playersCol, (qs) => {
+    lastPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
   });
-
-  if (fixes.length) await Promise.all(fixes);
 }
 
-// --- ergens in je init (binnen async functie!) ---
-await ensureBurrowFlagForAllPlayers(gameId);
-
-// BONUS: cache live
-const playersCol = collection(db, "games", gameId, "players");
-onSnapshot(playersCol, (qs) => {
-  lastPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
-  if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
-});
-
-} else {
-  console.warn("[LOG] gameId ontbreekt in URL (?game=...)");
-}
+boot().catch((e) => console.error("[boot] fatal", e));
 
 // ===== DOM ELEMENTS – nieuwe player.html =====
 
