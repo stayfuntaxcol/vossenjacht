@@ -1,7 +1,7 @@
 // js/bots/botRunner.js
 // Autonomous bots for VOSSENJACHT (smart OPS flow + threat-aware decisions)
 
-import { getEventFacts } from "./aiKit.js";
+import { getEventFacts, getActionFacts } from "./aiKit.js";
 import { getActionDefByName } from "../cards.js";
 import { comboScore } from "./actionComboMatrix.js";
 import {
@@ -174,19 +174,22 @@ async function countBotActionsThisRoundFallback({ db, gameId, botId, roundNum })
 
 function handToActionIds(hand) {
   const arr = Array.isArray(hand) ? hand : [];
-  const names = arr
-    .map((c) => String(c?.name || c || "").trim())
-    .filter(Boolean);
-
-  // map "Den Signal" -> {id:"DEN_SIGNAL", ...}
   const ids = [];
-  for (const nm of names) {
-    const def = getActionDefByName(nm);
-    if (def?.id) ids.push(def.id);
+
+  for (const c of arr) {
+    const handKey = String(c?.name || c || "").trim();
+    const rawId = String(c?.id || c?.actionId || "").trim();
+    const key = rawId || handKey;
+    if (!key) continue;
+
+    if (/^[A-Z0-9_]+$/.test(key) && key.includes("_")) { ids.push(key); continue; }
+
+    const def = handKey ? getActionDefByName(handKey) : null;
+    const id = String(def?.id || "").trim();
+    if (id) ids.push(id);
   }
   return ids;
 }
-
 
 // ================================
 // Metrics (centralized + loggable)
@@ -987,17 +990,27 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
     const hand = Array.isArray(bot?.hand) ? bot.hand : [];
     if (!hand.length) return null;
 
-    // hand contains {name:"Den Signal"} or "Den Signal"
-    const handNames = hand
-      .map((c) => String(c?.name || c || "").trim())
+    // map hand -> actionIds (supports "Den Signal", "DEN_SIGNAL", {id}, {actionId}, {name})
+    const entries = hand
+      .map((c) => {
+        const rawId = String(c?.id || c?.actionId || c?.key || "").trim();
+        const nm = String(c?.name || c || "").trim();
+        const key = rawId || nm;
+        if (!key) return null;
+
+        // already an id
+        if (/^[A-Z0-9_]+$/.test(key) && key.includes("_")) {
+          return { actionId: key, displayName: nm || key };
+        }
+
+        // resolve name -> id
+        const def = getActionDefByName(key);
+        if (!def?.id) return null;
+        return { actionId: String(def.id).trim(), displayName: String(def.name || key).trim() };
+      })
       .filter(Boolean);
 
-    // map card name -> actionId via cards.js defs
-    const entries = handNames
-      .map((name) => ({ name, def: getActionDefByName(name) }))
-      .filter((x) => x.def?.id);
-
-    const ids = entries.map((x) => String(x.def.id || "").trim()).filter(Boolean);
+    const ids = entries.map((e) => e.actionId).filter(Boolean);
     if (!ids.length) return null;
 
     const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
@@ -1009,13 +1022,7 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
     const discThisRound = disc.filter((x) => Number(x?.round || 0) === roundNum);
 
     const botPlayedThisRound = discThisRound.filter((x) => x?.by === bot.id);
-    const botPlayedActionIdsThisRound = botPlayedThisRound
-      .map((x) => {
-        const nm = String(x?.name || "").trim();
-        const def = nm ? getActionDefByName(nm) : null;
-        return def?.id ? String(def.id) : null;
-      })
-      .filter(Boolean);
+    const botPlayedActionIdsThisRound = botPlayedThisRound.map(toActionId).filter(Boolean);
 
     const actionsPlayedThisRound = botPlayedThisRound.length;
 
