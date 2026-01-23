@@ -453,19 +453,14 @@ async function openLeadCommandCenter() {
   });
   leadCCUnsubs.push(unsubPlayers);
 
-  // 2) Logs live (single source)
-  const logCol = collection(db, "games", gameId, "log");
-  const logQ = query(
-    logCol,
-    orderBy("createdAt", "desc"),
-    limit(800)
-  );
-const unsubLogs = onSnapshot(logQ, (qs) => {
-    leadCCLogs = qs.docs.map((d) => d.data());
-    renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
-  });
-  leadCCUnsubs.push(unsubLogs);
-}
+  // 2) Logs live (single source)// 2) Actions live (single source)
+const actionsCol = collection(db, "games", gameId, "actions");
+const actionsQ = query(actionsCol, orderBy("createdAt", "desc"), limit(1200));
+const unsubActions = onSnapshot(actionsQ, (qs) => {
+  leadCCLogs = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+  renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
+});
+leadCCUnsubs.push(unsubActions);
 
 function closeLeadCommandCenter() {
   stopLeadCommandCenterLive();
