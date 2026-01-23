@@ -971,7 +971,10 @@ export function rankActions(actionKeys = [], opts = {}) {
     const roosterSeen = Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0;
 
     // carryValue should reflect carried loot, not total score
-    const carryValue = Number.isFinite(Number(ctx?.carryValue)) ? Number(ctx.carryValue) : estimateCarryValue(me);
+    const carryValue =
+  Number.isFinite(Number(opts?.carryValue)) ? Number(opts.carryValue)
+  : (Number.isFinite(Number(me?.carryValue)) ? Number(me.carryValue)
+  : estimateCarryValue(me));
 
     return {
       phase,
@@ -1150,9 +1153,12 @@ export function recommendDecision(opts = {}) {
     getNextEventKey(game, ctx) ||
     null;
 
-  const carryValue = Number.isFinite(Number(ctx?.carryValue))
-    ? Number(ctx.carryValue)
-    : (Number.isFinite(Number(ctx?.carryValueExact)) ? Number(ctx.carryValueExact) : estimateCarryValue(me));
+  const carryValue =
+  Number.isFinite(Number(opts?.carryValue)) ? Number(opts.carryValue)
+  : (Number.isFinite(Number(ctx?.carryValueExact)) ? Number(ctx.carryValueExact)
+  : (Number.isFinite(Number(ctx?.carryValue)) ? Number(ctx.carryValue)
+  : (Number.isFinite(Number(me?.carryValue)) ? Number(me.carryValue)
+  : estimateCarryValue(me))));
 
   // danger aggregates (prefer ctx values if present)
   const dangerPeak = Number.isFinite(Number(ctx?.dangerPeak))
