@@ -11,6 +11,17 @@
 // - This module intentionally avoids reading "secret" info unless you pass mode="omniscient".
 // - Default mode="publicSafe" uses only counts + a stable average loot value.
 
+
+// Haal de regels op voor Rooster Crow
+import { getEventFacts } from "../rulesIndex.js";
+
+function scopeEventFacts(eventId, { denColor, isLead, flagsRound, lootLen, carryExact, roosterSeen } = {}) {
+  return getEventFacts(String(eventId), { denColor, isLead, flagsRound, lootLen, carryExact, roosterSeen });
+}
+
+// in computeDangerMetrics -> scopedCtx:
+roosterSeen: num(intel?.roosterSeen, num(game?.roosterSeen, 0)),
+
 import { getEventFacts } from "../aiKit.js";
 
 function num(x, d = 0) {
