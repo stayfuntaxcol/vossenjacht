@@ -2374,16 +2374,6 @@ const meForDecision = {
     const dashDecisionsSoFar = countDashDecisions(freshPlayers);
     const isLead = computeIsLeadForPlayer(g, p, freshPlayers);
 
-    // Canon: burrowUsedThisRaid (fallback to legacy burrowUsed if field not present yet)
-    const burrowUsedThisRaid = !!(p?.burrowUsedThisRaid ?? p?.burrowUsed);
-
-    // Pass a stable "me" to both systems (strategy expects me.burrowUsed)
-    const meForDecision = {
-      ...p,
-      burrowUsedThisRaid,
-      burrowUsed: burrowUsedThisRaid,
-    };
-
     // Compute metrics (probabilistic danger works in noPeek mode)
     const metricsNow = buildBotMetricsForLog({
       game: g,
