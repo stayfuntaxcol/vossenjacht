@@ -371,6 +371,32 @@ function getEventFactsScoped(eventKey, opts = {}) {
     f.dangerNotes.push("Lead-only event: non-lead treated as low immediate risk.");
   }
 
+
+  // --- ROOSTER_CROW: only treat as dangerous on 3rd occurrence (raid-end trigger) ---
+  if (id === "ROOSTER_CROW") {
+    const roosterSeenRaw =
+      (ctx && Number.isFinite(Number(ctx?.roosterSeen))) ? Number(ctx.roosterSeen)
+      : (Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0);
+    const roosterSeen = Number.isFinite(roosterSeenRaw) ? roosterSeenRaw : 0;
+
+    // We assume this facts object is used for the *next* event, so occurrence = already seen + 1
+    const occ = roosterSeen + 1;
+
+    if (occ <= 2) {
+      // First two Rooster Crow cards are mostly "noise/tempo" — not a capture spike.
+      // Encourage LURK over BURROW (and don't waste BURROW early).
+      f.dangerDash = Math.min(Number(f.dangerDash || 0), 1.0);
+      f.dangerLurk = Math.min(Number(f.dangerLurk || 0), 0.5);
+      f.dangerBurrow = Math.min(Number(f.dangerBurrow || 0), 1.0);
+
+      // Remove endgame tags (if present) for early roosters
+      const drop = new Set(["ROOSTER_TICK", "RAID_END_TRIGGER", "RAID_END", "END_TRIGGER"]);
+      f.tags = (Array.isArray(f.tags) ? f.tags : []).filter((t) => !drop.has(normTag(t)));
+
+      f.dangerNotes.push(`Rooster Crow #${occ}: treated as low capture risk (only the 3rd should feel like endgame).`);
+    }
+  }
+
   return f;
 }
 
@@ -626,22 +652,27 @@ export function scoreActionFacts(actionKey, opts = {}) {
   const maxPerRound = Number(preset?.tagBias?.maxActionsPerRound ?? 1) || 1;
   const reserveEarly = Number(preset?.tagBias?.actionReserveEarly ?? 2);
   const reserveLate = Number(preset?.tagBias?.actionReserveLate ?? 1);
-  const reserve = late ? reserveLate : reserveEarly;
+  const reserve = Math.max(1, late ? reserveLate : reserveEarly);
 
   const projectedHandAfterPlay = Math.max(0, handCount - 1);
 
-  // A) budget
+  // A) budget (soft cap, not a hard rule)
   const comboAllowed = !!(ctx?.comboAllowed || ctx?.comboFollowUp || ctx?.comboPrimed);
   const allowOverBudget = emergency || comboAllowed;
 
-  if (playedThisRound >= maxPerRound && !allowOverBudget) {
-    soft.risk += 9;
-    soft.tempo -= 4;
-    soft.control -= 2;
-    soft.info -= 1;
-  } else if (playedThisRound >= maxPerRound && allowOverBudget) {
-    soft.risk += 2.5;
-    soft.tempo -= 0.5;
+  // How far beyond the soft cap are we?
+  const over = Math.max(0, (playedThisRound - maxPerRound) + 1);
+
+  if (over > 0 && !allowOverBudget) {
+    // Strong discouragement, but still beatable by truly high-value actions
+    soft.risk += 3.5 * over;
+    soft.tempo -= 1.6 * over;
+    soft.control -= 0.9 * over;
+    soft.info -= 0.5 * over;
+  } else if (over > 0 && allowOverBudget) {
+    // Combos/emergency may justify spending more cards
+    soft.risk += 1.1 * over;
+    soft.tempo -= 0.4 * over;
   }
 
   // B) reserve
@@ -910,12 +941,7 @@ export function rankActions(actionKeys = [], opts = {}) {
     const roosterSeen = Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0;
 
     // carryValue should reflect carried loot, not total score
-    const carryValue =
-  Number.isFinite(Number(opts?.ctx?.carryValue))
-    ? Number(opts.ctx.carryValue)
-    : (Number.isFinite(Number(opts?.ctx?.carryValueExact))
-        ? Number(opts.ctx.carryValueExact)
-        : estimateCarryValue(me));
+    const carryValue = Number.isFinite(Number(ctx?.carryValue)) ? Number(ctx.carryValue) : estimateCarryValue(me);
 
     return {
       phase,
@@ -1004,7 +1030,9 @@ const denySet = new Set([
 ============================================================ */
 export function pickActionOrPass(actionKeys = [], opts = {}) {
   const preset = getPreset(opts.presetKey, opts.denColor);
-  const minTotal = Number(preset?.tagBias?.actionPlayMinTotal ?? 3.0);
+
+  // Base thresholds (per preset)
+  const baseMin = Number(preset?.tagBias?.actionPlayMinTotal ?? 3.0);
   const emergencyTotal = Number(preset?.tagBias?.emergencyActionTotal ?? 7.5);
 
   const ranked = rankActions(actionKeys, opts);
@@ -1013,29 +1041,57 @@ export function pickActionOrPass(actionKeys = [], opts = {}) {
   const best = ranked[0];
   const bestTotal = Number(best?.total);
 
-  const dangerNext = getDangerNext(opts);
-  const emergency = dangerNext >= 8 || opts?.ctx?.emergency === true;
+  if (!Number.isFinite(bestTotal)) return { play: null, ranked, reason: "invalid_score" };
 
-  const playedThisRound = getActionsPlayedThisRound(opts);
-  const maxPerRound = Number(preset?.tagBias?.maxActionsPerRound ?? 1) || 1;
+  const { game, me, ctx } = getCtx(opts);
 
-  const comboAllowed = !!(opts?.ctx?.comboAllowed || opts?.ctx?.comboFollowUp || opts?.ctx?.comboPrimed);
-  const allowOverBudget = emergency || comboAllowed;
+  // Danger context (already Rooster-adjusted via scoped facts)
+  const dangerNext = getDangerNext({ ...opts, game, me, ctx });
+  const emergency = dangerNext >= 8 || ctx?.emergency === true;
 
-  if (playedThisRound >= maxPerRound && !allowOverBudget) {
-    return { play: null, ranked, reason: "budget_max_reached" };
+  // ---- Action economy (NO hard caps) ----
+  const playedThisRound = getActionsPlayedThisRound({ ...opts, game, me, ctx });
+
+  const early = isEarlyGame(game);
+  const late = isLateGame(game);
+
+  const reserveEarly = Number(preset?.tagBias?.actionReserveEarly ?? 2);
+  const reserveLate = Number(preset?.tagBias?.actionReserveLate ?? 1);
+
+  // Always keep at least 1 card in hand unless it's a real emergency
+  const reserve = Math.max(1, late ? reserveLate : reserveEarly);
+
+  const handCount = getHandCount(me, Array.isArray(actionKeys) ? actionKeys : ctx?._handKeys);
+  const projectedAfter = Math.max(0, handCount - 1);
+
+  // If playing would break reserve, PASS unless emergency and action is strong enough
+  if (!emergency && projectedAfter < reserve) {
+    // If the hand is large we don't need to be strict (rare edge case with stale ctx)
+    return { play: null, ranked, reason: "reserve_hold" };
   }
 
-  if (!Number.isFinite(bestTotal)) return { play: null, ranked, reason: "invalid_score" };
+  // Soft increasing threshold per extra play this round.
+  // When danger is low -> be more conservative (save cards).
+  // When danger is high -> allow spending cards to survive/control.
+  const dangerFactor = Math.max(0, Math.min(10, dangerNext));
+  let step = 0.75 - (dangerFactor * 0.06);   // 0.75 .. 0.15 roughly
+  step = Math.max(0.15, Math.min(0.75, step));
+
+  // Combo context can justify a second card in the same round (lower threshold a bit)
+  const comboPrimed = !!(ctx?.comboAllowed || ctx?.comboFollowUp || ctx?.comboPrimed);
+  const comboDiscount = comboPrimed ? 0.55 : 0;
+
+  const dynamicMin = baseMin + (playedThisRound * step) - comboDiscount;
 
   if (emergency) {
     if (bestTotal >= emergencyTotal) return { play: best.id, ranked, reason: "emergency_play" };
     return { play: null, ranked, reason: "emergency_but_no_good_action" };
   }
 
-  if (bestTotal >= minTotal) return { play: best.id, ranked, reason: "above_threshold" };
-  return { play: null, ranked, reason: "below_threshold" };
+  if (bestTotal >= dynamicMin) return { play: best.id, ranked, reason: "above_dynamic_threshold" };
+  return { play: null, ranked, reason: "below_dynamic_threshold" };
 }
+
 
 /* ============================================================
    7) Optional decision recommendation (DASH/BURROW/LURK)
