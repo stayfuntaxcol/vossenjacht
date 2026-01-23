@@ -48,9 +48,15 @@ let lastMe = null;
 let lastPlayers = [];
 let lastActions = [];
 
-// UI refs that may be touched by early snapshots (avoid TDZ)
-let btnHint = null;
+// ===== EARLY STATE (avoid TDZ when listeners fire before full init) =====
+let gameRef = null;
+let playerRef = null;
 
+let currentGame = null;
+let currentPlayer = null;
+
+// btnHint is read by updateHintButtonFromState() from early listeners:
+let btnHint = null;
 
 // ===== UI PULSE MEMORY (LOOT/HINT) =====
 const _uiKey = (k) => `VJ_${k}_${gameId || "?"}_${playerId || "?"}`;
@@ -90,54 +96,51 @@ function _fnv1aHex(str) {
 })();
 
 // ===== LOG LISTENER (NA db + gameId) =====
-// Single source of truth: games/{gameId}/log
-// lastActions wordt gevuld met logregels uit phase "ACTIONS" (kind "CHOICE")
+// We lezen uit games/{gameId}/actions omdat bots daar ook hun keuzes loggen.
+// lastActions wordt gevuld met keuzes uit phase "ACTIONS" (mens + bots).
 
 if (gameId) {
-  // i.p.v. /actions -> /log
-  const logRef = collection(db, "games", gameId, "log");
+  const actionsRef = collection(db, "games", gameId, "actions");
 
-  // laatste 250 logregels (nieuwste eerst)
-  const logQ = query(logRef, orderBy("createdAt", "desc"), limit(250));
+  // laatste 400 action logs (nieuwste eerst)
+  const actionsQ = query(actionsRef, orderBy("createdAt", "desc"), limit(400));
 
-  onSnapshot(logQ, (qs) => {
-    const rows = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+  onSnapshot(
+    actionsQ,
+    (qs) => {
+      const rows = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
 
-    // bewaar alles (handig voor advisor), en maak "lastActions" = alleen actions-fase keuzes
-    // (je advisor krijgt dan nog steeds acties-context, maar uit /log)
-    
-lastActions = rows
-  .filter((e) => {
-    const ph = String(e.phase || "").toUpperCase().trim();
-    if (ph === "ACTIONS" || ph === "OPS") return true;
-    const c = String(e.choice || "").trim();
-    if (/^(OPS|ACTION|ACTIONS)_/i.test(c)) return true;
-    const msg = typeof e.message === "string" ? e.message.trim() : "";
-    const after = msg && msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
-    return /^(OPS|ACTION|ACTIONS)_/i.test(after);
-  })
-  .map((e) => {
-    // compat: sommige logs hebben geen `choice`, maar wel message "Naam: ACTION_X"
-    const msg = typeof e.message === "string" ? e.message.trim() : "";
-    const after = msg && msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
-    const choiceFallback = /^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(after) ? after : "";
-    return {
-      id: e.id,
-      createdAt: e.createdAt,
-      round: e.round,
-      phase: e.phase,
-      kind: e.kind,
-      playerId: e.playerId,
-      playerName: e.playerName,
-      choice: e.choice || choiceFallback, // bv "ACTION_Den Signal" / "ACTION_PASS"
-      payload: e.payload || null,
-      message: e.message || "",
-    };
-  })
-  .filter((e) => !!e.choice);
-// hint UI kan veranderen door nieuwe logs/actions
-    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
-});
+      // lastActions = alleen actions-fase keuzes (met fallback parsing)
+      lastActions = rows
+        .filter((e) => String(e.phase || "").toUpperCase() === "ACTIONS")
+        .map((e) => {
+          const msg = typeof e.message === "string" ? e.message.trim() : "";
+          const after = msg && msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
+          const choiceFallback = /^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(after) ? after : "";
+          return {
+            id: e.id,
+            createdAt: e.createdAt,
+            round: e.round ?? e.turn ?? e.roundNo ?? null,
+            phase: e.phase,
+            kind: e.kind || e.type || null,
+            playerId: e.playerId || e.actorId || e.by || null,
+            playerName: e.playerName || e.name || null,
+            choice: e.choice || e.action || e.actionKey || choiceFallback,
+            payload: e.payload || null,
+            message: e.message || "",
+          };
+        })
+        .filter((e) => !!e.choice && !!e.playerId);
+
+      // hint UI kan veranderen door nieuwe logs/actions
+      if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
+    },
+    (err) => {
+      console.warn("[actions listener] failed", err);
+    }
+  );
+}
+
 
 async function ensureBurrowFlagForAllPlayers(gameId) {
   const playersCol = collection(db, "games", gameId, "players");
@@ -201,77 +204,116 @@ function tsToMs(t) {
   }
 }
 
+function formatChoiceForDisplay(phaseKey, rawChoice, payload) {
+  const c0 = String(rawChoice || "").trim();
+  if (!c0) return "";
+
+  // normalize prefixes
+  const upper = c0.toUpperCase();
+  const p = String(phaseKey || "").toUpperCase();
+
+  function niceWords(s) {
+    return String(s || "")
+      .replace(/_/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  // MOVE_*
+  if (upper.startsWith("MOVE_")) {
+    const kind = niceWords(c0.slice(5));
+    // Scout positie in payload
+    const pos =
+      payload?.pos ??
+      payload?.position ??
+      payload?.slot ??
+      payload?.index ??
+      payload?.eventPos ??
+      null;
+    if (pos != null && String(kind).toUpperCase().startsWith("SCOUT")) {
+      return `SCOUT #${pos}`;
+    }
+    return kind || "MOVE";
+  }
+
+  // ACTION_*
+  if (upper.startsWith("ACTION_") || upper.startsWith("ACTIONS_") || upper.startsWith("OPS_")) {
+    const name = c0.replace(/^(ACTIONS_|ACTION_|OPS_)/i, "");
+    if (/^PASS$/i.test(name)) return "PASS";
+    return niceWords(name) || "ACTION";
+  }
+
+  // DECISION_*
+  if (upper.startsWith("DECISION_")) {
+    const name = c0.slice(9);
+    return niceWords(name) || "DECISION";
+  }
+
+  // fallback: show raw (pretty)
+  return niceWords(c0);
+}
+
 function renderLeadCommandCenterUI(round, players, logs) {
   if (!leadCommandContent) return;
 
   leadCommandContent.innerHTML = "";
 
   const perPlayer = new Map();
-
   const targetRound = Number(round ?? 0);
 
-for (const d of (logs || [])) {
-  const rr = Number(d?.round ?? d?.turn ?? d?.roundNo ?? d?.roundIndex ?? 0);
-  if (rr !== targetRound) continue;
+  for (const d of (logs || [])) {
+    const rr = Number(d?.round ?? d?.turn ?? d?.roundNo ?? d?.roundIndex ?? 0);
+    if (rr !== targetRound) continue;
 
-  const pid = d?.playerId || d?.actorId || d?.by || d?.uid || d?.player || null;
-  if (!pid) continue;
+    const pid = d?.playerId || d?.actorId || d?.by || d?.uid || d?.player || null;
+    if (!pid) continue;
 
-  // Werk met zowel oud als nieuw:
-  // - nieuw: kind === "CHOICE" + choice aanwezig
-  // - legacy: message kan "Naam: ACTION_X" bevatten
-  const rawChoice =
-    typeof d.choice === "string" && d.choice.trim()
-      ? d.choice.trim()
-      : (() => {
-          const msg = typeof d.message === "string" ? d.message.trim() : "";
-          if (msg) {
-            const after = msg.includes(":")
-              ? msg.split(":").slice(1).join(":").trim()
-              : msg;
-            if (/^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(after)) return after;
-          }
-          const a1 = typeof d.action === "string" ? d.action.trim() : "";
-          if (/^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(a1)) return a1;
-          const a2 = typeof d.actionKey === "string" ? d.actionKey.trim() : "";
-          if (/^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(a2)) return a2;
-          return "";
-        })();
+    // choice: nieuw (choice/action/actionKey) of legacy message parsing
+    const rawChoice =
+      (typeof d?.choice === "string" && d.choice.trim()) ||
+      (typeof d?.action === "string" && d.action.trim()) ||
+      (typeof d?.actionKey === "string" && d.actionKey.trim()) ||
+      (() => {
+        const msg = typeof d?.message === "string" ? d.message.trim() : "";
+        if (!msg) return "";
+        const after = msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
+        return /^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(after) ? after : "";
+      })();
 
-  if (!rawChoice) continue;
+    if (!rawChoice) continue;
 
-  // phase: direct, of infer uit choice
-  let phase = String(d.phase || d.step || d.stage || "").toUpperCase().trim();
-  if (!phase) {
-    if (/^MOVE_/i.test(rawChoice)) phase = "MOVE";
-    else if (/^(OPS|ACTION|ACTIONS)_/i.test(rawChoice)) phase = "ACTIONS";
-    else if (/^DECISION_/i.test(rawChoice)) phase = "DECISION";
+    // phase: direct, of infer uit choice
+    let phase = String(d?.phase || d?.step || d?.stage || "").toUpperCase().trim();
+    if (!phase) {
+      if (/^MOVE_/i.test(rawChoice)) phase = "MOVE";
+      else if (/^(OPS|ACTION|ACTIONS)_/i.test(rawChoice)) phase = "ACTIONS";
+      else if (/^DECISION_/i.test(rawChoice)) phase = "DECISION";
+    }
+    if (phase === "OPS" || phase === "ACTION") phase = "ACTIONS";
+
+    const row = { ...d, playerId: pid, choice: rawChoice, phase };
+
+    let bucket = perPlayer.get(pid);
+    if (!bucket) {
+      bucket = { moves: [], actions: [], decisions: [] };
+      perPlayer.set(pid, bucket);
+    }
+
+    if (phase === "MOVE") bucket.moves.push(row);
+    else if (phase === "ACTIONS") bucket.actions.push(row);
+    else if (phase === "DECISION") bucket.decisions.push(row);
   }
-  if (phase === "OPS" || phase === "ACTION") phase = "ACTIONS";
-
-  const row = { ...d, playerId: pid, choice: rawChoice, phase };
-
-  let bucket = perPlayer.get(pid);
-  if (!bucket) {
-    bucket = { moves: [], actions: [], decisions: [] };
-    perPlayer.set(pid, bucket);
-  }
-
-  if (phase === "MOVE") bucket.moves.push(row);
-  else if (phase === "ACTIONS") bucket.actions.push(row);
-  else if (phase === "DECISION") bucket.decisions.push(row);
-}
 
   // sort binnen buckets (oud->nieuw)
   for (const bucket of perPlayer.values()) {
-    bucket.moves.sort((a, b) => (a.clientAt || tsToMs(a.createdAt)) - (b.clientAt || tsToMs(b.createdAt)));
-    bucket.actions.sort((a, b) => (a.clientAt || tsToMs(a.createdAt)) - (b.clientAt || tsToMs(b.createdAt)));
-    bucket.decisions.sort((a, b) => (a.clientAt || tsToMs(a.createdAt)) - (b.clientAt || tsToMs(b.createdAt)));
+    bucket.moves.sort((a, b) => (a.clientAt || a.at || tsToMs(a.createdAt)) - (b.clientAt || b.at || tsToMs(b.createdAt)));
+    bucket.actions.sort((a, b) => (a.clientAt || a.at || tsToMs(a.createdAt)) - (b.clientAt || b.at || tsToMs(b.createdAt)));
+    bucket.decisions.sort((a, b) => (a.clientAt || a.at || tsToMs(a.createdAt)) - (b.clientAt || b.at || tsToMs(b.createdAt)));
   }
 
   const header = document.createElement("p");
   header.className = "lead-command-subtitle";
-  header.textContent = `Ronde ${round} – overzicht van alle keuzes per speler.`;
+  header.textContent = `Ronde ${targetRound} – overzicht van alle keuzes per speler.`;
   leadCommandContent.appendChild(header);
 
   const orderedPlayers = sortPlayersByJoinOrder(players || []);
@@ -351,6 +393,7 @@ for (const d of (logs || [])) {
     leadCommandContent.appendChild(block);
   });
 }
+
 
 async function ensureBurrowFlag(gameId, playerId) {
   const pRef = doc(db, "games", gameId, "players", playerId);
@@ -441,7 +484,7 @@ async function openLeadCommandCenter() {
 
   leadCommandModalOverlay.classList.remove("hidden");
 
-  const round = currentGame.round || 0;
+  let round = Number(currentGame?.round ?? 0);
 
   stopLeadCommandCenterLive();
 
@@ -449,18 +492,32 @@ async function openLeadCommandCenter() {
   const playersRef = collection(db, "games", gameId, "players");
   const unsubPlayers = onSnapshot(playersRef, (qs) => {
     leadCCPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
-    renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
+    renderLeadCommandCenterUI(Number(currentGame?.round ?? round), leadCCPlayers, leadCCLogs);
   });
   leadCCUnsubs.push(unsubPlayers);
-
-  // 2) Logs live (single source)// 2) Actions live (single source)
+// 2) Actions live (bots + humans)
+// BotRunner schrijft keuzes naar /actions; spelers doen dat ook via logMoveAction().
 const actionsCol = collection(db, "games", gameId, "actions");
-const actionsQ = query(actionsCol, orderBy("createdAt", "desc"), limit(1200));
-const unsubActions = onSnapshot(actionsQ, (qs) => {
-  leadCCLogs = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
-  renderLeadCommandCenterUI(round, leadCCPlayers, leadCCLogs);
-});
+const actionsQ = query(actionsCol, orderBy("createdAt", "desc"), limit(800));
+
+const unsubActions = onSnapshot(
+  actionsQ,
+  (qs) => {
+    leadCCLogs = qs.docs.map((d) => d.data());
+    renderLeadCommandCenterUI(Number(currentGame?.round ?? round), leadCCPlayers, leadCCLogs);
+  },
+  (err) => {
+    console.error("[LCC] actions snapshot failed", err);
+    if (leadCommandContent) {
+      leadCommandContent.innerHTML =
+        `<p style="opacity:.8">LCC kan actions niet lezen: ${String(err?.message || err)}</p>`;
+    }
+  }
+);
+
 leadCCUnsubs.push(unsubActions);
+
+}
 
 function closeLeadCommandCenter() {
   stopLeadCommandCenterLive();
@@ -523,7 +580,7 @@ const btnDash = document.getElementById("btnDash");
 const btnPass = document.getElementById("btnPass");
 const btnHand = document.getElementById("btnHand");
 const btnLead = document.getElementById("btnLead");
-btnHint = document.getElementById("btnHint");
+  btnHint = document.getElementById("btnHint");
 const btnLoot = document.getElementById("btnLoot");
 
 // Modals (HAND / LOOT)
@@ -760,12 +817,7 @@ function hostInitUI() {
 }
 
 // ===== FIRESTORE REFS / STATE =====
-let gameRef = null;
-let playerRef = null;
-
-let currentGame = null;
-let currentPlayer = null;
-
+// (declared earlier to avoid TDZ)
 let prevGame = null;
 let prevPlayer = null;
 
@@ -1164,38 +1216,35 @@ function _computeAdvisorHintSafe() {
 }
 
 function updateHintButtonFromState() {
-  const el = btnHint || (btnHint = document.getElementById("btnHint"));
-  if (!el) return;
+  if (!btnHint) btnHint = document.getElementById("btnHint");
+  if (!btnHint) return;
 
   const g = lastGame || currentGame || null;
   const hint = _computeAdvisorHintSafe();
 
   // Bright als er (waarschijnlijk) een hint is
   const hasHint = _hintHasContent(hint) || (!!lastGame && !!lastMe);
-  _setBtnGlow(el, hasHint);
+  _setBtnGlow(btnHint, hasHint);
 
   const phase = String(g?.phase || "").toUpperCase();
   if (!g || (phase !== "OPS" && phase !== "ACTIONS")) {
-    _setBtnPulse(el, false);
+    _setBtnPulse(btnHint, false);
     return;
   }
 
   if (!_hintHasContent(hint)) {
-    _setBtnPulse(el, false);
+    _setBtnPulse(btnHint, false);
     return;
   }
 
   const round = Number.isFinite(Number(g.round)) ? Number(g.round) : null;
   _hintCurrentHash = _hintHash(hint);
 
-  const roundIsNew =
-    round != null && _hintSeenOpsRound != null ? round > _hintSeenOpsRound : false;
-  const hashIsNew =
-    !!_hintCurrentHash && (!_hintSeenOpsHash || _hintCurrentHash !== _hintSeenOpsHash);
+  const roundIsNew = round != null && _hintSeenOpsRound != null ? round > _hintSeenOpsRound : false;
+  const hashIsNew = !!_hintCurrentHash && (!_hintSeenOpsHash || _hintCurrentHash !== _hintSeenOpsHash);
 
-  _setBtnPulse(el, roundIsNew || hashIsNew);
+  _setBtnPulse(btnHint, roundIsNew || hashIsNew);
 }
-
 
 function markHintSeenIfOps(hintObj, gameObj) {
   const g = gameObj || lastGame || null;
