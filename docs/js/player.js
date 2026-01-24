@@ -3143,13 +3143,23 @@ async function playScatter(game, player) {
 }
 
 async function playDenSignal(game, player) {
-  const colorInput = prompt("Den Signal – welke Den kleur wil je beschermen? (RED / BLUE / GREEN / YELLOW)");
-  if (!colorInput) return false;
-  const color = colorInput.trim().toUpperCase();
-  if (!["RED", "BLUE", "GREEN", "YELLOW"].includes(color)) {
-    alert("Ongeldige kleur.");
+  const colors = ["RED", "BLUE", "GREEN", "YELLOW"];
+  const my = String(player?.color || player?.den || player?.denColor || "").trim().toUpperCase();
+
+  const menu = colors
+    .map((c, i) => `${i + 1}. ${c}${c === my ? " (jij)" : ""}`)
+    .join("\n");
+
+  const choiceStr = prompt("Den Signal – kies Den kleur om te beschermen:\n" + menu);
+  if (!choiceStr) return false;
+
+  const idx = parseInt(choiceStr, 10) - 1;
+  if (Number.isNaN(idx) || idx < 0 || idx >= colors.length) {
+    alert("Ongeldige keuze.");
     return false;
   }
+
+  const color = colors[idx];
 
   const flags = mergeRoundFlags(game);
   flags.denImmune = flags.denImmune || {};
