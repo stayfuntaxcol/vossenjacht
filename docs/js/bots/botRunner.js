@@ -123,17 +123,28 @@ function sumLootPoints(p) {
 }
 
 function computeIsLeadForPlayer(game, me, players) {
+  const myId = String(me?.id || "");
+
   const leadId = String(game?.leadFoxId || "");
-  if (leadId && leadId === String(me?.id || "")) return true;
+  if (leadId && myId && leadId === myId) return true;
 
   const leadName = String(game?.leadFox || "");
-  if (leadName && leadName === String(me?.name || "")) return true;
+  if (leadName && String(me?.name || "") && leadName === String(me.name)) return true;
 
-  const idx = Number.isFinite(Number(game?.leadIndex)) ? Number(game.leadIndex) : null;
-  if (idx === null) return false;
+  const idxRaw = Number.isFinite(Number(game?.leadIndex)) ? Number(game.leadIndex) : null;
+  if (idxRaw === null) return false;
 
-  const ordered = Array.isArray(players) ? [...players].sort((a, b) => (a?.joinOrder ?? 9999) - (b?.joinOrder ?? 9999)) : [];
-  return ordered[idx]?.id === me?.id;
+  const orderedAll = Array.isArray(players)
+    ? [...players].sort((a, b) => (a?.joinOrder ?? 9999) - (b?.joinOrder ?? 9999))
+    : [];
+
+  // ✅ match host.js: leadIndex is op “actieve yard spelers”
+  const orderedActive = orderedAll.filter(isInYard);
+  const base = orderedActive.length ? orderedActive : orderedAll;
+  if (!base.length) return false;
+
+  const idx = ((idxRaw % base.length) + base.length) % base.length;
+  return String(base[idx]?.id || "") === myId;
 }
 
 async function logBotDecision(db, gameId, payload) {
