@@ -2044,8 +2044,17 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
     const actionDiscard = Array.isArray(g.actionDiscard) ? [...g.actionDiscard] : [];
 
-    const play = await pickBestActionFromHand({ db, gameId, game: g, bot: p, players: latestPlayers || [] });
-    
+    // ✅ Max 1 Action Card per speler per ronde (zonder extra writes)
+const discNow = Array.isArray(g.actionDiscard) ? g.actionDiscard : [];
+const alreadyPlayedThisRound = discNow.some(
+  (x) => String(x?.by || "") === String(botId) && Number(x?.round || 0) === roundNum
+);
+
+const play = alreadyPlayedThisRound
+  ? null
+  : await pickBestActionFromHand({ db, gameId, game: g, bot: p, players: latestPlayers || [] });
+
+const passReason = alreadyPlayedThisRound ? "ALREADY_PLAYED_THIS_ROUND" : null;
 
     // =========================
     // PASS
