@@ -260,7 +260,102 @@ function renderLeadCommandCenterUI(round, players, logs) {
 
   const perPlayer = new Map();
   const targetRound = Number(round ?? 0);
+// ===== DEN INTEL (team scouts, per DEN) =====
+try {
+  const di = currentGame && currentGame.denIntel ? currentGame.denIntel : null;
+  if (di) {
+    const panel = document.createElement("div");
+    panel.className = "lead-denintel-panel";
 
+    const t = document.createElement("div");
+    t.className = "lead-denintel-title";
+    t.textContent = "DEN INTEL – Team Scouts (deze ronde)";
+    panel.appendChild(t);
+
+    const colors = ["RED", "BLUE", "GREEN", "YELLOW"];
+    const row = document.createElement("div");
+    row.className = "lead-denintel-row";
+
+    for (const c of colors) {
+      const entry = di[c] || di[c.toLowerCase()] || null;
+      const scoutsObj = entry?.scouts && typeof entry.scouts === "object" ? entry.scouts : null;
+
+      const list = [];
+      if (scoutsObj) {
+        for (const [posKey, v] of Object.entries(scoutsObj)) {
+          if (!v) continue;
+          if (Number(v.round ?? entry.round ?? 0) !== targetRound) continue;
+          const posN = Number(v.pos ?? posKey ?? null);
+          list.push({ ...v, pos: Number.isFinite(posN) ? posN : null, atMs: Number(v.atMs || 0) || 0 });
+        }
+      } else if (entry && typeof entry.eventId === "string" && Number(entry.round ?? 0) === targetRound) {
+        list.push(entry);
+      }
+      list.sort((a, b) => Number(b.atMs || 0) - Number(a.atMs || 0));
+
+      const col = document.createElement("div");
+      col.className = "lead-denintel-col";
+
+      const head = document.createElement("div");
+      head.className = "lead-denintel-colhead";
+      head.textContent = c;
+      col.appendChild(head);
+
+      if (!list.length) {
+        const empty = document.createElement("div");
+        empty.className = "lead-denintel-empty";
+        empty.textContent = "—";
+        col.appendChild(empty);
+      } else {
+        const grid = document.createElement("div");
+        grid.className = "lead-denintel-grid";
+
+        for (const s of list) {
+          const ev0 = getEventById(s.eventId);
+          if (!ev0) continue;
+
+          const item = document.createElement("div");
+          item.className = "lead-denintel-item";
+
+          if (ev0.imageFront) {
+            const img = document.createElement("img");
+            img.src = ev0.imageFront;
+            img.alt = ev0.title || "Event";
+            img.className = "lead-denintel-thumb";
+            item.appendChild(img);
+          }
+
+          const meta = document.createElement("div");
+          meta.className = "lead-denintel-meta";
+
+          const line1 = document.createElement("div");
+          line1.className = "lead-denintel-line1";
+          const posTxt = s.pos != null ? `#${s.pos}` : "";
+          line1.textContent = `${posTxt} ${ev0.title || ""}`.trim();
+
+          const line2 = document.createElement("div");
+          line2.className = "lead-denintel-line2";
+          const who = s.byName || s.playerName || "";
+          line2.textContent = who ? `door ${who}` : "";
+
+          meta.appendChild(line1);
+          meta.appendChild(line2);
+          item.appendChild(meta);
+
+          grid.appendChild(item);
+        }
+
+        col.appendChild(grid);
+      }
+
+      row.appendChild(col);
+    }
+
+    panel.appendChild(row);
+    leadCommandContent.appendChild(panel);
+  }
+} catch {}
+  
   for (const d of (logs || [])) {
     const rr = Number(d?.round ?? d?.turn ?? d?.roundNo ?? d?.roundIndex ?? 0);
     if (rr !== targetRound) continue;
@@ -890,6 +985,178 @@ function mergeRoundFlags(game) {
   };
   return { ...base, ...(game?.flagsRound || {}) };
 }
+// ===== DEN INTEL (team shared SCOUT) =====
+function normalizeDenKey(c) {
+  if (!c) return "";
+  return String(c).trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+}
+function getPlayerDenKey(p) {
+  return normalizeDenKey(p?.color || p?.denColor || p?.den || "");
+}
+function getDenIntelEntry(game, denKey) {
+  if (!game || !denKey) return null;
+  const di = game.denIntel || {};
+  return di[denKey] || di[denKey.toLowerCase()] || null;
+}
+
+// Returns newest-first list of team scouts for *your* den in the current round.
+// Supports both new map format (denIntel.RED.scouts["3"] = {...}) and legacy single object.
+function getTeamScoutsThisRound(game, player) {
+  const roundNow = Number(game?.round || 0);
+  const denKey = getPlayerDenKey(player);
+  const entry = getDenIntelEntry(game, denKey);
+  if (!entry) return [];
+
+  const out = [];
+
+  // NEW format: entry.scouts = { "1": {...}, "2": {...} }
+  const scoutsObj = entry.scouts && typeof entry.scouts === "object" ? entry.scouts : null;
+  if (scoutsObj) {
+    for (const [posKey, v] of Object.entries(scoutsObj)) {
+      if (!v) continue;
+      const rr = Number(v.round ?? entry.round ?? 0);
+      if (rr !== roundNow) continue;
+
+      const posN = Number(v.pos ?? posKey ?? null);
+      const pos = Number.isFinite(posN) ? posN : null;
+      const idx =
+        typeof v.index === "number"
+          ? v.index
+          : pos != null
+            ? pos - 1
+            : null;
+
+      out.push({
+        round: rr,
+        pos,
+        index: idx,
+        eventId: v.eventId || null,
+        by: v.by || v.playerId || null,
+        byName: v.byName || v.playerName || "",
+        atMs: Number(v.atMs || v.at || 0) || 0,
+      });
+    }
+  }
+
+  // Legacy format: entry = {round,index,eventId,by,...}
+  if (typeof entry.eventId === "string" && Number(entry.round ?? 0) === roundNow) {
+    const posN = Number(entry.pos ?? (typeof entry.index === "number" ? entry.index + 1 : NaN));
+    const pos = Number.isFinite(posN) ? posN : null;
+    const idx =
+      typeof entry.index === "number"
+        ? entry.index
+        : pos != null
+          ? pos - 1
+          : null;
+
+    out.push({
+      round: roundNow,
+      pos,
+      index: idx,
+      eventId: entry.eventId,
+      by: entry.by || entry.playerId || null,
+      byName: entry.byName || entry.playerName || "",
+      atMs: Number(entry.atMs || entry.at || 0) || 0,
+    });
+  }
+
+  // newest first
+  out.sort((a, b) => (b.atMs || 0) - (a.atMs || 0));
+  return out;
+}
+
+function renderEventCardInto(container, ev, opts = {}) {
+  if (!container) return;
+  container.innerHTML = "";
+
+  const label = String(opts.label || "");
+  const byLine = String(opts.byLine || "");
+
+  if (label) {
+    const labelDiv = document.createElement("div");
+    labelDiv.style.fontSize = "0.78rem";
+    labelDiv.style.opacity = "0.75";
+    labelDiv.style.marginBottom = "0.25rem";
+    labelDiv.textContent = label;
+    container.appendChild(labelDiv);
+  }
+
+  if (ev?.imageFront) {
+    const img = document.createElement("img");
+    img.src = ev.imageFront;
+    img.alt = ev?.title || "Event";
+    img.className = "vj-event-img";
+    container.appendChild(img);
+  }
+
+  const titleDiv = document.createElement("div");
+  titleDiv.style.fontWeight = "600";
+  titleDiv.textContent = ev?.title || "Event";
+  container.appendChild(titleDiv);
+
+  if (byLine) {
+    const byDiv = document.createElement("div");
+    byDiv.className = "vj-event-byline";
+    byDiv.textContent = byLine;
+    container.appendChild(byDiv);
+  }
+
+  const textDiv = document.createElement("div");
+  textDiv.style.fontSize = "0.85rem";
+  textDiv.style.opacity = "0.9";
+  textDiv.textContent = ev?.text || "";
+  container.appendChild(textDiv);
+}
+
+function renderTeamScoutsInto(container, scouts, roundNow) {
+  if (!container) return;
+  container.innerHTML = "";
+  if (!scouts || !scouts.length) return;
+
+  const head = document.createElement("div");
+  head.className = "vj-scout-head";
+  head.textContent = `TEAM SCOUTS (ronde ${roundNow})`;
+  container.appendChild(head);
+
+  const grid = document.createElement("div");
+  grid.className = "vj-scout-grid";
+
+  for (const s of scouts) {
+    const ev = getEventById(s.eventId);
+    if (!ev) continue;
+
+    const item = document.createElement("div");
+    item.className = "vj-scout-item";
+
+    if (ev.imageFront) {
+      const img = document.createElement("img");
+      img.src = ev.imageFront;
+      img.alt = ev.title || "Event";
+      img.className = "vj-scout-thumb";
+      item.appendChild(img);
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "vj-scout-meta";
+
+    const title = document.createElement("div");
+    title.className = "vj-scout-title";
+    const posTxt = s.pos != null ? `#${s.pos}` : (typeof s.index === "number" ? `#${s.index + 1}` : "");
+    title.textContent = `${posTxt} ${ev.title || ""}`.trim();
+
+    const sub = document.createElement("div");
+    sub.className = "vj-scout-sub";
+    sub.textContent = s.byName ? `door ${s.byName}` : "";
+
+    meta.appendChild(title);
+    meta.appendChild(sub);
+
+    item.appendChild(meta);
+    grid.appendChild(item);
+  }
+
+  container.appendChild(grid);
+}
 
 function isInYardLocal(p) {
   return p && p.inYard !== false && !p.dashed;
@@ -1458,18 +1725,34 @@ function renderGame() {
   if (eventScoutPreviewDiv) eventScoutPreviewDiv.textContent = "";
   if (specialFlagsDiv) specialFlagsDiv.innerHTML = "";
 
+  const roundNow = Number(g.round || 0);
+  const teamScouts = getTeamScoutsThisRound(g, currentPlayer);
+  const latestTeamScout = teamScouts.length ? teamScouts[0] : null;
+
   let ev = null;
   let label = "";
+  let byLine = "";
 
   if (g.phase === "REVEAL" && g.currentEventId) {
     ev = getEventById(g.currentEventId);
     label = "Actueel Event (REVEAL)";
+  } else if (latestTeamScout && latestTeamScout.eventId) {
+    ev = getEventById(latestTeamScout.eventId);
+    const posShow =
+      latestTeamScout.pos != null
+        ? latestTeamScout.pos
+        : typeof latestTeamScout.index === "number"
+          ? latestTeamScout.index + 1
+          : "?";
+    label = `TEAM SCOUT – positie ${posShow}`;
+    byLine = latestTeamScout.byName ? `gescout door ${latestTeamScout.byName}` : "";
   } else if (
     currentPlayer &&
     currentPlayer.scoutPeek &&
     typeof currentPlayer.scoutPeek.index === "number" &&
     currentPlayer.scoutPeek.round === (g.round || 0)
   ) {
+    // fallback (oude data): alleen jouw persoonlijke scoutPeek
     const peek = currentPlayer.scoutPeek;
     const track = g.eventTrack || [];
     const idx = peek.index;
@@ -1480,36 +1763,15 @@ function renderGame() {
   }
 
   if (ev && eventCurrentDiv) {
-    const labelDiv = document.createElement("div");
-    labelDiv.style.fontSize = "0.78rem";
-    labelDiv.style.opacity = "0.75";
-    labelDiv.style.marginBottom = "0.2rem";
-    labelDiv.textContent = label || "Event";
-
-    const titleDiv = document.createElement("div");
-    titleDiv.style.fontWeight = "600";
-    titleDiv.textContent = ev.title || "Event";
-
-    const textDiv = document.createElement("div");
-    textDiv.style.fontSize = "0.85rem";
-    textDiv.style.opacity = "0.9";
-    textDiv.textContent = ev.text || "";
-
-    eventCurrentDiv.appendChild(labelDiv);
-    eventCurrentDiv.appendChild(titleDiv);
-    eventCurrentDiv.appendChild(textDiv);
+    renderEventCardInto(eventCurrentDiv, ev, { label, byLine });
   } else if (eventCurrentDiv) {
-    eventCurrentDiv.textContent = "Nog geen Event Card onthuld (pas zichtbaar bij REVEAL of via SCOUT).";
+    eventCurrentDiv.textContent =
+      "Nog geen Event Card onthuld (pas zichtbaar bij REVEAL of via TEAM SCOUT).";
   }
 
-  if (eventScoutPreviewDiv && currentPlayer && currentPlayer.scoutPeek) {
-    const peek = currentPlayer.scoutPeek;
-    if (peek.round === (g.round || 0)) {
-      const evPeek = getEventById(peek.eventId);
-      if (evPeek) {
-        eventScoutPreviewDiv.textContent = `SCOUT preview (alleen voor jou): positie ${peek.index + 1} – ${evPeek.title}`;
-      }
-    }
+  if (eventScoutPreviewDiv) {
+    // toon alle team-scans van jouw den (deze ronde)
+    renderTeamScoutsInto(eventScoutPreviewDiv, teamScouts, roundNow);
   }
 
   if (specialFlagsDiv) {
@@ -2651,15 +2913,35 @@ async function performScout() {
 
   alert(`Je scout Event #${pos}: ` + (ev ? ev.title : eventId || "Onbekend event"));
 
+  const roundNow = Number(game.round || 0);
+  const denKey = getPlayerDenKey(player);
+  const shared = {
+    round: roundNow,
+    pos,
+    index: idx,
+    eventId,
+    by: playerId,
+    byName: player?.name || "",
+    atMs: Date.now(),
+  };
+
+  // ✅ 1) persoonlijke cache (handig als je alleen speelt / legacy)
+  // ✅ 2) team-shared intel op game doc (zelfde DEN)
+  const gameUpdate = { movedPlayerIds: arrayUnion(playerId) };
+  if (denKey) {
+    gameUpdate[`denIntel.${denKey}.scouts.${pos}`] = shared;
+    gameUpdate[`denIntel.${denKey}.last`] = shared;
+  }
+
   await Promise.all([
-    updateDoc(playerRef, { scoutPeek: { round: game.round || 0, index: idx, eventId } }),
-    updateDoc(gameRef, { movedPlayerIds: arrayUnion(playerId) }),
+    updateDoc(playerRef, { scoutPeek: shared }),
+    updateDoc(gameRef, gameUpdate),
   ]);
 
-  await logMoveAction(game, player, `MOVE_SCOUT_${pos}`, "MOVE", { pos, eventId });
+  await logMoveAction(game, player, `MOVE_SCOUT_${pos}`, "MOVE", { pos, eventId, denKey });
 
   setActionFeedback(
-    `SCOUT: je hebt event #${pos} bekeken. Deze ronde zie je deze kaart als persoonlijke preview.`
+    `SCOUT: event #${pos} is nu gedeeld met jouw Den (${denKey || "?"}).`
   );
 }
 
@@ -3670,6 +3952,23 @@ initAuth(async () => {
     if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
 
     renderGame();
+    
+   // ✅ update LCC ook bij game-updates (DEN INTEL verandert via SCOUT)
+try {
+  const lccOpen =
+    (typeof leadCommandModalOverlay !== "undefined") &&
+    leadCommandModalOverlay &&
+    !leadCommandModalOverlay.classList.contains("hidden");
+
+  if (lccOpen && typeof renderLeadCommandCenterUI === "function") {
+    renderLeadCommandCenterUI(
+      Number(newGame?.round ?? 0),
+      (typeof leadCCPlayers !== "undefined" && leadCCPlayers) ? leadCCPlayers : [],
+      (typeof leadCCLogs !== "undefined" && leadCCLogs) ? leadCCLogs : []
+    );
+  }
+} catch {}
+
   });
 
   onSnapshot(playerRef, (snap) => {
