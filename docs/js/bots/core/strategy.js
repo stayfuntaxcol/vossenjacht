@@ -388,11 +388,13 @@ function decisionUtility({ decision, game, me, players, flagsRound, peekIntel, c
   const den = normColor(me?.color || me?.den || me?.denColor);
   const immune = !!flags?.denImmune?.[den];
 
-  if (immune) {
-    if (decision === "LURK") utility += Number(c.denSignalStayBonus || 0);
-    if (decision === "DASH") utility -= Number(c.denSignalDashPenalty || 0);
-    if (decision === "BURROW") utility -= Number(c.denSignalBurrowPenalty || 0);
-  }
+ let denSignalBias = 0;
+
+if (immune) {
+  if (decision === "LURK") denSignalBias += Number(c.denSignalStayBonus || 0);
+  if (decision === "DASH") denSignalBias -= Number(c.denSignalDashPenalty || 0);
+  if (decision === "BURROW") denSignalBias -= Number(c.denSignalBurrowPenalty || 0);
+}
 
   const riskNow = eventDangerForChoice({ eventId: nextId, choice: decision, game, me, players, flagsRound });
   const caughtP = clamp(riskNow / 10, 0, 1);
