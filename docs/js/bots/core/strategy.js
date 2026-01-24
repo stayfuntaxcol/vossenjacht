@@ -1424,9 +1424,18 @@ if (hand.length <= Number(c.actionReserveMinHand || 1)) {
     };
   }
 
-  return {
+    return {
     best,
     baseline: { passUtility: passU, decision: baseDecision?.decision || null },
+
+    meta: {
+      stage: stage0.stage,
+      reserveTarget,
+      maxComboScore: comboMeta.maxComboScore,
+      requiredGain,   // let op: moet bestaan
+      passU,
+    },
+
     ranked: scored.slice(0, 12).map((x) => ({ play: x.play, utility: x.utilityAdj })),
     comboBest: bestCombo,
   };
