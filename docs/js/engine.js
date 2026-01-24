@@ -816,9 +816,9 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
       message: "Silent Alarm: geen effect (Lead Fox is niet meer in de Yard).",
     });
   }
-}
-    
+
   } else if (eventId === "PAINT_BOMB_NEST") {
+
     if (sack.length) {
       lootDeck.push(...sack);
       sack = [];
