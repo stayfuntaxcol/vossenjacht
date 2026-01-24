@@ -92,9 +92,6 @@ denSignalStayBonus: 3.0,        // alleen LURK
 denSignalDashPenalty: 16.0,     // DASH vrijwel onkiesbaar
 denSignalBurrowPenalty: 16.0,   // BURROW vrijwel onkiesbaar
 
-// Extra (aanrader): burrow ontmoedigen in dezelfde situatie
-denSignalBurrowPenalty: 5.0, // (nieuwe key) BURROW ook onkiesbaar als je al veilig bent
-
   // Hidden Nest coordination (anti-herding)
   hiddenNestCoordination: true,
   hiddenNestDashPenalty: 6.0,        // discourage DASH if not in slot
