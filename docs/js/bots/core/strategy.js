@@ -88,8 +88,9 @@ export const BOT_UTILITY_CFG = {
   dashersLikelyThreshold: 6.0,
 
  // Den Signal bonus (hard)
-denSignalStayBonus: 3.0,     // maakt LURK/BURROW extreem aantrekkelijk
-denSignalDashPenalty: 6.0,   // maakt DASH praktisch onkiesbaar
+denSignalStayBonus: 3.0,        // alleen LURK
+denSignalDashPenalty: 16.0,     // DASH vrijwel onkiesbaar
+denSignalBurrowPenalty: 16.0,   // BURROW vrijwel onkiesbaar
 
 // Extra (aanrader): burrow ontmoedigen in dezelfde situatie
 denSignalBurrowPenalty: 5.0, // (nieuwe key) BURROW ook onkiesbaar als je al veilig bent
@@ -382,20 +383,15 @@ function decisionUtility({ decision, game, me, players, flagsRound, peekIntel, c
   const events = safeArr(peekIntel?.events);
   const nextId = events[0] || nextEventId(game, 0);
    
-  // ✅ Den Signal: als het volgende event toch geneutraliseerd is, stimuleer blijven looten
+   // ✅ Den Signal: als jouw denImmune actief is, dan vrijwel nooit DASH/BURROW
   const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
   const den = normColor(me?.color || me?.den || me?.denColor);
-  const denImmune = !!flags?.denImmune?.[den];
+  const immune = !!flags?.denImmune?.[den];
 
-  const protectedNext =
-    denImmune &&
-    (String(nextId).startsWith("DEN_") || String(nextId) === "DOG_CHARGE" || String(nextId) === "SECOND_CHARGE");
-
-  let denSignalBias = 0;
-  if (protectedNext) {
-    denSignalBias = (decision === "DASH")
-      ? -Number(c.denSignalDashPenalty || 0)
-      :  Number(c.denSignalStayBonus || 0);
+  if (immune) {
+    if (decision === "LURK") utility += Number(c.denSignalStayBonus || 0);
+    if (decision === "DASH") utility -= Number(c.denSignalDashPenalty || 0);
+    if (decision === "BURROW") utility -= Number(c.denSignalBurrowPenalty || 0);
   }
 
   const riskNow = eventDangerForChoice({ eventId: nextId, choice: decision, game, me, players, flagsRound });
