@@ -1261,7 +1261,14 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
       flagsRound: flags,
       cfg: BOT_UTILITY_CFG,
     });
+    
+// ✅ Respecteer strategy: als best = PASS → echt PASS
+if (res?.best?.kind !== "PLAY") return null;
 
+const passU0 = Number(res?.baseline?.passUtility ?? 0);
+const req0 = Number(res?.meta?.requiredGain ?? 0);
+const minU0 = passU0 + req0;
+    
     if (game?.debugBots) {
       console.log(
         "[OPS]",
@@ -1274,9 +1281,13 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
     }
 
     const candidates = [];
-    if (res?.best?.kind === "PLAY") candidates.push(...(res.best.plays || []));
-    for (const r of (res?.ranked || [])) if (r?.play) candidates.push(r.play);
+candidates.push(...(res.best.plays || []));
 
+// ranked alleen als ze óók boven de drempel zitten (fallback als best play illegaal is)
+for (const r of (res?.ranked || [])) {
+  if (r?.play && Number(r.utility) >= minU0) candidates.push(r.play);
+}
+    
     const botPlayedSet = new Set(botPlayedActionIdsThisRound);
 
     const GLOBAL_SINGLETON_ACTIONS = new Set([
@@ -2047,11 +2058,14 @@ const alreadyPlayedThisRound = discNow.some(
   (x) => String(x?.by || "") === String(botId) && Number(x?.round || 0) === roundNum
 );
 
+let passReason = null;
+
 const play = alreadyPlayedThisRound
-  ? null
+  ? (passReason = "ALREADY_PLAYED_THIS_ROUND", null)
   : await pickBestActionFromHand({ db, gameId, game: g, bot: p, players: latestPlayers || [] });
 
-const passReason = alreadyPlayedThisRound ? "ALREADY_PLAYED_THIS_ROUND" : null;
+// als strategy PASS zegt (pickBestActionFromHand → null)
+if (!alreadyPlayedThisRound && !play) passReason = "LOW_VALUE_OR_HOLD_FOR_COMBO";
 
     // =========================
     // PASS
