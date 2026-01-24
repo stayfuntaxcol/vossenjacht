@@ -148,8 +148,17 @@ export async function applyPackTinker(gameId, playerId, giveName, takeUid) {
   const round = game.round || 0;
   const phase = game.phase || "ACTIONS";
 
+  const norm = (x) => String(x || "").trim().toLowerCase();
+  const cardNameOf = (c) => {
+    if (c == null) return "";
+    if (typeof c === "string") return c;
+    return String(c.name || c.cardName || c.id || "").trim();
+  };
+
   const hand = Array.isArray(player.hand) ? [...player.hand] : [];
-  const giveIdx = hand.indexOf(giveName);
+  const giveKey = norm(giveName);
+  const giveIdx = hand.findIndex((c) => norm(cardNameOf(c)) === giveKey);
+
   if (giveIdx < 0) {
     await addLog(gameId, {
       round,
@@ -164,6 +173,7 @@ export async function applyPackTinker(gameId, playerId, giveName, takeUid) {
 
   const discard = Array.isArray(game.actionDiscardPile) ? [...game.actionDiscardPile] : [];
   const takeIdx = discard.findIndex((it) => it && typeof it === "object" && it.uid === takeUid);
+
   if (takeIdx < 0) {
     await addLog(gameId, {
       round,
@@ -180,21 +190,18 @@ export async function applyPackTinker(gameId, playerId, giveName, takeUid) {
   const takeName = String(takeItem?.name || "").trim();
   if (!takeName) return;
 
-  // swap in hand
-  hand[giveIdx] = takeName;
+  // ✅ swap: gekozen discard kaart naar hand (als object, consistent met deck/hand)
+  hand[giveIdx] = { name: takeName };
 
-  // remove taken from discard
-  discard.splice(takeIdx, 1);
-
-  // put given into discard as new instance
+  // ✅ swap: gekozen hand kaart naar discard (houd uid stabiel, vervang alleen de inhoud)
   const at = Date.now();
-  discard.push({
-    uid: `${at}_${Math.random().toString(16).slice(2)}`,
-    name: giveName,
+  discard[takeIdx] = {
+    ...takeItem,
+    name: String(giveName || "").trim(),
     by: playerId,
     round: Number(round),
     at,
-  });
+  };
 
   await Promise.all([
     updateDoc(playerRef, { hand }),
