@@ -87,6 +87,10 @@ export const BOT_UTILITY_CFG = {
   // Share modeling
   dashersLikelyThreshold: 6.0,
 
+  // Den Signal bonus
+  denSignalStayBonus: 1.2,   // bonus op LURK/BURROW als Den Signal het volgende event neutraliseert
+  denSignalDashPenalty: 1.0, // straf op DASH in diezelfde situatie
+
   // Hidden Nest coordination (anti-herding)
   hiddenNestCoordination: true,
   hiddenNestDashPenalty: 4.0,        // discourage DASH if not in slot
@@ -374,6 +378,22 @@ function decisionUtility({ decision, game, me, players, flagsRound, peekIntel, c
 
   const events = safeArr(peekIntel?.events);
   const nextId = events[0] || nextEventId(game, 0);
+   
+  // ✅ Den Signal: als het volgende event toch geneutraliseerd is, stimuleer blijven looten
+  const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
+  const den = normColor(me?.color || me?.den || me?.denColor);
+  const denImmune = !!flags?.denImmune?.[den];
+
+  const protectedNext =
+    denImmune &&
+    (String(nextId).startsWith("DEN_") || String(nextId) === "DOG_CHARGE" || String(nextId) === "SECOND_CHARGE");
+
+  let denSignalBias = 0;
+  if (protectedNext) {
+    denSignalBias = (decision === "DASH")
+      ? -Number(c.denSignalDashPenalty || 0)
+      :  Number(c.denSignalStayBonus || 0);
+  }
 
   const riskNow = eventDangerForChoice({ eventId: nextId, choice: decision, game, me, players, flagsRound });
   const caughtP = clamp(riskNow / 10, 0, 1);
@@ -445,7 +465,7 @@ if (c.decisionUseFutureEvents && decision !== "DASH") {
       ? Math.max(0, dashPush - Number(c.dashPushThreshold || 6.5)) * 0.6
       : 0;
 
-  let utility = lootTerm - riskTerm - sharePenalty - burrowCost + roosterBias + dashPushBonus;
+  let utility = lootTerm - riskTerm - sharePenalty - burrowCost + roosterBias + dashPushBonus + denSignalBias;
 
   // Hidden Nest coordination: discourage DASH if not in deterministic slot
   if (
@@ -470,7 +490,7 @@ export function evaluateDecision({ game, me, players, flagsRound = null, cfg = n
   const intel = peekIntel || getPeekIntel({ game, me, flagsRound: flags, lookaheadN: cfg0.lookaheadN });
 
   const predictedDashers = estimateLikelyDashers({ game, players, me, cfg: cfg0 });
-  const burrowUsed = me?.burrowUsed === true;
+  const burrowUsed = (me?.burrowUsedThisRaid === true) || (me?.burrowUsed === true);
 
   const options = [
     { decision: "DASH" },
@@ -505,9 +525,19 @@ export function evaluateDecision({ game, me, players, flagsRound = null, cfg = n
   const dashRisk = dash?.riskNow ?? 0;
   const burrowRisk = burrow?.riskNow ?? 0;
 
-  // HARD RULE: anti-suicide lurk
-  let forced = null;
-  if (stayRisk >= cfg0.panicStayRisk && dashRisk + cfg0.suicideMargin <= stayRisk) forced = "DASH";
+  // HARD RULE: anti-suicide lurk (panic) — maar BURROW eerst als dat kan
+let forced = null;
+
+if (stayRisk >= cfg0.panicStayRisk) {
+  const burrowOk = !burrowUsed && burrow && !burrow.illegal;
+
+  // ✅ liever BURROW dan DASH als het ongeveer even veilig is
+  if (burrowOk && (burrowRisk <= dashRisk + 0.8)) {
+    forced = "BURROW";
+  } else if (dashRisk + cfg0.suicideMargin <= stayRisk) {
+    forced = "DASH";
+  }
+}
 
 // ✅ BURROW-FIRST wanneer DASH alleen "vluchten" is (niet bankdruk) en BURROW de veilige stay-optie is
 const events0 = safeArr(intel?.events);
@@ -517,6 +547,7 @@ const dashPush0 = Number(dash?.dashPush ?? dashPushFromCarry(sumLootPoints(me), 
 if (
   !forced &&
   !burrowUsed &&
+  burrow && !burrow.illegal &&
   String(nextId0) !== "HIDDEN_NEST" &&                 // hidden nest mag DASH lonen
   dashPush0 < Number(cfg0.dashPushThreshold || 6.5) && // niet “ik wil cashen”
   (stayRisk - burrowRisk) >= 1.0 &&                    // BURROW helpt echt t.o.v. blijven
@@ -524,18 +555,18 @@ if (
 ) {
   forced = "BURROW";
 }
-  
-  // BURROW gating: only if it really helps
-  if (!forced && !burrowUsed && burrow && !burrow.illegal) {
-    const bestNonBurrow = [dash, lurk].slice().sort((a, b) => b.utility - a.utility)[0];
-    const safetyGain = (bestNonBurrow?.riskNow ?? 0) - (burrowRisk ?? 0);
 
-    const ok =
-      safetyGain >= cfg0.burrowMinSafetyGain &&
-      (burrow.utility ?? -1e9) >= (bestNonBurrow?.utility ?? -1e9) - 1.5;
+// BURROW gating: only if it really helps
+if (!forced && !burrowUsed && burrow && !burrow.illegal) {
+  const bestNonBurrow = [dash, lurk].slice().sort((a, b) => b.utility - a.utility)[0];
+  const safetyGain = (bestNonBurrow?.riskNow ?? 0) - (burrowRisk ?? 0);
 
-    if (!ok) burrow.utility -= 3.5;
-  }
+  const ok =
+    safetyGain >= cfg0.burrowMinSafetyGain &&
+    (burrow.utility ?? -1e9) >= (bestNonBurrow?.utility ?? -1e9) - 1.5;
+
+  if (!ok) burrow.utility -= 3.5;
+}
 
   // pick best
   let best = scored.slice().sort((a, b) => b.utility - a.utility)[0];
