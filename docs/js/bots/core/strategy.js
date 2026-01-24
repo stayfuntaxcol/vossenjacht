@@ -55,6 +55,22 @@ export const BOT_UTILITY_CFG = {
   opsSpendCostBase: 0.55,          // softer opportunity cost per spent card
   opsSpendCostEarlyMult: 1.05,
   opsSpendCostLateMult: 0.8,
+  
+    // OPS "card has value": alleen spelen bij significant voordeel
+  opsPlayTaxBase: 1.1,              // vaste utility-kost per gespeelde kaart
+  opsPlayTaxEarlyMult: 1.35,        // early: harder sparen
+  opsPlayTaxLateMult: 0.85,         // late: makkelijker uitgeven
+
+  opsMinAdvantage: 2.0,             // minimaal voordeel boven PASS om überhaupt te spelen
+  opsMinAdvantageEarlyBonus: 0.6,   // early: nog strenger
+
+  // combo planning: key pieces bewaren, maar "setup" plays toestaan
+  opsComboHoldPenaltyScale: 0.18,   // penalty ~ scale * comboKeyScore
+  opsComboSetupBonusScale: 0.10,    // bonus ~ scale * best outgoing combo score
+  opsComboSetupEarlyMult: 0.55,
+  opsComboSetupMidMult: 0.80,
+  opsComboSetupLateMult: 1.00,
+
 
   opsReserveMissPenalty: 0.55,     // softer penalty if you dip under reserveTarget
   opsSoloBreakComboPenalty: 0.6,   // softer penalty for spending a key solo
@@ -810,29 +826,39 @@ function handActionIds(hand) {
 function computeComboMeta(actionIds, ctxCombo, cfg) {
   const c = cfg || DEFAULTS;
   const ids = safeArr(actionIds).map((x) => String(x || "")).filter(Boolean);
-  const keyScoreById = {};
+
+  const keyScoreById = {};   // beste symmetrische score (A<->B)
+  const outBestById = {};    // beste A -> B
+  const inBestById = {};     // beste B -> A (incoming voor A)
   let maxComboScore = 0;
 
   for (let i = 0; i < ids.length; i++) {
     const a = ids[i];
-    let best = 0;
+    let bestSym = 0;
+    let bestOut = 0;
+    let bestIn = 0;
+
     for (let j = 0; j < ids.length; j++) {
       if (i === j) continue;
       const b = ids[j];
 
-      const s = Math.max(
-        Number(comboScore(a, b, ctxCombo) || 0),
-        Number(comboScore(b, a, ctxCombo) || 0),
-      );
+      const out = Number(comboScore(a, b, ctxCombo) || 0);
+      const inn = Number(comboScore(b, a, ctxCombo) || 0);
+      const sym = Math.max(out, inn);
 
-      if (s > best) best = s;
-      if (s > maxComboScore) maxComboScore = s;
+      if (out > bestOut) bestOut = out;
+      if (inn > bestIn) bestIn = inn;
+      if (sym > bestSym) bestSym = sym;
+      if (sym > maxComboScore) maxComboScore = sym;
     }
-    keyScoreById[a] = best;
+
+    keyScoreById[a] = bestSym;
+    outBestById[a] = bestOut;
+    inBestById[a] = bestIn;
   }
 
   const highCombo = ids.length >= 2 && maxComboScore >= Number(c.opsHighComboScore || 8);
-  return { maxComboScore, keyScoreById, highCombo };
+  return { maxComboScore, keyScoreById, outBestById, inBestById, highCombo };
 }
 
 // If rulesIndex marks these “unimplemented” but botRunner DOES apply them, treat as implemented here.
@@ -1217,29 +1243,61 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
     avgActionDeckValue(game, { game, me, players, flags, intel, carry: carry0, dashPush: dashPush0 }, c) || 0.8
   );
 
-  const minGain =
+    const minGainSoft =
     Number(c.actionPlayMinGain || 1.2) +
     (stage0.stage === "early" ? Number(c.actionPlayMinGainEarlyBonus || 0.8) : 0) +
     (comboMeta.highCombo ? 0.4 : 0);
 
-  const spendMult = stage0.spendMult;
+  const minGainHard =
+    Number(c.opsMinAdvantage || 0) +
+    (stage0.stage === "early" ? Number(c.opsMinAdvantageEarlyBonus || 0) : 0);
 
-  const spendCost = (nCards, primaryActionId = null, isCombo = false) => {
+  const requiredGain = Math.max(minGainSoft, minGainHard);
+
+  const spendMult = stage0.spendMult;
+    const playTaxMult =
+    stage0.stage === "early" ? Number(c.opsPlayTaxEarlyMult || 1.2) :
+    stage0.stage === "late" ? Number(c.opsPlayTaxLateMult || 0.8) :
+    1.0;
+
+   const spendCost = (nCards, primaryActionId = null, isCombo = false) => {
     const spent = Math.max(0, Number(nCards || 1));
+
+    // opportunity cost (bestaand)
     const base = Number(c.opsSpendCostBase || 0) * expFutureCard * spendMult * spent;
 
+    // vaste "spelen kost iets" tax
+    const tax = Number(c.opsPlayTaxBase || 0) * playTaxMult * spent;
+
+    // reserve onder target = penalty
     const post = Math.max(0, hand.length - spent);
     const miss = Math.max(0, reserveTarget - post);
     const reservePenalty = miss * Number(c.opsReserveMissPenalty || 0);
 
+    // combo piece bewaren: penalty schaalt mee met combo score (niet alleen hard drempel)
+    const comboKey = (!isCombo && primaryActionId)
+      ? (comboMeta.keyScoreById?.[String(primaryActionId)] || 0)
+      : 0;
+
     const soloComboPenalty =
-      !isCombo &&
-      primaryActionId &&
-      (comboMeta.keyScoreById?.[String(primaryActionId)] || 0) >= Number(c.opsHighComboScore || 8)
-        ? Number(c.opsSoloBreakComboPenalty || 0)
+      (!isCombo && comboKey > 0)
+        ? Number(c.opsComboHoldPenaltyScale || 0) * comboKey
         : 0;
 
-    return base + reservePenalty + soloComboPenalty;
+    return base + tax + reservePenalty + soloComboPenalty;
+  };
+    
+    const setupStageMult =
+    stage0.stage === "early" ? Number(c.opsComboSetupEarlyMult || 0.6) :
+    stage0.stage === "late" ? Number(c.opsComboSetupLateMult || 1.0) :
+    Number(c.opsComboSetupMidMult || 0.85);
+
+  const setupBonusForPlay = (play) => {
+    const id = String(play?.actionId || "");
+    if (!id || hand.length < 2) return 0;
+    const out = Number(comboMeta.outBestById?.[id] || 0);
+    if (!out) return 0;
+    return Number(c.opsComboSetupBonusScale || 0) * out * setupStageMult;
   };
 
   // build candidate plays
@@ -1275,11 +1333,17 @@ if (hand.length <= Number(c.actionReserveMinHand || 1)) {
 
     // score singles (adjusted with spend-cost so bots don't dump cards early)
   const scoredRaw = plays.map((play) => scoreOpsPlay({ play, game, me, players, flagsRound: flags, cfg: c }));
-  const scored = scoredRaw
-    .map((x) => ({
-      ...x,
-      utilityAdj: Number(x.utility || 0) - spendCost(1, String(x.play?.actionId || ""), false),
-    }))
+    const scored = scoredRaw
+    .map((x) => {
+      const setupBonus = setupBonusForPlay(x.play);
+      const cost = spendCost(1, String(x.play?.actionId || ""), false);
+      return {
+        ...x,
+        setupBonus,
+        spendCost: cost,
+        utilityAdj: Number(x.utility || 0) + setupBonus - cost,
+      };
+    })
     .sort((a, b) => b.utilityAdj - a.utilityAdj);
 
   const bestSingle = scored[0];
@@ -1338,7 +1402,7 @@ if (hand.length <= Number(c.actionReserveMinHand || 1)) {
   // choose PASS vs single vs combo (use adjusted utilities)
   let best = { kind: "PASS", utility: passU, reason: "default" };
 
-  if (bestSingle && bestSingle.utilityAdj >= passU + minGain) {
+  if (bestSingle && bestSingle.utilityAdj >= passU + requiredGain) {
     best = {
       kind: "PLAY",
       plays: [bestSingle.play],
@@ -1350,7 +1414,7 @@ if (hand.length <= Number(c.actionReserveMinHand || 1)) {
   if (
     bestCombo &&
     bestCombo.utility >= (bestSingle?.utilityAdj ?? -1e9) + Number(c.comboMinGain || 0) &&
-    bestCombo.utility >= passU + minGain
+    bestCombo.utility >= passU + requiredGain
   ) {
     best = {
       kind: "PLAY",
