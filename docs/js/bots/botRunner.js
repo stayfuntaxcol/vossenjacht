@@ -1305,12 +1305,21 @@ for (const r of (res?.ranked || [])) {
       if (GLOBAL_SINGLETON_ACTIONS.has(id) && usedIds.includes(id)) continue;
 
       // legality checks
-      if (id === "PACK_TINKER" || id === "KICK_UP_DUST") {
-        if (lockEventsActive) continue;
-        if (!Array.isArray(game?.eventTrack)) continue;
-        if (!Number.isFinite(Number(game?.eventIndex))) continue;
-        if (Number(game.eventIndex) >= game.eventTrack.length - 1) continue;
-      }
+if (id === "KICK_UP_DUST") {
+  if (lockEventsActive) continue;
+  if (!Array.isArray(game?.eventTrack)) continue;
+  if (!Number.isFinite(Number(game?.eventIndex))) continue;
+  if (Number(game.eventIndex) >= game.eventTrack.length - 1) continue;
+}
+
+if (id === "PACK_TINKER") {
+  // Pack Tinker = hand ↔ discard pile (niet eventTrack)
+  const pile = Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : [];
+  const hasPile = pile.some((x) => x && typeof x === "object" && x.uid && x.name);
+  if (!hasPile) continue;
+  if ((handNames?.length || 0) < 2) continue; // je moet iets anders hebben om te ruilen
+}
+
       if (id === "HOLD_STILL" && opsLockedActive) continue;
 
       // IMPORTANT: choose a token that actually exists in hand
@@ -1396,6 +1405,20 @@ function removeOneCard(hand, name) {
   const idx = hand.findIndex((c) => String(c?.name || c).trim() === n);
   if (idx >= 0) hand.splice(idx, 1);
   return idx >= 0;
+}
+
+function discardPileHasCard(game, name) {
+  const n = String(name || "").trim();
+  const pile = Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : [];
+  return pile.some((x) => x && typeof x === "object" && x.uid && String(x.name || "").trim() === n);
+}
+
+function canBotPackTinkerNow(game, bot) {
+  const hand = Array.isArray(bot?.hand) ? bot.hand : [];
+  const hasOther = hand.some((c) => String(c?.name || c).trim() !== "Pack Tinker");
+  const pile = Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : [];
+  const hasPile = pile.some((x) => x && typeof x === "object" && x.uid && x.name);
+  return hasOther && hasPile;
 }
 
 function pickRichestTarget(players, excludeId) {
@@ -1611,9 +1634,8 @@ if (share && denColor) {
 
     // Defense readiness: can we survive a bad obstacle without needing to DASH?
     const hasHardDefense = hasCard(hand, "Den Signal");
-    const hasTrackDefense =
-      !flags.lockEvents &&
-      (hasCard(hand, "Kick Up Dust") || hasCard(hand, "Pack Tinker"));
+    const hasTrackDefense = !flags.lockEvents && hasCard(hand, "Kick Up Dust");
+
     const defenseReady = immune || hasHardDefense || hasTrackDefense;
 
     // If we *know* Gate Toll is next and we have no loot -> SNATCH to avoid forced capture.
@@ -1937,14 +1959,19 @@ function chooseBotOpsPlay({ game, bot, players }) {
   // -------------------------
   // 2) Danger management: push danger away (track-manip / mask swap)
   // -------------------------
-  if (dangerSoonDogDen && !immune && !flags.lockEvents) {
-    if (hasCard(hand, "Kick Up Dust")) return { name: "Kick Up Dust" };
-    if (hasCard(hand, "Pack Tinker")) return { name: "Pack Tinker" };
-    if (hasCard(hand, "Mask Swap")) {
-      const targetId = pickRichestTarget(players, p.id);
-      if (targetId) return { name: "Mask Swap", targetId };
-    }
+  if (dangerSoonDogDen && !immune) {
+  if (!flags.lockEvents && hasCard(hand, "Kick Up Dust")) return { name: "Kick Up Dust" };
+
+  // Pack Tinker alleen als er écht iets bruikbaars in de discard ligt (bv Den Signal)
+  if (hasCard(hand, "Pack Tinker") && canBotPackTinkerNow(g, p) && discardPileHasCard(g, "Den Signal")) {
+    return { name: "Pack Tinker" };
   }
+
+  if (hasCard(hand, "Mask Swap")) {
+    const targetId = pickRichestTarget(players, p.id);
+    if (targetId) return { name: "Mask Swap", targetId };
+  }
+}
 
   // -------------------------
   // 3) Tactical: Hold Still op rijkste target
@@ -2051,6 +2078,7 @@ async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
     const hand = Array.isArray(p.hand) ? [...p.hand] : [];
     const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
     const actionDiscard = Array.isArray(g.actionDiscard) ? [...g.actionDiscard] : [];
+    const actionDiscardPile = Array.isArray(g.actionDiscardPile) ? [...g.actionDiscardPile] : [];
 
     // ✅ Max 1 Action Card per speler per ronde (zonder extra writes)
 const discNow = Array.isArray(g.actionDiscard) ? g.actionDiscard : [];
@@ -2161,10 +2189,15 @@ if (!removed) {
     const effName = getActionDefByName(cardName)?.name || cardName;
 
     // discard (face-up): kaart gaat direct op de Discard Pile
-    const nowMs = Date.now();
-    actionDiscard.push({ name: cardName, by: botId, round: roundNum, at: nowMs });
-    // keep discard pile bounded
-    if (actionDiscard.length > 30) actionDiscard.splice(0, actionDiscard.length - 30);
+const nowMs = Date.now();
+const playedUid = `${nowMs}_${Math.random().toString(16).slice(2)}`;
+
+actionDiscard.push({ name: cardName, by: botId, round: roundNum, at: nowMs });
+if (actionDiscard.length > 30) actionDiscard.splice(0, actionDiscard.length - 30);
+
+// ✅ echte aflegstapel met uid (voor Pack Tinker)
+actionDiscardPile.push({ uid: playedUid, name: cardName, by: botId, round: roundNum, at: nowMs });
+if (actionDiscardPile.length > 80) actionDiscardPile.splice(0, actionDiscardPile.length - 80);
 
 const playedId = String(play?.actionId || "");
 const dIds = Array.isArray(g?.discardThisRoundActionIds) ? [...g.discardThisRoundActionIds] : [];
@@ -2209,19 +2242,63 @@ const extraGameUpdates = {
     }
 
     if (effName === "Pack Tinker") {
-      if (!flagsRound.lockEvents) {
-        const pair = pickPackTinkerSwap(g);
-        if (pair) {
-          const [i1, i2] = pair;
-          const trackNow = Array.isArray(g.eventTrack) ? [...g.eventTrack] : [];
-          if (trackNow[i1] && trackNow[i2]) {
-            [trackNow[i1], trackNow[i2]] = [trackNow[i2], trackNow[i1]];
-            extraGameUpdates.eventTrack = trackNow;
-            extraGameUpdates.lastPackTinker = { by: botId, i1, i2, round: roundNum, at: Date.now() };
-          }
-        }
-      }
+  // ✅ Nieuwe regels: wissel 1 kaart uit hand met 1 kaart uit actionDiscardPile
+  const pileCandidates = actionDiscardPile
+    .filter((x) => x && typeof x === "object" && x.uid && x.name && x.uid !== playedUid);
+
+  // je moet een andere kaart hebben dan Pack Tinker (die is al verwijderd)
+  const handNamesNow = hand.map((c) => String(c?.name || c || "").trim()).filter(Boolean);
+
+  if (pileCandidates.length && handNamesNow.length) {
+    const WANT = [
+      "Den Signal",
+      "Hold Still",
+      "No-Go Zone",
+      "Mask Swap",
+      "Scatter!",
+      "Molting Mask",
+      "Kick Up Dust",
+      "Alpha Call",
+      "Pack Tinker",
+      "Nose for Trouble",
+      "Scent Check",
+      "Follow the Tail",
+      "Burrow Beacon",
+    ];
+
+    const score = (nm) => {
+      const n = String(nm || "").trim();
+      if (flagsRound.lockEvents && n === "Kick Up Dust") return 999; // onbruikbaar nu
+      const i = WANT.indexOf(n);
+      return i >= 0 ? i : 500;
+    };
+
+    // neem beste uit pile
+    pileCandidates.sort((a, b) => score(a.name) - score(b.name));
+    const takeItem = pileCandidates[0];
+    const takeUid = takeItem.uid;
+    const takeName = String(takeItem.name).trim();
+
+    // geef slechtste uit hand
+    const giveName = handNamesNow.slice().sort((a, b) => score(b) - score(a))[0];
+
+    const giveIdx = hand.findIndex((c) => String(c?.name || c || "").trim() === giveName);
+    const takeIdx = actionDiscardPile.findIndex((x) => x && x.uid === takeUid);
+
+    if (giveIdx >= 0 && takeIdx >= 0 && takeName) {
+      hand[giveIdx] = { name: takeName };
+      actionDiscardPile[takeIdx] = {
+        ...actionDiscardPile[takeIdx],
+        name: giveName,
+        by: botId,
+        round: roundNum,
+        at: nowMs,
+      };
+
+      extraGameUpdates.lastPackTinker = { by: botId, giveName, takeName, takeUid, round: roundNum, at: nowMs };
     }
+  }
+}
 
     // Alpha Call: effect is only lead change (no draw in OPS)
 
@@ -2301,20 +2378,20 @@ const extraGameUpdates = {
     // commit
     tx.update(pRef, { hand, color: p.color, den: p.color });
     tx.update(gRef, {
-      actionDeck,
-      actionDiscard,
-      flagsRound,
-      opsTurnIndex: nextIdx,
-      opsConsecutivePasses: 0, // reset on play
-      ...extraGameUpdates,
-    });
+  actionDeck,
+  actionDiscard,
+  actionDiscardPile,
+  flagsRound,
+  opsTurnIndex: nextIdx,
+  opsConsecutivePasses: 0,
+  ...extraGameUpdates,
+});
 
     let msg = `BOT speelt Action Card: ${cardName}`;
     if (cardName === "Pack Tinker" && extraGameUpdates.lastPackTinker) {
-      msg = `BOT speelt Pack Tinker (swap ${extraGameUpdates.lastPackTinker.i1 + 1} ↔ ${
-        extraGameUpdates.lastPackTinker.i2 + 1
-      })`;
-    }
+  msg = `BOT speelt Pack Tinker (swap "${extraGameUpdates.lastPackTinker.giveName}" ↔ "${extraGameUpdates.lastPackTinker.takeName}")`;
+}
+
     if (cardName === "Kick Up Dust") {
       msg = flagsRound.lockEvents
         ? "BOT speelt Kick Up Dust (geen effect: Burrow Beacon actief)"
