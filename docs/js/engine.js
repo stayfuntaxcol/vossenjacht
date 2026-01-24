@@ -898,26 +898,8 @@ export async function resolveAfterReveal(gameId) {
     return;
   }
 
-  // Lead fox doorgeven (simpele rotatie)
-  const ordered = [...players].sort((a, b) => {
-    const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
-    const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
-    return ao - bo;
-  });
-
-  let newLeadIndex = typeof game.leadIndex === "number" ? game.leadIndex : 0;
-
-  if (ordered.length) {
-    newLeadIndex = (newLeadIndex + 1 + leadAdvanceBonus) % ordered.length;
-
-    const newLead = ordered[newLeadIndex];
-    await addLog(gameId, {
-      round,
-      phase: "REVEAL",
-      kind: "SYSTEM",
-      message: `Lead Fox schuift door naar ${newLead.name || "een vos"}.`,
-    });
-  }
+  // Lead fox doorgeven (simpele rotatie)// Lead Fox rotatie gebeurt in host.js (Start Round). Hier dus NIET doorschuiven.
+let newLeadIndex = typeof game.leadIndex === "number" ? game.leadIndex : 0;
 
   // decisions resetten voor volgende ronde
   for (const p of players) {
