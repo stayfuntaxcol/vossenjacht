@@ -98,7 +98,7 @@ denSignalBurrowPenalty: 5.0, // (nieuwe key) BURROW ook onkiesbaar als je al vei
   // Hidden Nest coordination (anti-herding)
   hiddenNestCoordination: true,
   hiddenNestDashPenalty: 6.0,        // discourage DASH if not in slot
-  hiddenNestBurrowPenalty: 8.0,      // discourage BURROW on Hidden Nest
+  hiddenNestBurrowPenalty: 16.0,      // discourage BURROW on Hidden Nest
 };
 
 const DEFAULTS = BOT_UTILITY_CFG;
