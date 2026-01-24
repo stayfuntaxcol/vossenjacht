@@ -2558,23 +2558,47 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       decision = rec?.decision || "LURK";
     }
 
-    // ✅ BURROW-FIRST PANIC RULE
-    // Als LURK gevaarlijk wordt (vluchten nodig), dan eerst BURROW (buut-vrij),
-    // behalve bij Hidden Nest: daar mag DASH lonen.
-    const nextEvent0 = nextEventId(g, 0);
-    const panicStayRisk = Number(BOT_UTILITY_CFG?.panicStayRisk ?? 7.0);
+ // ✅ BURROW / ANTI-EARLY-DASH RULESET
+const nextEvent0 = nextEventId(g, 0);
+const isHiddenNest = String(nextEvent0) === "HIDDEN_NEST";
 
-    // lurk-risk: strategy meta of dangerVec.lurk
-    const lurkRisk = Number(
-      dec?.meta?.stayRisk ??
-      rec?.dangerVec?.lurk ??
-      metricsNow?.dangerVec?.lurk ??
-      0
-    );
+const roosterSeenNow = Number.isFinite(Number(g?.roosterSeen))
+  ? Number(g.roosterSeen)
+  : countRevealedRoosters(g);
 
-    if (String(nextEvent0) !== "HIDDEN_NEST" && !burrowUsed && lurkRisk >= panicStayRisk) {
-      decision = "BURROW";
-    }
+// 3e Rooster Crow = volgende is ROOSTER_CROW terwijl er al 2 gezien zijn
+const isThirdCrowNext = String(nextEvent0) === "ROOSTER_CROW" && roosterSeenNow >= 2;
+
+const panicStayRisk = Number(BOT_UTILITY_CFG?.panicStayRisk ?? 7.0);
+
+// lurk-risk: strategy meta of dangerVec.lurk
+const lurkRisk = Number(
+  dec?.meta?.stayRisk ??
+  rec?.dangerVec?.lurk ??
+  metricsNow?.dangerVec?.lurk ??
+  0
+);
+
+// carryValue: zodra dit >0 kan dashPush al “aan” gaan
+const carryValueNow = Number(metricsNow?.carryValue ?? 0);
+
+// 1) Als “blijven” gevaarlijk is: eerst BURROW (tenzij Hidden Nest / 3e crow)
+if (!isHiddenNest && !isThirdCrowNext && !burrowUsed && lurkRisk >= panicStayRisk) {
+  decision = "BURROW";
+}
+
+// 2) Stop EARLY DASH (0–1 loot) als er geen echte paniek is
+//    (tenzij Hidden Nest / 3e crow)
+const earlyDashCarryLimit = Number(BOT_UTILITY_CFG?.earlyDashCarryLimit ?? 1);
+
+if (!isHiddenNest && !isThirdCrowNext && decision === "DASH") {
+  const noRealPanic = lurkRisk < panicStayRisk;
+  const tooEarly = carryValueNow <= earlyDashCarryLimit;
+
+  if (noRealPanic && tooEarly) {
+    decision = "LURK";
+  }
+}
 
     // ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
