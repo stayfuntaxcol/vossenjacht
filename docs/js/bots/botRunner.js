@@ -363,9 +363,6 @@ const nextFacts = nextId ? getEventFacts(nextId, {
 
   const dangerNext = peakDanger(nextFacts);
 
-  // --- rooster timing ---
-  const revealedRoosters = countRevealedRoosters(game);
-
   // --- follow-tail hints (v1 simple) ---
   const ps = Array.isArray(players) ? players : [];
   const candidates = ps.filter((pl) => pl?.id && pl.id !== bot?.id && isInYard(pl));
