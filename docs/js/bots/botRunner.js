@@ -2364,7 +2364,7 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
     const isLead = computeIsLeadForPlayer(g, p, freshPlayers);
 
     // ✅ burrowUsed uit Firestore (werkt met burrowUsed of burrowUsedThisRaid)
-    const burrowUsed = !!(p?.burrowUsedThisRaid ?? p?.burrowUsed);
+    const burrowUsed = (p?.burrowUsedThisRaid === true) || (p?.burrowUsed === true);
 
     // ✅ strategy + heuristics verwachten me.burrowUsed
     const meForDecision = {
@@ -2475,11 +2475,10 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
     const update = { decision };
 
     // ✅ schrijf burrowUsed weg als BURROW gekozen is (jouw huidige Firestore veld)
-    if (decision === "BURROW" && !burrowUsed) {
-      update.burrowUsed = true;
-      // (optioneel voor later)
-      // update.burrowUsedThisRaid = true;
-    }
+   if (decision === "BURROW") {
+  update.burrowUsedThisRaid = true;  // nieuw/canoniek
+  update.burrowUsed = true;          // legacy compat
+}
 
     tx.update(pRef, update);
 
@@ -2703,6 +2702,7 @@ export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLU
     den: color,
     inYard: true,
     dashed: false,
+    burrowUsed: false,
     burrowUsedThisRaid: false,
     decision: null,
     hand,
