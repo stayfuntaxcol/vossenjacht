@@ -493,6 +493,22 @@ export function evaluateDecision({ game, me, players, flagsRound = null, cfg = n
   let forced = null;
   if (stayRisk >= cfg0.panicStayRisk && dashRisk + cfg0.suicideMargin <= stayRisk) forced = "DASH";
 
+// ✅ BURROW-FIRST wanneer DASH alleen "vluchten" is (niet bankdruk) en BURROW de veilige stay-optie is
+const events0 = safeArr(intel?.events);
+const nextId0 = events0[0] || nextEventId(game, 0);
+const dashPush0 = Number(dash?.dashPush ?? dashPushFromCarry(sumLootPoints(me), cfg0));
+
+if (
+  !forced &&
+  !burrowUsed &&
+  String(nextId0) !== "HIDDEN_NEST" &&                 // hidden nest mag DASH lonen
+  dashPush0 < Number(cfg0.dashPushThreshold || 6.5) && // niet “ik wil cashen”
+  (stayRisk - burrowRisk) >= 1.0 &&                    // BURROW helpt echt t.o.v. blijven
+  (burrowRisk <= dashRisk + 0.8)                       // BURROW is minstens zo veilig als DASH
+) {
+  forced = "BURROW";
+}
+  
   // BURROW gating: only if it really helps
   if (!forced && !burrowUsed && burrow && !burrow.illegal) {
     const bestNonBurrow = [dash, lurk].slice().sort((a, b) => b.utility - a.utility)[0];
