@@ -11,7 +11,7 @@ import { comboScore } from "../actionComboMatrix.js";
  *  ========================= */
 export const BOT_UTILITY_CFG = {
   // utility = gainLoot + denyOpponents + teamSynergy − riskPenalty − resourcePenalty
-  wLoot: 1.0,
+  wLoot: 3.0,
   wDeny: 0.8,
   wTeam: 0.6,
   wRisk: 1.15,
@@ -22,16 +22,16 @@ export const BOT_UTILITY_CFG = {
   lookaheadN: 4,
 
   // DECISION
-  dashPushScale: 10,          // carry points -> dashPush=10
-  dashPushThreshold: 6.5,     // dashPush above this: bias to DASH if risk not worse
-  panicStayRisk: 7.0,         // anti-suicide lurk trigger
-  suicideMargin: 1.8,         // "dashRisk not worse than stayRisk" margin
-  burrowMinSafetyGain: 2.5,   // BURROW only if safety gain large
-  burrowMaxExtraCost: 2.0,    // spending your 1x BURROW is a resource cost
+  dashPushScale: 4,          // carry points -> dashPush=10
+  dashPushThreshold: 7.5,     // dashPush above this: bias to DASH if risk not worse
+  panicStayRisk: 6.5,         // anti-suicide lurk trigger
+  suicideMargin: 1.2,         // "dashRisk not worse than stayRisk" margin
+  burrowMinSafetyGain: 1.8,   // BURROW only if safety gain large
+  burrowMaxExtraCost: 3.5,    // spending your 1x BURROW is a resource cost
 
   // MOVE
   shiftMinGain: 3.0,          // SHIFT must beat next-best by this much (after cost)
-  scoutBaseValue: 0.3,        // in peek-mode scout is basically worthless
+  scoutBaseValue: 1.0,        // in peek-mode scout is basically worthless
 
   // MOVE expected values (cheap but stable)
   actionDeckSampleN: 30,
