@@ -87,14 +87,17 @@ export const BOT_UTILITY_CFG = {
   // Share modeling
   dashersLikelyThreshold: 6.0,
 
-  // Den Signal bonus
-  denSignalStayBonus: 1.2,   // bonus op LURK/BURROW als Den Signal het volgende event neutraliseert
-  denSignalDashPenalty: 1.0, // straf op DASH in diezelfde situatie
+ // Den Signal bonus (hard)
+denSignalStayBonus: 3.0,     // maakt LURK/BURROW extreem aantrekkelijk
+denSignalDashPenalty: 6.0,   // maakt DASH praktisch onkiesbaar
+
+// Extra (aanrader): burrow ontmoedigen in dezelfde situatie
+denSignalBurrowPenalty: 5.0, // (nieuwe key) BURROW ook onkiesbaar als je al veilig bent
 
   // Hidden Nest coordination (anti-herding)
   hiddenNestCoordination: true,
-  hiddenNestDashPenalty: 4.0,        // discourage DASH if not in slot
-  hiddenNestBurrowPenalty: 3.0,      // discourage BURROW on Hidden Nest
+  hiddenNestDashPenalty: 6.0,        // discourage DASH if not in slot
+  hiddenNestBurrowPenalty: 8.0,      // discourage BURROW on Hidden Nest
 };
 
 const DEFAULTS = BOT_UTILITY_CFG;
