@@ -769,33 +769,44 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
   }
 
   if (lead && isInYardForEvents(lead)) {
-    const loot = Array.isArray(lead.loot) ? [...lead.loot] : [];
-
-    if (loot.length >= 2) {
-      // betaalt 2 loot (valt in de Sack)
-      const drop1 = loot.pop();
-      const drop2 = loot.pop();
-      lead.loot = loot;
-      if (drop1) sack.push(drop1);
-      if (drop2) sack.push(drop2);
-
+    // ✅ Belangrijk: DASH = al weg → Silent Alarm heeft dan geen effect
+    if (lead.decision === "DASH") {
       await addLog(gameId, {
         round,
         phase: "REVEAL",
         kind: "EVENT",
         playerId: lead.id,
-        message: `${lead.name || "Lead Fox"} betaalt Silent Alarm en legt 2 buit af in de Sack.`,
+        message: `${lead.name || "Lead Fox"} dash't al weg – Silent Alarm heeft geen effect.`,
       });
     } else {
-      // kan niet betalen -> verliest lead-status (extra lead-rotatie)
-      leadAdvanceBonus = 1;
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        playerId: lead.id,
-        message: `${lead.name || "Lead Fox"} kan Silent Alarm niet betalen (minder dan 2 buit) en verliest zijn Lead-status.`,
-      });
+      const loot = Array.isArray(lead.loot) ? [...lead.loot] : [];
+
+      if (loot.length >= 2) {
+        // betaalt 2 loot (valt in de Sack)
+        const drop1 = loot.pop();
+        const drop2 = loot.pop();
+        lead.loot = loot;
+        if (drop1) sack.push(drop1);
+        if (drop2) sack.push(drop2);
+
+        await addLog(gameId, {
+          round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          playerId: lead.id,
+          message: `${lead.name || "Lead Fox"} betaalt Silent Alarm en legt 2 buit af in de Sack.`,
+        });
+      } else {
+        // kan niet betalen -> verliest lead-status (extra lead-rotatie)
+        leadAdvanceBonus = 1;
+        await addLog(gameId, {
+          round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          playerId: lead.id,
+          message: `${lead.name || "Lead Fox"} kan Silent Alarm niet betalen (minder dan 2 buit) en verliest zijn Lead-status.`,
+        });
+      }
     }
   } else {
     await addLog(gameId, {
@@ -805,6 +816,7 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
       message: "Silent Alarm: geen effect (Lead Fox is niet meer in de Yard).",
     });
   }
+}
     
   } else if (eventId === "PAINT_BOMB_NEST") {
     if (sack.length) {
