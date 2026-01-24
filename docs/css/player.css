@@ -1410,3 +1410,145 @@ body.player-body {
   border: 1px solid rgba(255, 255, 255, 0.10);
   opacity: 0.92;
 }
+
+/* ===============================
+   TEAM SCOUT (DEN INTEL) UI
+   =============================== */
+
+.vj-event-img {
+  width: 100%;
+  max-width: 420px;
+  height: auto;
+  border-radius: 12px;
+  display: block;
+  margin: 4px 0 8px;
+}
+
+.vj-event-byline {
+  font-size: 0.75rem;
+  opacity: 0.75;
+  margin: 2px 0 6px;
+}
+
+.vj-scout-head {
+  font-size: 0.75rem;
+  opacity: 0.75;
+  margin: 8px 0 6px;
+  letter-spacing: 0.06em;
+}
+
+.vj-scout-grid {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.vj-scout-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.vj-scout-thumb {
+  width: 56px;
+  height: 78px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.vj-scout-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vj-scout-title {
+  font-size: 0.85rem;
+  font-weight: 600;
+  line-height: 1.05;
+}
+
+.vj-scout-sub {
+  font-size: 0.75rem;
+  opacity: 0.75;
+}
+
+/* Lead Fox Command Center: Den Intel panel */
+.lead-denintel-panel {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.lead-denintel-title {
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  font-size: 0.8rem;
+  opacity: 0.85;
+  margin-bottom: 8px;
+}
+
+.lead-denintel-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.lead-denintel-colhead {
+  font-weight: 700;
+  font-size: 0.8rem;
+  opacity: 0.85;
+  margin-bottom: 6px;
+}
+
+.lead-denintel-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lead-denintel-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 12px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.lead-denintel-thumb {
+  width: 46px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.lead-denintel-line1 {
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.05;
+}
+
+.lead-denintel-line2 {
+  font-size: 0.72rem;
+  opacity: 0.75;
+}
+
+.lead-denintel-empty {
+  opacity: 0.5;
+  font-size: 0.85rem;
+  padding: 4px 0;
+}
+
+@media (max-width: 600px) {
+  .lead-denintel-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
