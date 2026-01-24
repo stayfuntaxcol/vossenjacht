@@ -2264,6 +2264,7 @@ initAuth(async (authUser) => {
         opsTurnIndex: 0,
         opsConsecutivePasses: 0,
         discardThisRoundActionIds: [],
+        denIntel: {},
         flagsRound: {
           lockEvents: false,
           scatter: false,
