@@ -347,8 +347,20 @@ function buildBotCtxForHeuristics({
   const noPeek = !!flags.noPeek;
   const nextKnown = !noPeek || knownUpcomingCount > 0;
   const nextId = nextKnown ? (noPeek ? (knownUpcomingEvents[0] || null) : getNextEventId(game)) : null;
-  const isLead = String(game?.leadFoxId || game?.leadFox || "") === String(bot?.id || "");
-  const nextFacts = nextId ? getEventFacts(nextId, { game, me: bot, denColor, isLead }) : null;
+  const isLead = computeIsLeadForPlayer(game, bot, players || []);
+const revealedRoosters = countRevealedRoosters(game);
+
+const nextFacts = nextId ? getEventFacts(nextId, {
+  game,
+  me: bot,
+  denColor,
+  isLead,
+  flagsRound: game?.flagsRound || null,
+  lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
+  carryExact: computeCarryValue(bot),
+  roosterSeen: Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : revealedRoosters,
+}) : null;
+
   const dangerNext = peakDanger(nextFacts);
 
   // --- rooster timing ---
