@@ -3376,18 +3376,23 @@ async function playFollowTail(game, player) {
 
 async function playAlphaCall(game, player) {
   const players = await fetchPlayersForGame();
-  const ordered = sortPlayersByJoinOrder(players);
-  if (!ordered.length) {
+  const orderedAll = sortPlayersByJoinOrder(players);
+
+  // zelfde logica als host.js: alleen actieve yard spelers tellen mee
+  const activeOrdered = orderedAll.filter(isInYardLocal);
+  const baseList = activeOrdered.length ? activeOrdered : orderedAll;
+
+  if (!baseList.length) {
     alert("Geen spelers gevonden om Lead Fox van te maken.");
     return false;
   }
 
-  const lines = ordered.map((p, idx) => `${idx + 1}. ${p.name || "Vos"}`);
+  const lines = baseList.map((p, idx) => `${idx + 1}. ${p.name || "Vos"}`);
   const choiceStr = prompt("Alpha Call – kies wie de nieuwe Lead Fox wordt:\n" + lines.join("\n"));
   if (!choiceStr) return false;
 
   const idx = parseInt(choiceStr, 10) - 1;
-  if (Number.isNaN(idx) || idx < 0 || idx >= ordered.length) {
+  if (Number.isNaN(idx) || idx < 0 || idx >= baseList.length) {
     alert("Ongeldige keuze.");
     return false;
   }
@@ -3401,9 +3406,9 @@ async function playAlphaCall(game, player) {
     phase: "ACTIONS",
     kind: "ACTION",
     playerId,
-    message: `${player.name || "Speler"} speelt Alpha Call – Lead Fox wordt nu ${ordered[idx].name || "een vos"}.`,
+    message: `${player.name || "Speler"} speelt Alpha Call – Lead Fox wordt nu ${baseList[idx].name || "een vos"}.`,
   });
-  setActionFeedback(`Alpha Call: Lead Fox is nu ${ordered[idx].name || "de gekozen vos"}.`);
+  setActionFeedback(`Alpha Call: Lead Fox is nu ${baseList[idx].name || "de gekozen vos"}.`);
   return true;
 }
 
