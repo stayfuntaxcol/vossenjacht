@@ -457,34 +457,34 @@ export async function resolveAfterReveal(gameId) {
     ...(game.flagsRound || {}),
   };
 
-  // ====== Rooster: limiet-check (3e crow) ======
-  if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
-    await endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, ev, round);
-    return;
+// ====== Nose for Trouble – juiste voorspelling? ======
+const predictions = Array.isArray(flagsRound.predictions) ? flagsRound.predictions : [];
+if (predictions.length && lootDeck.length) {
+  for (const pred of predictions) {
+    if (pred.eventId !== eventId) continue;
+    const p = players.find((pl) => pl.id === pred.playerId);
+    if (!p) continue;
+    if (!lootDeck.length) break;
+
+    const card = lootDeck.pop();
+    p.loot = p.loot || [];
+    p.loot.push(card);
+
+    await addLog(gameId, {
+      round,
+      phase: "REVEAL",
+      kind: "EVENT",
+      playerId: p.id,
+      message: `${p.name || "Vos"} had Nose for Trouble juist en krijgt extra buit.`,
+    });
   }
+}
 
-  // ====== Nose for Trouble – juiste voorspelling? ======
-  const predictions = Array.isArray(flagsRound.predictions) ? flagsRound.predictions : [];
-  if (predictions.length && lootDeck.length) {
-    for (const pred of predictions) {
-      if (pred.eventId !== eventId) continue;
-      const p = players.find((pl) => pl.id === pred.playerId);
-      if (!p) continue;
-      if (!lootDeck.length) break;
-
-      const card = lootDeck.pop();
-      p.loot = p.loot || [];
-      p.loot.push(card);
-
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        playerId: p.id,
-        message: `${p.name || "Vos"} had Nose for Trouble juist en krijgt extra buit.`,
-      });
-    }
-  }
+// ====== Rooster: limiet-check (3e crow) ======
+if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
+  await endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, ev, round);
+  return;
+}
 
   // ====== Follow the Tail – beslissingen laten volgen ======
   const followMap = flagsRound.followTail || {};
