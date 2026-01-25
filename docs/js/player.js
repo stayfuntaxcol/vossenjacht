@@ -3041,7 +3041,7 @@ async function selectDecision(kind) {
     return;
   }
 
-  if (kind === "BURROW" && player.burrowUsed) {
+  if (kind === "BURROW" && player.burrowUsedThisRaid) {
     alert("Je hebt BURROW al eerder gebruikt deze raid.");
     return;
   }
@@ -3062,8 +3062,7 @@ async function selectDecision(kind) {
   }
 
   const update = { decision: kind };
-  if (kind === "BURROW" && !player.burrowUsed) update.burrowUsed = true;
-
+  
   await updateDoc(playerRef, update);
   await logMoveAction(game, player, `DECISION_${kind}`, "DECISION");
 }
@@ -3827,7 +3826,7 @@ async function ensurePlayerDoc() {
     score: 0,
     color: null,
     decision: null,
-    burrowUsed: false,
+    burrowUsedThisRaid: false,
   };
   await setDoc(playerRef, seed, { merge: true });
 }
