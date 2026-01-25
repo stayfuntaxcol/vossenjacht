@@ -2671,17 +2671,23 @@ const hasKnown = known.length > 0;
 
 const useStrategy = !noPeek || hasKnown;
 
-if (useStrategy) {
-  dec = evaluateDecision({
-    game: g,
-    me: meForDecision,
-    players: playersForDecision || [],
-    flagsRound: g.flagsRound,
-    cfg: getStrategyCfgForBot(meForDecision), // behoud: per-bot DISC overrides
-  });
+    // ✅ noPeek + eigen intel: geef strategy expliciet de knownUpcomingEvents mee
+    const peekIntel = (noPeek && hasKnown)
+      ? { events: known.map((x) => String(x)) }
+      : null;
 
-  decision = dec?.decision || "LURK";
-} else {
+    if (useStrategy) {
+      dec = evaluateDecision({
+        game: g,
+        me: meForDecision,
+        players: playersForDecision || [],
+        flagsRound: flags, // ✅ gebruik filled flags (incl. denImmune/noPeek/etc)
+        cfg: getStrategyCfgForBot(meForDecision), // behoud: per-bot DISC overrides
+        peekIntel, // ✅ zorgt dat strategy ook werkt in noPeek als bot intel heeft
+      });
+
+      decision = dec?.decision || "LURK";
+    } else {
   rec = recommendDecision({
     presetKey,
     denColor,
@@ -2969,3 +2975,4 @@ export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLU
 
   await updateDoc(gRef, { botsEnabled: true, actionDeck });
 }
+
