@@ -475,8 +475,7 @@ if (c.decisionUseFutureEvents && decision !== "DASH") {
   futurePressure = best;
 }
 
-  // rooster pressure
-const roostersNow = countRevealedRoosters(game);
+// rooster pressure
 let roosterBias = 0;
 
 // 1e + 2e ROOSTER_CROW = veilig: straf DASH (en BURROW), beloon LURK een beetje
@@ -552,6 +551,45 @@ if (hasNextKnowledge && String(nextId) === "ROOSTER_CROW" && roostersNow < 2) {
   else utility -= 1000;
 }
 
+// ================================
+// PERFECT-INFO HARD RULES (alleen als bot next-event kent)
+// ================================
+const hasPerfectInfo = !!(events && events[0]); // noPeek=false (of knownUpcomingEvents)
+
+if (hasPerfectInfo) {
+  const force = (want) => {
+    utility += (decision === want) ? 1000 : -1000;
+  };
+
+  const id = String(nextId || "");
+
+  // 1) 1e + 2e ROOSTER = super veilig -> altijd LURK
+  if (id === "ROOSTER_CROW" && roostersNow < 2) {
+    force("LURK");
+  }
+
+  // 2) SHEEPDOG_PATROL: alleen DASH wordt gepakt -> altijd LURK
+  if (id === "SHEEPDOG_PATROL") {
+    force("LURK");
+  }
+
+  // 3) DEN_<COLOR> die jou NIET raakt (of geneutraliseerd) -> altijd LURK
+  if (id.startsWith("DEN_")) {
+    const target = String(id.slice(4)).toUpperCase(); // RED/BLUE/GREEN/YELLOW
+    const myDen = normColor(me?.color || me?.den || me?.denColor);
+    const denImmuneTarget = !!getFlags(flagsRound || game?.flagsRound, String(me?.id || ""))?.denImmune?.[target];
+
+    if (myDen !== target || denImmuneTarget) {
+      force("LURK");
+    }
+  }
+
+  // 4) LEAD-only events: als jij NIET lead bent -> altijd LURK
+  if ((id === "MAGPIE_SNITCH" || id === "SILENT_ALARM") && !computeIsLead(game, me, players)) {
+    force("LURK");
+  }
+}
+ 
   return { utility, surviveP, riskNow, futurePressure, carry, dashPush, sharePenalty, expectedCarryAfter };
 }
 
