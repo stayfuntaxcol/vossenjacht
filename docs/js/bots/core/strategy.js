@@ -488,7 +488,7 @@ export function evaluateDecision({ game, me, players, flagsRound = null, cfg = n
   const intel = peekIntel || getPeekIntel({ game, me, flagsRound: flags, lookaheadN: cfg0.lookaheadN });
 
   const predictedDashers = estimateLikelyDashers({ game, players, me, cfg: cfg0 });
-  const burrowUsed = (me?.burrowUsedThisRaid === true) || (me?.burrowUsed === true);
+  const burrowUsed = (me?.burrowUsedThisRaid === true);
 
   const options = [
     { decision: "DASH" },
