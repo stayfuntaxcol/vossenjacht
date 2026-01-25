@@ -1167,6 +1167,10 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
   try {
     const hand = Array.isArray(bot?.hand) ? bot.hand : [];
     if (!hand.length) return null;
+   
+    const handNames = hand
+    .map((c) => String(c?.name || c || "").trim())
+    .filter(Boolean);
 
     // map hand -> entries with BOTH:
     // - actionId (canonical)
