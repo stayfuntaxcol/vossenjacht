@@ -63,9 +63,11 @@ export const BOT_UTILITY_CFG = {
   opsReserveHandMid: 2,
   opsReserveHandLate: 1,
 
-  opsHighComboScore: 9,            // stricter definition of “combo key”
-  opsReserveComboBoost: 0,         // don't auto-increase reserve just because a combo exists
-
+  // combo: minder zwaar
+  opsHighComboScore: 10,          // minder snel "highCombo" 
+  opsHighComboGainBonus: 0.25,    // i.p.v. hardcoded 0.4 (zie patch 1B)
+  opsReserveComboBoost: 0,
+  
   opsSpendCostBase: 0.40,          // softer opportunity cost per spent card
   opsSpendCostEarlyMult: 1.05,
   opsSpendCostLateMult: 0.8,
@@ -79,7 +81,7 @@ export const BOT_UTILITY_CFG = {
   opsMinAdvantageEarlyBonus: 0.2,   // early: nog strenger
 
   // combo planning: key pieces bewaren, maar "setup" plays toestaan
-  opsComboHoldPenaltyScale: 0.18,   // penalty ~ scale * comboKeyScore
+  opsComboHoldPenaltyScale: 0.14,   // penalty ~ scale * comboKeyScore
   opsComboSetupBonusScale: 0.10,    // bonus ~ scale * best outgoing combo score
   opsComboSetupEarlyMult: 0.55,
   opsComboSetupMidMult: 0.80,
@@ -89,8 +91,14 @@ export const BOT_UTILITY_CFG = {
   opsReserveMissPenalty: 0.55,     // softer penalty if you dip under reserveTarget
   opsSoloBreakComboPenalty: 0.6,   // softer penalty for spending a key solo
 
-  actionPlayMinGainEarlyBonus: 0.25, // slightly harder early, but not paralyzing
+  actionPlayMinGainEarlyBonus: 0.20, // slightly harder early, but not paralyzing
 
+  // Multiplayer/pest-card waardering (nieuw)
+  opsMultiPlayerBaseBonus: 0.55,   // kleine extra waarde in drukke Yard
+  opsMultiPlayerSoloPenalty: 0.75, // ontmoedig verspillen als je (bijna) solo bent
+  opsMultiStageEarlyMult: 1.20,
+  opsMultiStageLateMult: 0.85,
+  
   // “implemented” safety
   actionUnimplementedMult: 0.15,
 
@@ -1004,6 +1012,7 @@ function computeComboMeta(actionIds, ctxCombo, cfg) {
 // If rulesIndex marks these “unimplemented” but botRunner DOES apply them, treat as implemented here.
 const RUNNER_IMPLEMENTED = new Set([
   "DEN_SIGNAL",
+  "ALPHA_CALL",
   "NO_GO_ZONE",
   "BURROW_BEACON",
   "SCATTER",
@@ -1088,6 +1097,20 @@ function simulateActionOnce({ play, game, me, players, flagsRound, cfg, seedTag 
     flags.denImmune = di;
   }
 
+  if (actionId === "ALPHA_CALL") {
+  // match player.js: leadIndex is index binnen active yard (joinOrder sorted)
+  const orderedAll = safeArr(simPlayers).slice().sort((a, b) => {
+    const ao = typeof a?.joinOrder === "number" ? a.joinOrder : 9999;
+    const bo = typeof b?.joinOrder === "number" ? b.joinOrder : 9999;
+    return ao - bo;
+  });
+  const activeOrdered = orderedAll.filter(isInYard);
+  const baseList = activeOrdered.length ? activeOrdered : orderedAll;
+
+  const idx = baseList.findIndex(x => String(x?.id) === String(targetId));
+  if (idx >= 0) g.leadIndex = idx;
+}
+
   if (actionId === "NO_GO_ZONE") {
     flags.opsLocked = true;
   }
@@ -1166,6 +1189,7 @@ function simulateActionOnce({ play, game, me, players, flagsRound, cfg, seedTag 
         if (trackNow[i1] && trackNow[i2]) {
           [trackNow[i1], trackNow[i2]] = [trackNow[i2], trackNow[i1]];
           g.eventTrack = trackNow;
+          clearScoutIntelForAll([p, ...simPlayers]);
         }
       }
     }
@@ -1181,6 +1205,7 @@ function simulateActionOnce({ play, game, me, players, flagsRound, cfg, seedTag 
         const seed = hashSeed(`${seedTag}|${meId}|${g.round}|${g.eventIndex}|${track.length}`);
         const rnd = mulberry32(seed);
         g.eventTrack = [...locked, ...shuffleArraySeeded(future, rnd)];
+        clearScoutIntelForAll([p, ...simPlayers]);
       }
     }
   }
@@ -1234,8 +1259,46 @@ function actionCandidates({ actionId, actionName, game, me, players }) {
     return pick ? [{ actionId, name: actionName, targetId: pick }] : [];
   }
 
+  if (actionId === "ALPHA_CALL") {
+  // simpele, stabiele keuze: maak de rijkste andere vos Lead (meestal “pest”)
+  const t = richest(enemies) || richest(allies) || richest(inYard.filter(x => String(x.id) !== String(me.id)));
+  return t ? [{ actionId, name: actionName, targetId: t }] : [];
+}
+
   // no target
   return [{ actionId, name: actionName, targetId: null }];
+}
+
+const MULTIPLAYER_VALUE_ACTIONS = new Set([
+  "MASK_SWAP",
+  "FOLLOW_THE_TAIL",
+  "SCENT_CHECK",
+  "HOLD_STILL",
+  "NO_GO_ZONE",
+  "BURROW_BEACON",
+  "SCATTER",
+  "ALPHA_CALL",
+]);
+
+function opsParticipantCount(game, players) {
+  const order = safeArr(game?.opsTurnOrder);
+  if (order.length) return order.length;
+  return safeArr(players).filter(isInYard).length;
+}
+
+function opsRemainingCount(game) {
+  const order = safeArr(game?.opsTurnOrder);
+  const i = Number.isFinite(Number(game?.opsTurnIndex)) ? Number(game.opsTurnIndex) : 0;
+  if (!order.length) return 0;
+  return Math.max(0, order.length - i - 1);
+}
+
+function clearScoutIntelForAll(playersArr) {
+  for (const pl of (playersArr || [])) {
+    if (!pl) continue;
+    if (Array.isArray(pl.knownUpcomingEvents)) pl.knownUpcomingEvents = [];
+    else if (pl.knownUpcomingEvents != null) pl.knownUpcomingEvents = [];
+  }
 }
 
 function scoreOpsPlay({ play, game, me, players, flagsRound, cfg }) {
@@ -1311,9 +1374,32 @@ function scoreOpsPlay({ play, game, me, players, flagsRound, cfg }) {
     utilitySum += u;
   }
 
-  const utility = utilitySum / sims.length;
+  let utility = utilitySum / sims.length;
 
-  return { play, utility, baseU };
+// Multiplayer/tempo bonus: deze kaarten “doen” weinig in decision-simulatie,
+// maar zijn wél waardevol als er veel spelers te raken zijn (vooral early).
+if (MULTIPLAYER_VALUE_ACTIONS.has(actionId)) {
+  const stage0 = opsStageFromGame(game, c);
+  const n = opsParticipantCount(game, players);          // hoeveel spelers in de Yard/ops
+  const remaining = opsRemainingCount(game);             // hoeveel moeten nog handelen na jou
+
+  const presence = clamp((n - 1) / 3, 0, 1);             // 1=>0, 2=>0.33, 4=>1
+  const rem = clamp(remaining / 3, 0, 1);                // 0..1
+
+  const stageMult =
+    stage0.stage === "early" ? Number(c.opsMultiStageEarlyMult || 1.2) :
+    stage0.stage === "late" ? Number(c.opsMultiStageLateMult || 0.85) :
+    1.0;
+
+  const base = Number(c.opsMultiPlayerBaseBonus || 0.55);
+  const soloPenalty = (n <= 1) ? Number(c.opsMultiPlayerSoloPenalty || 0.75) : 0;
+
+  const bonus = base * presence * (0.5 + 0.5 * rem) * stageMult;
+  utility = utility + bonus - soloPenalty;
+}
+
+return { play, utility, baseU };
+
 }
 
 export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg = null }) {
@@ -1386,7 +1472,7 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
     const minGainSoft =
     Number(c.actionPlayMinGain || 1.2) +
     (stage0.stage === "early" ? Number(c.actionPlayMinGainEarlyBonus || 0.8) : 0) +
-    (comboMeta.highCombo ? 0.4 : 0);
+    (comboMeta.highCombo ? Number(c.opsHighComboGainBonus || 0.25) : 0);
 
   const minGainHard =
     Number(c.opsMinAdvantage || 0) +
