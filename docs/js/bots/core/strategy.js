@@ -29,6 +29,12 @@ export const BOT_UTILITY_CFG = {
   burrowMinSafetyGain: 1.8,   // BURROW only if safety gain large
   burrowMaxExtraCost: 3.5,    // spending your 1x BURROW is a resource cost
 
+  // BURROW voor DASH 
+  dashBeforeBurrowPenalty: 8.0,   // hoe hard we DASH ontmoedigen als burrow nog niet gebruikt is
+  panicLurkPenalty: 6.0,          // bij paniek: LURK zwaar afstraffen
+  panicBurrowBonus: 4.0,          // bij paniek: BURROW aantrekkelijker maken
+  burrowAlreadyUsedPenalty: 999,
+
   // MOVE
   shiftMinGain: 3.0,          // SHIFT must beat next-best by this much (after cost)
   scoutBaseValue: 1.0,        // in peek-mode scout is basically worthless
@@ -379,6 +385,15 @@ function decisionUtility({ decision, game, me, players, flagsRound, peekIntel, c
 
   const events = safeArr(peekIntel?.events);
   const nextId = events[0] || nextEventId(game, 0);
+  
+  const burrowUsed = (me?.burrowUsedThisRaid === true);
+
+  const isHiddenNest = String(nextId) === "HIDDEN_NEST";
+
+  // 3e Rooster Crow = volgende is ROOSTER_CROW terwijl er al 2 gezien zijn
+  const roosters = countRevealedRoosters(game);
+  const isThirdCrowNext = String(nextId) === "ROOSTER_CROW" && roosters >= 2;
+
    
    // ✅ Den Signal: als jouw denImmune actief is, dan vrijwel nooit DASH/BURROW
   const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
@@ -396,6 +411,9 @@ if (immune) {
   const riskNow = eventDangerForChoice({ eventId: nextId, choice: decision, game, me, players, flagsRound });
   const caughtP = clamp(riskNow / 10, 0, 1);
   const surviveP = 1 - caughtP;
+  
+  // stayRisk is het risico als je zou blijven (LURK)
+  const stayRiskNow = eventDangerForChoice({ eventId: nextId, choice: "LURK", game, me, players, flagsRound });
 
   // expected carry after next event
   let expectedCarryAfter = surviveP * carry;
@@ -464,6 +482,31 @@ if (c.decisionUseFutureEvents && decision !== "DASH") {
       : 0;
 
   let utility = lootTerm - riskTerm - sharePenalty - burrowCost + roosterBias + dashPushBonus + denSignalBias;
+
+    // ✅ HARD RULE maar als utility (geen runner-override)
+  // Paniek-drempel gebaseerd op stayRisk (LURK risico)
+  const panicStayRisk = Number(c.panicStayRisk ?? 6.5);
+  const isPanic = stayRiskNow >= panicStayRisk;
+
+  // A) BURROW mag maar 1x per raid: maak het praktisch onmogelijk als al gebruikt
+  if (decision === "BURROW" && burrowUsed) {
+    utility -= Number(c.burrowAlreadyUsedPenalty ?? 999);
+  }
+
+  // B) Bij paniek: LURK zwaar afstraffen (tenzij uitzonderingen)
+  if (isPanic && decision === "LURK" && !isHiddenNest && !isThirdCrowNext) {
+    utility -= Number(c.panicLurkPenalty ?? 6.0);
+  }
+
+  // C) Bij paniek: BURROW extra aantrekkelijk (als token nog beschikbaar is)
+  if (isPanic && decision === "BURROW" && !burrowUsed && !isHiddenNest && !isThirdCrowNext) {
+    utility += Number(c.panicBurrowBonus ?? 4.0);
+  }
+
+  // D) Geen “greed DASH” vóór 1e BURROW (behalve Hidden Nest / 3e crow), maar alleen als geen paniek
+  if (!burrowUsed && decision === "DASH" && !isHiddenNest && !isThirdCrowNext && !isPanic) {
+    utility -= Number(c.dashBeforeBurrowPenalty ?? 8.0);
+  }
 
   // Hidden Nest coordination: discourage DASH if not in deterministic slot
   if (
