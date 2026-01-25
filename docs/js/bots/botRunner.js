@@ -114,39 +114,43 @@ const DISC_STRATEGY_OVERRIDES = {
 
     // OPS early: minder krampachtig sparen
     opsReserveHandEarly: 2,
-    opsSpendCostBase: 0.50,
+    opsSpendCostBase: 0.48,
     opsSpendCostEarlyMult: 1.00,
 
-    opsPlayTaxBase: 0.95,
-    opsPlayTaxEarlyMult: 1.15,
+    opsPlayTaxBase: 0.90,
+    opsPlayTaxEarlyMult: 1.05,
 
     // drempel om PASS te verslaan omlaag
-    actionPlayMinGain: 0.75,
+    actionPlayMinGain: 0.70,
     actionPlayMinGainEarlyBonus: 0.10,
-    opsMinAdvantage: 1.55,
+    opsMinAdvantage: 1.35,
     opsMinAdvantageEarlyBonus: 0.20,
   },
 
   // I (YELLOW) = opportunistisch/speels: iets vaker utility/control kaarten, ook eerder spelen
   I: {
-    wRisk: 1.05,
+    wRisk: 1.12,
     wDeny: 0.95,
     wTeam: 0.60,
     wShare: 0.95,
+    WLoot: 6.40,
 
+    shiftMinGain: 3.60,
+    dashPushThreshold: 8.20,
+    
     opsReserveHandEarly: 2,
     opsSpendCostBase: 0.52,
 
-    opsPlayTaxBase: 0.98,
-    opsPlayTaxEarlyMult: 1.20,
+    opsPlayTaxBase: 0.92,
+    opsPlayTaxEarlyMult: 1.10,
 
-    actionPlayMinGain: 0.80,
+    actionPlayMinGain: 0.74,
     actionPlayMinGainEarlyBonus: 0.15,
-    opsMinAdvantage: 1.65,
+    opsMinAdvantage: 1.45,
     opsMinAdvantageEarlyBonus: 0.25,
 
     // net iets meer “shuffle durf”
-    kickUpDustOptimism: 0.60,
+    kickUpDustOptimism: 0.45,
   },
 
   // S (GREEN) = stabiel/defensief: speelt minder vaak early, maar niet verlamd
@@ -155,13 +159,15 @@ const DISC_STRATEGY_OVERRIDES = {
     wTeam: 0.80,
     wShare: 1.15,
 
-    opsReserveHandEarly: 3,
-    opsPlayTaxBase: 1.05,
-    opsPlayTaxEarlyMult: 1.30,
+    burrowMinSafetyGain: 2.50,
+    
+    opsReserveHandEarly: 2,
+    opsPlayTaxBase: 0.98,
+    opsPlayTaxEarlyMult: 1.18,
 
-    actionPlayMinGain: 0.88,
+    actionPlayMinGain: 0.84,
     actionPlayMinGainEarlyBonus: 0.22,
-    opsMinAdvantage: 1.90,
+    opsMinAdvantage: 1.65,
     opsMinAdvantageEarlyBonus: 0.45,
   },
 
@@ -171,19 +177,23 @@ const DISC_STRATEGY_OVERRIDES = {
     wTeam: 0.55,
     wShare: 0.95,
 
+    burrowMinSafetyGain: 2.30,
+    kickUpDustOptimism: 0.40,
+    
     lookaheadN: 5,
     actionDeckSampleN: 40,
     comboMaxPairs: 30,
 
-    opsReserveHandEarly: 3,
-    opsPlayTaxBase: 1.05,
-    opsPlayTaxEarlyMult: 1.33,
+    opsReserveHandEarly: 2,
+    opsPlayTaxBase: 0.96,
+    opsPlayTaxEarlyMult: 1.15,
 
-    opsMinAdvantage: 1.95,
+    actionPlayMinGain: 0.84,
+    opsMinAdvantage: 1.70,
     opsMinAdvantageEarlyBonus: 0.50,
 
     // C mag eerder “setup” doen als het combo’s opent
-    opsComboSetupBonusScale: 0.12,
+    opsComboSetupBonusScale: 0.15,
     opsComboSetupEarlyMult: 0.65,
   },
 };
