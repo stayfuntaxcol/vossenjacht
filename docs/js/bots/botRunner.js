@@ -103,14 +103,6 @@ const BOT_NAME_POOL = [
 function normColor(c) {
   return String(c || "").trim().toUpperCase();
 }
-// ===== DISC personality -> strategy cfg overrides (per DEN color) =====
-// Mapping: RED=D, YELLOW=I, GREEN=S, BLUE=C
-const DISC_BY_DEN = {
-  RED: "D",
-  YELLOW: "I",
-  GREEN: "S",
-  BLUE: "C",
-};
 
 // Alleen overrides (strategy.js merged dit over BOT_UTILITY_CFG heen)
 const DISC_STRATEGY_OVERRIDES = {
