@@ -336,6 +336,13 @@ function getEventFactsScoped(eventKey, opts = {}) {
   const denColor = getScopedDenColor(opts);
   const isLead = computeIsLead(game, me, ctx);
 
+  // Den Signal immunity (engine flag): denImmune[DEN] => DEN_* + DOG_CHARGE/SECOND_CHARGE are neutralized for that den
+  const denImmune =
+    (ctx?.flagsRound && typeof ctx.flagsRound === "object" ? ctx.flagsRound.denImmune : null) ||
+    (game?.flagsRound && typeof game.flagsRound === "object" ? game.flagsRound.denImmune : null) ||
+    null;
+
+  const myImmune = !!(denImmune && denColor && denImmune[denColor]);
   const f = {
     ...base,
     tags: Array.isArray(base.tags) ? [...base.tags] : [],
@@ -356,6 +363,12 @@ function getEventFactsScoped(eventKey, opts = {}) {
       f.dangerBurrow = 0;
       f.tags = f.tags.filter((t) => normTag(t) !== "CATCH_BY_DEN_COLOR");
       f.dangerNotes.push("DEN event not matching your color: treated as safe.");
+    } else if (myImmune) {
+      // ✅ Den Signal active for your den => DEN_* is neutralized (no need to DASH/BURROW)
+      f.dangerDash = 0;
+      f.dangerLurk = 0;
+      f.dangerBurrow = 0;
+      f.dangerNotes.push("DEN_SIGNAL: denImmune actief -> DEN-event geneutraliseerd (stay veilig).");
     }
   }
 
@@ -371,6 +384,13 @@ function getEventFactsScoped(eventKey, opts = {}) {
     f.dangerNotes.push("Lead-only event: non-lead treated as low immediate risk.");
   }
 
+  // ✅ Den Signal active for your den => DOG_CHARGE / SECOND_CHARGE is neutralized
+  if (myImmune && (id === "DOG_CHARGE" || id === "SECOND_CHARGE")) {
+    f.dangerDash = 0;
+    f.dangerLurk = 0;
+    f.dangerBurrow = 0;
+    f.dangerNotes.push("DEN_SIGNAL: denImmune actief -> DOG charge geneutraliseerd (stay veilig).");
+  }
 
   // --- ROOSTER_CROW: only treat as dangerous on 3rd occurrence (raid-end trigger) ---
 if (id === "ROOSTER_CROW") {
@@ -1311,3 +1331,4 @@ const canBurrow = !burrowUsed;
       : (nextEventFacts ? { dash: dashRisk, lurk: lurkRisk, burrow: burrowRisk } : null),
   };
 }
+
