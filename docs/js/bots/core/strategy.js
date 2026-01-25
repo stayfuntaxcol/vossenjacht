@@ -26,6 +26,9 @@ export const BOT_UTILITY_CFG = {
   dashPushThreshold: 7.5,     // dashPush above this: bias to DASH if risk not worse
   panicStayRisk: 6.5,         // anti-suicide lurk trigger
   suicideMargin: 1.2,         // "dashRisk not worse than stayRisk" margin
+  panicDashStayRisk: 5.0,     // force DASH sooner when dash is very safe
+  panicDashSafeDashRisk: 1.2, // "dash is safe" threshold
+  panicDashCarryMin: 4,       // only force dash if carrying at least this much
   burrowMinSafetyGain: 1.8,   // BURROW only if safety gain large
   burrowMaxExtraCost: 3.5,    // spending your 1x BURROW is a resource cost
 
@@ -45,6 +48,13 @@ export const BOT_UTILITY_CFG = {
 
   // MOVE
   shiftMinGain: 3.0,          // SHIFT must beat next-best by this much (after cost)
+  shiftDangerTrigger: 7.2,   // only consider SHIFT if next event peak danger >= this
+  shiftLookahead: 4,         // how many future slots to consider swapping with
+  shiftDistancePenalty: 0.25,// penalty per slot distance (discourages far swaps)
+  shiftBenefitMin: 1.6,      // minimum benefit needed to accept a SHIFT candidate
+  shiftCooldownRounds: 1,    // block repeated SHIFT within this many rounds
+  shiftOverrideBenefit: 3.0, // if on cooldown, only allow SHIFT if benefit >= this
+  shiftRequireLoot: true,    // SHIFT requires at least 1 loot (cost)
   scoutBaseValue: 1.0,        // in peek-mode scout is basically worthless
 
   // MOVE expected values (cheap but stable)
@@ -75,6 +85,10 @@ export const BOT_UTILITY_CFG = {
     // OPS "card has value": alleen spelen bij significant voordeel
   opsPlayTaxBase: 0.85,              // vaste utility-kost per gespeelde kaart
   opsPlayTaxEarlyMult: 1.15,        // early: harder sparen
+  opsThreatDangerTrigger: 5.0,         // if next event lurk danger >= this -> play more
+  opsThreatPlayBoost: 0.6,             // reduce requiredGain by this in threat-mode
+  opsLeadThreatExtraBoost: 0.4,        // extra boost if LEAD-only threat and I'm lead
+  opsThreatPlayTaxMult: 0.80,          // multiply playTaxMult in threat-mode
   opsPlayTaxLateMult: 0.85,         // late: makkelijker uitgeven
 
   opsMinAdvantage: 1.0,             // minimaal voordeel boven PASS om überhaupt te spelen
@@ -271,6 +285,9 @@ function eventDangerForChoice({ eventId, choice, game, me, players, flagsRound }
   const facts = getEventFacts(eid, { game, me, denColor: den, isLead, flagsRound: flagsRound || game?.flagsRound });
   if (!facts) return 0;
 
+  // LEAD-only event? If I'm not lead, it's 0 danger.
+  if (!isLead && String(facts.appliesTo || "").toUpperCase() === "LEAD") return 0;
+
   // Den Signal immunity applies to DEN_* and DOG_CHARGE/SECOND_CHARGE (NOT Sheepdog Patrol)
   const t = classifyEvent(eid).type;
   if (immune && (t === "DOG" || t === "DEN")) return 0;
@@ -404,7 +421,7 @@ function decisionUtility({ decision, game, me, players, flagsRound, peekIntel, c
   const events = safeArr(peekIntel?.events);
   const nextId = events[0] || nextEventId(game, 0);
   
-  const burrowUsed = (me?.burrowUsedThisRaid === true);
+  const burrowUsed = !!(me?.burrowUsedThisRaid ?? me?.burrowUsed);
 
   const isHiddenNest = String(nextId) === "HIDDEN_NEST";
 
@@ -613,7 +630,7 @@ export function evaluateDecision({ game, me, players, flagsRound = null, cfg = n
   const intel = peekIntel || getPeekIntel({ game, me, flagsRound: flags, lookaheadN: cfg0.lookaheadN });
 
   const predictedDashers = estimateLikelyDashers({ game, players, me, cfg: cfg0 });
-  const burrowUsed = (me?.burrowUsedThisRaid === true);
+  const burrowUsed = !!(me?.burrowUsedThisRaid ?? me?.burrowUsed);
 
   const options = [
     { decision: "DASH" },
@@ -660,6 +677,17 @@ if (stayRisk >= cfg0.panicStayRisk) {
   } else if (dashRisk + cfg0.suicideMargin <= stayRisk) {
     forced = "DASH";
   }
+
+}
+
+// ✅ Panic cashout override: if DASH is extremely safe and stay-risk is high, cash out (Prince R7 fix)
+if (
+  !forced &&
+  (dashRisk <= Number(cfg0.panicDashSafeDashRisk || 1.2)) &&
+  (stayRisk >= Number(cfg0.panicDashStayRisk || 5.0)) &&
+  (carry0 >= Number(cfg0.panicDashCarryMin || 4))
+) {
+  forced = "DASH";
 }
 
 // ✅ BURROW-FIRST wanneer DASH alleen "vluchten" is (niet bankdruk) en BURROW de veilige stay-optie is
@@ -1427,6 +1455,13 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
     hasActionIdInHand(hand, "DEN_SIGNAL") &&
     (t0.type === "DOG" || (t0.type === "DEN" && normColor(t0.color) === den));
 
+  // threat-mode: when danger is high or LEAD-only penalty is coming, play actions more often
+  const isLead = computeIsLead(game, me, players);
+  const facts0 = getEventFacts(String(next0 || ""), { game, me, denColor: den, isLead, flagsRound: flagsRound || game?.flagsRound });
+  const lurkDanger0 = Number(facts0?.dangerLurk || 0);
+  const leadThreat0 = (String(facts0?.appliesTo || "").toUpperCase() === "LEAD") && isLead;
+  const threatMode = (lurkDanger0 >= Number(c.opsThreatDangerTrigger || 5.0)) || leadThreat0;
+
   // baseline = PASS utility (decision best)
   const intel = getPeekIntel({ game, me, flagsRound: flags, lookaheadN: c.lookaheadN });
   const baseDecision = evaluateDecision({ game, me, players, flagsRound: flags, cfg: c, peekIntel: intel });
@@ -1484,13 +1519,16 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
     Number(c.opsMinAdvantage || 0) +
     (stage0.stage === "early" ? Number(c.opsMinAdvantageEarlyBonus || 0) : 0);
 
-  const requiredGain = Math.max(minGainSoft, minGainHard);
+  let requiredGain = Math.max(minGainSoft, minGainHard);
+  if (threatMode) requiredGain = Math.max(0, requiredGain - Number(c.opsThreatPlayBoost || 0.6) - (leadThreat0 ? Number(c.opsLeadThreatExtraBoost || 0.4) : 0));
 
   const spendMult = stage0.spendMult;
-    const playTaxMult =
+    let playTaxMult =
     stage0.stage === "early" ? Number(c.opsPlayTaxEarlyMult || 1.2) :
     stage0.stage === "late" ? Number(c.opsPlayTaxLateMult || 0.8) :
     1.0;
+
+  if (threatMode) playTaxMult *= Number(c.opsThreatPlayTaxMult || 0.80);
 
    const spendCost = (nCards, primaryActionId = null, isCombo = false) => {
     const spent = Math.max(0, Number(nCards || 1));
@@ -1687,4 +1725,5 @@ export function evaluatePhase({ phase, game, me, players, flagsRound = null, cfg
   }
   return { error: `Unknown phase: ${phase}` };
 }
+
 
