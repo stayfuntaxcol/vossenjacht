@@ -30,6 +30,15 @@ const AUTO_FLOW = true;
 const AUTO_PAUSE_MS = 5000; // jouw “adempauze”
 const db = getFirestore();
 
+// ===== expose Firestore to DevTools (export) =====
+try {
+  window.__DB__ = db;
+  window.__FS__ = { collection, getDocs, query, orderBy, limit, startAfter, documentId };
+  console.log("[VJ] Exposed __DB__/__FS__ for console export");
+} catch (e) {
+  console.warn("[VJ] Expose failed:", e);
+}
+
 const params = new URLSearchParams(window.location.search);
 let gameId = params.get("game");
 const mode = params.get("mode") || "host"; // "host" | "board"
