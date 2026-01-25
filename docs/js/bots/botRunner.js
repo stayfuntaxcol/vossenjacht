@@ -133,7 +133,7 @@ const DISC_STRATEGY_OVERRIDES = {
     wDeny: 0.95,
     wTeam: 0.60,
     wShare: 0.95,
-    WLoot: 6.40,
+    wLoot: 6.40,
 
     shiftMinGain: 3.60,
     dashPushThreshold: 8.20,
@@ -198,10 +198,21 @@ const DISC_STRATEGY_OVERRIDES = {
   },
 };
 
-function getStrategyCfgForBot(botOrPlayer) {
+function getStrategyCfgForBot(botOrPlayer, game = null) {
   const den = normColor(botOrPlayer?.color || botOrPlayer?.den || botOrPlayer?.denColor);
   const disc = DISC_BY_DEN[den] || null;
-  return (disc && DISC_STRATEGY_OVERRIDES[disc]) ? DISC_STRATEGY_OVERRIDES[disc] : null;
+
+  const base = (disc && DISC_STRATEGY_OVERRIDES[disc]) ? DISC_STRATEGY_OVERRIDES[disc] : null;
+
+  // Optional per-RAID overrides via Firestore game document:
+  // game.botDiscProfiles = { D:{...}, I:{...}, S:{...}, C:{...} }
+  const fromGame =
+    (disc && game && game.botDiscProfiles && typeof game.botDiscProfiles === "object")
+      ? (game.botDiscProfiles[disc] || game.botDiscProfiles[String(disc).toUpperCase()] || null)
+      : null;
+
+  if (!base && !fromGame) return null;
+  return { ...(base || {}), ...(fromGame || {}) };
 }
 
 function extractIntelForDenShare({ game, player }) {
@@ -833,11 +844,12 @@ const isLead = (() => {
   const sackShareIfDash = expectedSackShareNow({ game: g, players: latestPlayers || [] });
   const caughtLoss = lootPts;
 
- let options = ["LURK", "DASH", "BURROW"].filter(
-  (d) => d !== "BURROW" || !(p?.burrowUsedThisRaid === true)
-);
+ const burrowUsedCoalesced = !!(p?.burrowUsedThisRaid ?? p?.burrowUsed);
 
-  // Anti-herding coordination for congestion events
+ let options = ["LURK", "DASH", "BURROW"].filter(
+  (d) => d !== "BURROW" || !burrowUsedCoalesced
+);
+// Anti-herding coordination for congestion events
   if (String(nextEvent0) === "HIDDEN_NEST") {
     const picked = pickHiddenNestDashSet({ game: g, gameId, players: latestPlayers || [] });
     const dashSet = picked?.dashSet || null;
@@ -1420,7 +1432,7 @@ const res = evaluateOpsActions({
   me: bot,
   players: list,
   flagsRound: flags,
-  cfg: getStrategyCfgForBot(bot), // behoud: per-bot DISC overrides
+  cfg: getStrategyCfgForBot(bot, game), // behoud: per-bot DISC overrides (+ optioneel game.botDiscProfiles)
 });
     
 // ✅ Respecteer strategy: als best = PASS → echt PASS
@@ -1758,6 +1770,21 @@ if (share && denColor) {
     // if the bot actually knows it (SCOUT / intel). Otherwise rely on probabilistic danger.
     const meForMetrics = { ...p, hand, loot };
 
+    // Per-bot tuning (DISC + optional per-RAID overrides)
+    const cfg0 = { ...BOT_UTILITY_CFG, ...(getStrategyCfgForBot(p, g) || {}) };
+
+    // SHIFT anti-spam tuning (with safe fallbacks)
+    const roundNum = Number(g.round || 0);
+    const shiftDangerTrigger = Number.isFinite(Number(cfg0.shiftDangerTrigger)) ? Number(cfg0.shiftDangerTrigger) : 7.2;
+    const shiftLookahead = Number.isFinite(Number(cfg0.shiftLookahead)) ? Number(cfg0.shiftLookahead) : 4;
+    const shiftDistancePenalty = Number.isFinite(Number(cfg0.shiftDistancePenalty)) ? Number(cfg0.shiftDistancePenalty) : 0.25;
+    const shiftBenefitMin = Number.isFinite(Number(cfg0.shiftBenefitMin)) ? Number(cfg0.shiftBenefitMin) : 1.6;
+    const shiftCooldownRounds = Number.isFinite(Number(cfg0.shiftCooldownRounds)) ? Number(cfg0.shiftCooldownRounds) : 1;
+    const shiftOverrideBenefit = Number.isFinite(Number(cfg0.shiftOverrideBenefit)) ? Number(cfg0.shiftOverrideBenefit) : 3.0;
+    const lastMoveKind = String(p?.lastMoveKind || "").toUpperCase();
+    const lastMoveRound = Number.isFinite(Number(p?.lastMoveRound)) ? Number(p.lastMoveRound) : -999;
+    const shiftOnCooldown = (lastMoveKind === "SHIFT") && ((roundNum - lastMoveRound) <= shiftCooldownRounds);
+
     const basePlayers = Array.isArray(latestPlayers) ? latestPlayers : [];
     const mergedPlayers = basePlayers.length
       ? basePlayers.map((x) => (String(x?.id) === String(botId) ? meForMetrics : x))
@@ -1820,7 +1847,7 @@ if (share && denColor) {
       .filter((x) => Number.isFinite(x));
 
     const canScout = !flags?.scatter && track.length > 0;
-    const canShift = !flags?.lockEvents && track.length >= 2 && eventIdx < track.length - 1;
+    const canShift = !flags?.lockEvents && track.length >= 2 && eventIdx < track.length - 1 && loot.length > 0;
 
     const dangerHigh = dangerEffective >= 7.0;
     const dangerMid = dangerEffective >= 5.2;
@@ -1863,8 +1890,8 @@ if (share && denColor) {
         const nextPeak = peakDanger(nextFacts);
 
         // Only bother shifting if the near-term looks nasty and we don't have defensive tools ready.
-        if (nextPeak >= 7.2 && !defenseReady) {
-          const LOOKAHEAD = 4;
+        if (nextPeak >= shiftDangerTrigger && !defenseReady) {
+          const LOOKAHEAD = shiftLookahead;
           let best = null;
 
           for (let j = eventIdx + 1; j < Math.min(track.length, eventIdx + 1 + LOOKAHEAD); j++) {
@@ -1875,14 +1902,14 @@ if (share && denColor) {
             const candPeak = peakDanger(f);
 
             // Benefit: reduce immediate danger, small penalty for swapping too far.
-            const benefit = (nextPeak - candPeak) - 0.25 * (j - eventIdx);
+            const benefit = (nextPeak - candPeak) - shiftDistancePenalty * (j - eventIdx);
 
             if (!best || benefit > best.benefit) {
               best = { j, candId, candPeak, benefit };
             }
           }
 
-          if (best && best.benefit >= 1.6) {
+          if (best && best.benefit >= shiftBenefitMin) {
             shiftPick = {
               i1: eventIdx,
               i2: best.j,
@@ -1897,6 +1924,11 @@ if (share && denColor) {
           }
         }
       }
+
+    // Anti-SHIFT spam: block repeated SHIFT unless the benefit is huge.
+    if (shiftOnCooldown && shiftPick && Number(shiftPick.benefit || 0) < shiftOverrideBenefit) {
+      shiftPick = null;
+    }
     }
 
     // ---- FORAGE desire ----
@@ -2025,6 +2057,40 @@ if (share && denColor) {
           return;
         }
       } else {
+        // ✅ SHIFT COST: return highest loot to bottom of loot deck (prevents SHIFT spam)
+        if (!loot.length) {
+          // should not happen because canShift requires loot, but stay safe
+          did = { kind: "FORAGE", detail: "shift cost fail (no loot)" };
+          if (actionDeck.length > 0) {
+            let drawn = 0;
+            for (let i = 0; i < 2; i++) {
+              if (!actionDeck.length) break;
+              hand.push(actionDeck.pop());
+              drawn++;
+            }
+            did.detail += ` (${drawn} kaart(en))`;
+          } else if (lootDeck.length) {
+            const card = lootDeck.pop();
+            loot.push(card);
+            did = { kind: "SNATCH", detail: `${card?.t || "Loot"} ${card?.v ?? ""} (shift cost fail)` };
+          } else {
+            return;
+          }
+        } else {
+          let hiIdx = 0;
+          let hiVal = -1e9;
+          for (let k = 0; k < loot.length; k++) {
+            const v = Number(loot[k]?.v ?? loot[k]?.value ?? 0);
+            if (v > hiVal) {
+              hiVal = v;
+              hiIdx = k;
+            }
+          }
+          const spent = loot.splice(hiIdx, 1)[0];
+          if (spent) lootDeck.unshift(spent); // bottom of deck (since draw uses pop())
+          did.detail += ` cost: returned ${spent?.t || "Loot"} ${spent?.v ?? ""}`;
+        }
+
         const tmp = track[i1];
         track[i1] = track[i2];
         track[i2] = tmp;
@@ -2036,6 +2102,8 @@ if (share && denColor) {
 
     // persist player + game changes
     const pUpdate = { hand, loot };
+    pUpdate.lastMoveKind = did?.kind || null;
+    pUpdate.lastMoveRound = Number(g.round || 0);
     if (p && p._scoutUpdate && typeof p._scoutUpdate === "object") {
       Object.assign(pUpdate, p._scoutUpdate);
     }
@@ -2654,12 +2722,13 @@ const playersForDecision = base.length
     const isLead = computeIsLeadForPlayer(g, p, playersForDecision);
 
  // ✅ CANON: alleen burrowUsedThisRaid
-const burrowUsed = (p?.burrowUsedThisRaid === true);
+const burrowUsed = !!(p?.burrowUsedThisRaid ?? p?.burrowUsed);
 
-// ✅ strategy + heuristics verwachten me.burrowUsed (alias, niet schrijven)
+// ✅ strategy + heuristics verwachten me.burrowUsed (alias); ook burrowUsedThisRaid consistent maken
 const meForDecision = {
   ...p,
   burrowUsed,
+  burrowUsedThisRaid: burrowUsed,
 };
 
     // ✅ metrics altijd berekenen (voor logs + fallback)
@@ -2696,7 +2765,7 @@ const useStrategy = !noPeek || hasKnown;
         me: meForDecision,
         players: playersForDecision || [],
         flagsRound: flags, // ✅ gebruik filled flags (incl. denImmune/noPeek/etc)
-        cfg: getStrategyCfgForBot(meForDecision), // behoud: per-bot DISC overrides
+        cfg: getStrategyCfgForBot(meForDecision, g), // behoud: per-bot DISC overrides (+ optioneel game.botDiscProfiles)
         peekIntel, // ✅ zorgt dat strategy ook werkt in noPeek als bot intel heeft
       });
 
@@ -2734,6 +2803,24 @@ const useStrategy = !noPeek || hasKnown;
   decision = rec?.decision || "LURK";
 }
 
+// ✅ Runner-level panic cashout override (works even if strategy is disabled/noPeek)
+// If staying is risky, DASH is extremely safe, and we're carrying meaningful loot -> force DASH.
+try {
+  const stay = Number(metricsNow?.dangerEffective ?? NaN);
+  const dv = metricsNow?.dangerVec || null;
+  const dash = Number(dv?.dash ?? dv?.DASH ?? dv?.dashDanger ?? NaN);
+  const carry = Number(metricsNow?.carryValue ?? 0);
+
+  if (Number.isFinite(stay) && Number.isFinite(dash)) {
+    const stayThresh = 5.0;
+    const safeDash = 1.2;
+    const carryMin = 4;
+    if (carry >= carryMin && stay >= stayThresh && dash <= safeDash) {
+      decision = "DASH";
+    }
+  }
+} catch (e) {}
+
 if (decision === "BURROW" && burrowUsed) decision = "LURK";
 
 const nextEvent0 = nextEventId(g, 0);
@@ -2756,7 +2843,7 @@ const nextEvent0 = nextEventId(g, 0);
 
     const update = {
       decision,
-      ...(decision === "BURROW" && !burrowUsed ? { burrowUsedThisRaid: true } : {}),
+      ...(decision === "BURROW" && !burrowUsed ? { burrowUsedThisRaid: true, burrowUsed: true } : {}),
     };
 
     tx.update(pRef, update);
@@ -2989,4 +3076,3 @@ export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLU
 
   await updateDoc(gRef, { botsEnabled: true, actionDeck });
 }
-
