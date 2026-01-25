@@ -11,7 +11,7 @@ import { comboScore } from "../actionComboMatrix.js";
  *  ========================= */
 export const BOT_UTILITY_CFG = {
   // utility = gainLoot + denyOpponents + teamSynergy − riskPenalty − resourcePenalty
-  wLoot: 3.0,
+  wLoot: 6.0,
   wDeny: 0.8,
   wTeam: 0.6,
   wRisk: 1.15,
