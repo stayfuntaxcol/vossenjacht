@@ -30,6 +30,14 @@ export const BOT_UTILITY_CFG = {
   burrowMaxExtraCost: 3.5,    // spending your 1x BURROW is a resource cost
 
   // BURROW voor DASH 
+  roosterEarlyDashPenalty: 12.0,
+  roosterEarlyBurrowPenalty: 6.0,
+  roosterEarlyLurkBonus: 2.0,
+
+  roosterLateDashBonus: 10.0,       // mag gelijk blijven aan je oude gedrag
+  roosterLateStayPenalty: 10.0,
+  
+  // BURROW voor DASH 
   dashBeforeBurrowPenalty: 8.0,   // hoe hard we DASH ontmoedigen als burrow nog niet gebruikt is
   panicLurkPenalty: 6.0,          // bij paniek: LURK zwaar afstraffen
   panicBurrowBonus: 4.0,          // bij paniek: BURROW aantrekkelijker maken
@@ -304,18 +312,20 @@ function countRevealedRoosters(game) {
   const track = safeArr(game?.eventTrack).map((x) => String(x));
   const idx = Number.isFinite(Number(game?.eventIndex)) ? Number(game.eventIndex) : 0;
 
-  // Count roosters that already happened (before current index)
-  let c = 0;
-  for (let i = 0; i < Math.min(idx, track.length); i++) {
-    if (track[i] === "ROOSTER_CROW") c++;
-  }
-
-  // Fallback: if you do have eventRevealed, include it too
   const rev = safeArr(game?.eventRevealed);
+
+  let c = 0;
+
   if (rev.length) {
+    // count revealed roosters once
     const n = Math.min(track.length, rev.length);
     for (let i = 0; i < n; i++) {
-      if (rev[i] === true && track[i] === "ROOSTER_CROW") c = Math.max(c, c + 1); // keep nonzero
+      if (rev[i] === true && track[i] === "ROOSTER_CROW") c++;
+    }
+  } else {
+    // fallback: count roosters before current index
+    for (let i = 0; i < Math.min(idx, track.length); i++) {
+      if (track[i] === "ROOSTER_CROW") c++;
     }
   }
 
@@ -466,9 +476,20 @@ if (c.decisionUseFutureEvents && decision !== "DASH") {
 }
 
   // rooster pressure
-  let roosterBias = 0;
-  if (roostersNow >= 2) roosterBias = decision === "DASH" ? 2.0 : -3.0;
-  else if (roostersNow === 1 && carry >= 3) roosterBias = decision === "DASH" ? 0.8 : -1.2;
+const roostersNow = countRevealedRoosters(game);
+let roosterBias = 0;
+
+// 1e + 2e ROOSTER_CROW = veilig: straf DASH (en BURROW), beloon LURK een beetje
+if (String(nextId) === "ROOSTER_CROW" && roostersNow < 2) {
+  if (decision === "DASH") roosterBias -= Number(c.roosterEarlyDashPenalty ?? 4.0);
+  if (decision === "BURROW") roosterBias -= Number(c.roosterEarlyBurrowPenalty ?? 2.0);
+  if (decision === "LURK") roosterBias += Number(c.roosterEarlyLurkBonus ?? 0.5);
+}
+
+// 3e ROOSTER (roostersNow >=2) = einde nadert: dan mag DASH juist aantrekkelijk zijn
+else if (roostersNow >= 2) {
+  roosterBias = decision === "DASH" ? Number(c.roosterLateDashBonus ?? 2.0) : -Number(c.roosterLateStayPenalty ?? 3.0);
+}
 
   // BURROW cost: 1x per raid resource
   const burrowCost = decision === "BURROW" ? Number(c.burrowMaxExtraCost || 0) : 0;
@@ -520,6 +541,16 @@ if (c.decisionUseFutureEvents && decision !== "DASH") {
 if (String(nextId) === "HIDDEN_NEST" && decision === "BURROW") {
   utility -= Number(c.hiddenNestBurrowPenalty || 3.0);
 }  
+  
+// ✅ Force LURK on safe Rooster Crow (#1 and #2) IF we have next-event knowledge
+// "knowledge" = peekIntel had events (so nextId came from events[0])
+const hasNextKnowledge = !!(events && events[0]);
+
+if (hasNextKnowledge && String(nextId) === "ROOSTER_CROW" && roostersNow < 2) {
+  // make LURK always dominate
+  if (decision === "LURK") utility += 1000;
+  else utility -= 1000;
+}
 
   return { utility, surviveP, riskNow, futurePressure, carry, dashPush, sharePenalty, expectedCarryAfter };
 }
