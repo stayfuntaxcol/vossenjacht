@@ -22,7 +22,7 @@ export const BOT_UTILITY_CFG = {
   lookaheadN: 4,
 
   // DECISION
-  dashPushScale: 4,          // carry points -> dashPush=10
+  dashPushScale: 10,          // carry points -> dashPush=10
   dashPushThreshold: 7.5,     // dashPush above this: bias to DASH if risk not worse
   panicStayRisk: 6.5,         // anti-suicide lurk trigger
   suicideMargin: 1.2,         // "dashRisk not worse than stayRisk" margin
