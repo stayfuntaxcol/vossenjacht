@@ -45,6 +45,48 @@ const LOCK_MS = 1800;
 // UI pacing: played Action Cards must stay visible (face-up) on the Discard Pile
 const OPS_DISCARD_VISIBLE_MS = 3100;
 
+// DISC mapping per Den kleur
+const DISC_BY_DEN = { RED: "D", YELLOW: "I", GREEN: "S", BLUE: "C" };
+
+// Kleine, “stabiele” overrides (geen spikes)
+const DISC_UTILITY_OVERRIDES = {
+  D: { // RED: agressiever, sneller spelen
+    wRisk: 1.00,
+    wDeny: 0.95,
+    opsPlayTaxBase: 0.80,
+    opsMinAdvantage: 0.90,
+    opsReserveHandEarly: 2,
+    opsSpendCostBase: 0.38,
+  },
+  I: { // YELLOW: iets speelser, iets vaker control/tempo
+    wRisk: 1.10,
+    opsPlayTaxBase: 0.82,
+    opsMinAdvantage: 0.95,
+    opsReserveHandEarly: 3,
+    kickUpDustOptimism: 0.60,
+  },
+  S: { // GREEN: defensiever, iets meer sparen
+    wRisk: 1.25,
+    opsPlayTaxBase: 0.90,
+    opsMinAdvantage: 1.05,
+    opsReserveHandEarly: 3,
+    opsReserveHandMid: 2,
+  },
+  C: { // BLUE: analytisch, minst random, iets hogere drempel
+    wRisk: 1.30,
+    opsPlayTaxBase: 0.92,
+    opsMinAdvantage: 1.10,
+    kickUpDustOptimism: 0.48,
+    opsHighComboScore: 11,
+  },
+};
+
+function cfgForBot(botLike) {
+  const den = String(botLike?.color || botLike?.denColor || botLike?.den || "").toUpperCase();
+  const disc = DISC_BY_DEN[den] || "S";
+  return { ...BOT_UTILITY_CFG, ...(DISC_UTILITY_OVERRIDES[disc] || {}) };
+}
+
 /** Bot name pool (player cards exist for these) */
 const BOT_NAME_POOL = [
   "Astronaut",
@@ -1360,19 +1402,20 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
 
     for (const id of ids) ctx["handHas_" + id] = true;
 
-    // ---------- ranking (strategy.js) ----------
-    const usedIds =
-      (Array.isArray(game?.discardThisRoundActionIds) && game.discardThisRoundActionIds.length)
-        ? game.discardThisRoundActionIds.map((x) => String(x))
-        : (discardThisRoundActionIds || []);
+  // ---------- ranking (strategy.js) ----------
+const usedIds = (
+  Array.isArray(game?.discardThisRoundActionIds) && game.discardThisRoundActionIds.length
+)
+  ? game.discardThisRoundActionIds.map((x) => String(x))
+  : (Array.isArray(discardThisRoundActionIds) ? discardThisRoundActionIds : []);
 
-    const res = evaluateOpsActions({
-      game,
-      me: bot,
-      players: list,
-      flagsRound: flags,
-      cfg: getStrategyCfgForBot(bot),
-    });
+const res = evaluateOpsActions({
+  game,
+  me: bot,
+  players: list,
+  flagsRound: flags,
+  cfg: getStrategyCfgForBot(bot), // behoud: per-bot DISC overrides
+});
     
 // ✅ Respecteer strategy: als best = PASS → echt PASS
 if (res?.best?.kind !== "PLAY") return null;
@@ -2628,59 +2671,60 @@ const meForDecision = {
     let rec = null;
     let dec = null;
 
-    // simpele intel-check (optioneel): als bot knownUpcomingEvents heeft, strategy mag ook in noPeek
-    const hasKnown =
-      Array.isArray(meForDecision?.knownUpcomingEvents) &&
-      meForDecision.knownUpcomingEvents.filter(Boolean).length > 0;
+  // simpele intel-check (optioneel): als bot knownUpcomingEvents heeft, strategy mag ook in noPeek
+const known = Array.isArray(meForDecision?.knownUpcomingEvents)
+  ? meForDecision.knownUpcomingEvents.filter(Boolean)
+  : [];
+const hasKnown = known.length > 0;
 
-    const useStrategy = !noPeek || hasKnown;
+const useStrategy = !noPeek || hasKnown;
 
-    if (useStrategy) {
-      dec = evaluateDecision({
-        game: g,
-        me: meForDecision,
-        players: playersForDecision || [],
-        flagsRound: g.flagsRound,
-        cfg: getStrategyCfgForBot(meForDecision),
-      });
+if (useStrategy) {
+  dec = evaluateDecision({
+    game: g,
+    me: meForDecision,
+    players: playersForDecision || [],
+    flagsRound: g.flagsRound,
+    cfg: getStrategyCfgForBot(meForDecision), // behoud: per-bot DISC overrides
+  });
 
-      decision = dec?.decision || "LURK";
-    } else {
-      rec = recommendDecision({
-        presetKey,
-        denColor,
-        game: g,
-        me: meForDecision,
-        ctx: {
-          round: Number(g.round || 0),
-          isLead,
-          dashDecisionsSoFar,
+  decision = dec?.decision || "LURK";
+} else {
+  rec = recommendDecision({
+    presetKey,
+    denColor,
+    game: g,
+    me: meForDecision,
+    ctx: {
+      round: Number(g.round || 0),
+      isLead,
+      dashDecisionsSoFar,
 
-          roosterSeen: Number.isFinite(Number(g?.roosterSeen))
-            ? Number(g.roosterSeen)
-            : countRevealedRoosters(g),
-          postRooster2Window: countRevealedRoosters(g) >= 2,
+      roosterSeen: Number.isFinite(Number(g?.roosterSeen))
+        ? Number(g.roosterSeen)
+        : countRevealedRoosters(g),
+      postRooster2Window: countRevealedRoosters(g) >= 2,
 
-          carryValue: metricsNow?.carryValue,
-          carryValueRec: metricsNow?.carryValueRec,
-          dangerVec: metricsNow?.dangerVec,
-          dangerPeak: metricsNow?.dangerPeak,
-          dangerStay: metricsNow?.dangerStay,
-          dangerEffective: metricsNow?.dangerEffective,
-          nextEventIdUsed: metricsNow?.nextEventIdUsed,
-          pDanger: metricsNow?.pDanger,
-          confidence: metricsNow?.confidence,
+      carryValue: metricsNow?.carryValue,
+      carryValueRec: metricsNow?.carryValueRec,
+      dangerVec: metricsNow?.dangerVec,
+      dangerPeak: metricsNow?.dangerPeak,
+      dangerStay: metricsNow?.dangerStay,
+      dangerEffective: metricsNow?.dangerEffective,
+      nextEventIdUsed: metricsNow?.nextEventIdUsed,
+      pDanger: metricsNow?.pDanger,
+      confidence: metricsNow?.confidence,
 
-          flagsRound: g?.flagsRound || null,
-        },
-      });
+      flagsRound: g?.flagsRound || null,
+    },
+  });
 
-      decision = rec?.decision || "LURK";
-    }
+  decision = rec?.decision || "LURK";
+}
 
-    if (decision === "BURROW" && burrowUsed) decision = "LURK";
+if (decision === "BURROW" && burrowUsed) decision = "LURK";
 
-    const nextEvent0 = nextEventId(g, 0);
+const nextEvent0 = nextEventId(g, 0);
 
     // ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
