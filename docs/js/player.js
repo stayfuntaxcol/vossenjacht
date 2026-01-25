@@ -1897,6 +1897,31 @@ function closeHandModal() {
   handModalOverlay.classList.add("hidden");
 }
 
+// ===== SOLO RAID: split Action Cards by value =====
+const SOLO_NO_VALUE_ACTIONS = new Set([
+  "holdstill",
+  "maskswap",
+  "alphacall",
+  "scatter",
+  "burrowbeacon",
+  "followthetail",
+  "scentcheck",
+]);
+
+function normActionName(name) {
+  return String(name || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+// Solo = only 1 active player left in the Yard (niet dashed / niet gevangen)
+function isSoloRaidNow() {
+  const list = Array.isArray(leadCCPlayers) ? leadCCPlayers : [];
+  const active = list.filter((pl) => pl && pl.inYard !== false && !pl.dashed);
+  return active.length <= 1;
+}
+
 function renderHandGrid() {
   if (!handCardsGrid) return;
   handCardsGrid.innerHTML = "";
@@ -1923,14 +1948,28 @@ function renderHandGrid() {
     return;
   }
 
-  hand.forEach((card, idx) => {
+    const solo = isSoloRaidNow();
+
+  const appendLabel = (text) => {
+    const d = document.createElement("div");
+    d.className = "hand-group-label";
+    d.textContent = text;
+    handCardsGrid.appendChild(d);
+  };
+
+  const appendDivider = () => {
+    const d = document.createElement("div");
+    d.className = "hand-group-divider";
+    handCardsGrid.appendChild(d);
+  };
+
+  const renderTile = (card, idx, lowValue = false) => {
     const tile = document.createElement("button");
     tile.type = "button";
-    tile.className = "hand-card-tile";
+    tile.className = "hand-card-tile" + (lowValue ? " hand-card-tile--lowvalue" : "");
 
     const cardName = typeof card === "string" ? card : (card?.name || card?.id || "");
 
-    // renderActionCard verwacht naam; fallback naar object indien nodig
     let cardEl = null;
     try {
       if (typeof renderActionCard === "function") {
@@ -1959,7 +1998,35 @@ function renderHandGrid() {
 
     tile.addEventListener("click", () => openHandCardDetail(idx));
     handCardsGrid.appendChild(tile);
+  };
+
+  // Normaal gedrag: geen splitsing
+  if (!solo) {
+    hand.forEach((card, idx) => renderTile(card, idx, false));
+    return;
+  }
+
+  // Solo: split in waardevol vs geen waarde
+  const high = [];
+  const low = [];
+
+  hand.forEach((card, idx) => {
+    const cardName = typeof card === "string" ? card : (card?.name || card?.id || "");
+    const key = normActionName(cardName);
+    if (SOLO_NO_VALUE_ACTIONS.has(key)) low.push({ card, idx });
+    else high.push({ card, idx });
   });
+
+  if (high.length) {
+    appendLabel("Bruikbaar (solo)");
+    high.forEach((x) => renderTile(x.card, x.idx, false));
+  }
+
+  if (low.length) {
+    if (high.length) appendDivider();
+    appendLabel("Geen verschil meer (solo)");
+    low.forEach((x) => renderTile(x.card, x.idx, true));
+  }
 }
 
 // ===== ACTION CARD INFO =====
