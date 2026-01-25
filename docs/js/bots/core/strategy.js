@@ -58,7 +58,7 @@ export const BOT_UTILITY_CFG = {
   opsHighComboScore: 9,            // stricter definition of “combo key”
   opsReserveComboBoost: 0,         // don't auto-increase reserve just because a combo exists
 
-  opsSpendCostBase: 0.55,          // softer opportunity cost per spent card
+  opsSpendCostBase: 0.40,          // softer opportunity cost per spent card
   opsSpendCostEarlyMult: 1.05,
   opsSpendCostLateMult: 0.8,
   
@@ -67,8 +67,8 @@ export const BOT_UTILITY_CFG = {
   opsPlayTaxEarlyMult: 1.35,        // early: harder sparen
   opsPlayTaxLateMult: 0.85,         // late: makkelijker uitgeven
 
-  opsMinAdvantage: 2.0,             // minimaal voordeel boven PASS om überhaupt te spelen
-  opsMinAdvantageEarlyBonus: 0.6,   // early: nog strenger
+  opsMinAdvantage: 1.2,             // minimaal voordeel boven PASS om überhaupt te spelen
+  opsMinAdvantageEarlyBonus: 0.3,   // early: nog strenger
 
   // combo planning: key pieces bewaren, maar "setup" plays toestaan
   opsComboHoldPenaltyScale: 0.18,   // penalty ~ scale * comboKeyScore
