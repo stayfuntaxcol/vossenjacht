@@ -391,8 +391,8 @@ function decisionUtility({ decision, game, me, players, flagsRound, peekIntel, c
   const isHiddenNest = String(nextId) === "HIDDEN_NEST";
 
   // 3e Rooster Crow = volgende is ROOSTER_CROW terwijl er al 2 gezien zijn
-  const roosters = countRevealedRoosters(game);
-  const isThirdCrowNext = String(nextId) === "ROOSTER_CROW" && roosters >= 2;
+ const roostersNow = countRevealedRoosters(game);
+ const isThirdCrowNext = String(nextId) === "ROOSTER_CROW" && roostersNow >= 2;
 
    
    // ✅ Den Signal: als jouw denImmune actief is, dan vrijwel nooit DASH/BURROW
@@ -466,10 +466,9 @@ if (c.decisionUseFutureEvents && decision !== "DASH") {
 }
 
   // rooster pressure
-  const roosters = countRevealedRoosters(game);
   let roosterBias = 0;
-  if (roosters >= 2) roosterBias = decision === "DASH" ? 2.0 : -3.0;
-  else if (roosters === 1 && carry >= 3) roosterBias = decision === "DASH" ? 0.8 : -1.2;
+  if (roostersNow >= 2) roosterBias = decision === "DASH" ? 2.0 : -3.0;
+  else if (roostersNow === 1 && carry >= 3) roosterBias = decision === "DASH" ? 0.8 : -1.2;
 
   // BURROW cost: 1x per raid resource
   const burrowCost = decision === "BURROW" ? Number(c.burrowMaxExtraCost || 0) : 0;
