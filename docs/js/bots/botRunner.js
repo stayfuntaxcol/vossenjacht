@@ -61,6 +61,105 @@ const BOT_NAME_POOL = [
 function normColor(c) {
   return String(c || "").trim().toUpperCase();
 }
+// ===== DISC personality -> strategy cfg overrides (per DEN color) =====
+// Mapping: RED=D, YELLOW=I, GREEN=S, BLUE=C
+const DISC_BY_DEN = {
+  RED: "D",
+  YELLOW: "I",
+  GREEN: "S",
+  BLUE: "C",
+};
+
+// Alleen overrides (strategy.js merged dit over BOT_UTILITY_CFG heen)
+const DISC_STRATEGY_OVERRIDES = {
+  // D (RED) = direct, assertief: eerder kaarten spelen, minder sparen, iets minder risk-avers
+  D: {
+    wRisk: 1.00,
+    wTeam: 0.45,
+    wShare: 0.65,
+
+    // OPS early: minder krampachtig sparen
+    opsReserveHandEarly: 2,
+    opsSpendCostBase: 0.50,
+    opsSpendCostEarlyMult: 1.00,
+
+    opsPlayTaxBase: 0.95,
+    opsPlayTaxEarlyMult: 1.15,
+
+    // drempel om PASS te verslaan omlaag
+    actionPlayMinGain: 0.75,
+    actionPlayMinGainEarlyBonus: 0.10,
+    opsMinAdvantage: 1.55,
+    opsMinAdvantageEarlyBonus: 0.20,
+  },
+
+  // I (YELLOW) = opportunistisch/speels: iets vaker utility/control kaarten, ook eerder spelen
+  I: {
+    wRisk: 1.05,
+    wDeny: 0.95,
+    wTeam: 0.60,
+    wShare: 0.95,
+
+    opsReserveHandEarly: 2,
+    opsSpendCostBase: 0.52,
+
+    opsPlayTaxBase: 0.98,
+    opsPlayTaxEarlyMult: 1.20,
+
+    actionPlayMinGain: 0.80,
+    actionPlayMinGainEarlyBonus: 0.15,
+    opsMinAdvantage: 1.65,
+    opsMinAdvantageEarlyBonus: 0.25,
+
+    // net iets meer “shuffle durf”
+    kickUpDustOptimism: 0.60,
+  },
+
+  // S (GREEN) = stabiel/defensief: speelt minder vaak early, maar niet verlamd
+  S: {
+    wRisk: 1.25,
+    wTeam: 0.80,
+    wShare: 1.15,
+
+    opsReserveHandEarly: 3,
+    opsPlayTaxBase: 1.05,
+    opsPlayTaxEarlyMult: 1.30,
+
+    actionPlayMinGain: 0.88,
+    actionPlayMinGainEarlyBonus: 0.22,
+    opsMinAdvantage: 1.90,
+    opsMinAdvantageEarlyBonus: 0.45,
+  },
+
+  // C (BLUE) = analytisch: blijft selectief, maar betere combo/setup waardering early
+  C: {
+    wRisk: 1.30,
+    wTeam: 0.55,
+    wShare: 0.95,
+
+    lookaheadN: 5,
+    actionDeckSampleN: 40,
+    comboMaxPairs: 30,
+
+    opsReserveHandEarly: 3,
+    opsPlayTaxBase: 1.05,
+    opsPlayTaxEarlyMult: 1.33,
+
+    opsMinAdvantage: 1.95,
+    opsMinAdvantageEarlyBonus: 0.50,
+
+    // C mag eerder “setup” doen als het combo’s opent
+    opsComboSetupBonusScale: 0.12,
+    opsComboSetupEarlyMult: 0.65,
+  },
+};
+
+function getStrategyCfgForBot(botOrPlayer) {
+  const den = normColor(botOrPlayer?.color || botOrPlayer?.den || botOrPlayer?.denColor);
+  const disc = DISC_BY_DEN[den] || null;
+  return (disc && DISC_STRATEGY_OVERRIDES[disc]) ? DISC_STRATEGY_OVERRIDES[disc] : null;
+}
+
 function extractIntelForDenShare({ game, player }) {
   const idx = Number.isFinite(Number(game?.eventIndex)) ? Number(game.eventIndex) : null;
   if (idx === null) return null;
@@ -1272,7 +1371,7 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
       me: bot,
       players: list,
       flagsRound: flags,
-      cfg: BOT_UTILITY_CFG,
+      cfg: getStrategyCfgForBot(bot),
     });
     
 // ✅ Respecteer strategy: als best = PASS → echt PASS
@@ -2522,7 +2621,7 @@ const meForDecision = {
         me: meForDecision,
         players: freshPlayers || [],
         flagsRound: g.flagsRound,
-        cfg: BOT_UTILITY_CFG,
+        cfg: getStrategyCfgForBot(meForDecision),
       });
 
       decision = dec?.decision || "LURK";
