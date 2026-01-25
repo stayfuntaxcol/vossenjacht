@@ -2559,36 +2559,10 @@ const meForDecision = {
       decision = rec?.decision || "LURK";
     }
 
-// ✅ HARD RULE (maar niet dom):
-// als bot DASH wil terwijl BURROW nog niet is gebruikt:
-// - bij paniek -> BURROW
-// - anders -> LURK
-// uitzonderingen: Hidden Nest en 3e Rooster Crow
+    const burrowUsed = (p?.burrowUsedThisRaid === true);
+    if (decision === "BURROW" && burrowUsed) decision = "LURK";
 
-const burrowUsed = (p?.burrowUsedThisRaid === true);
-
-const nextEvent0 = nextEventId(g, 0);
-const isHiddenNest = String(nextEvent0) === "HIDDEN_NEST";
-
-const roosterSeenNow = Number.isFinite(Number(g?.roosterSeen))
-  ? Number(g.roosterSeen)
-  : countRevealedRoosters(g);
-
-const isThirdCrowNext = String(nextEvent0) === "ROOSTER_CROW" && roosterSeenNow >= 2;
-
-const panicStayRisk = Number(BOT_UTILITY_CFG?.panicStayRisk ?? 6.5);
-
-// stayRisk = hoe gevaarlijk is blijven/lurk (strategy meta of dangerVec)
-const stayRisk = Number(
-  dec?.meta?.stayRisk ??
-  rec?.dangerVec?.lurk ??
-  metricsNow?.dangerVec?.lurk ??
-  0
-);
-
-if (!burrowUsed && decision === "DASH" && !isHiddenNest && !isThirdCrowNext) {
-  decision = (stayRisk >= panicStayRisk) ? "BURROW" : "LURK";
-}
+    const nextEvent0 = nextEventId(g, 0);
 
     // ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
