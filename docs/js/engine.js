@@ -530,15 +530,32 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
         if (normalizeColorKey(p.color) !== color) continue;
 
         if (p.decision === "BURROW") {
-          await addLog(gameId, {
-            round,
-            phase: "REVEAL",
-            kind: "EVENT",
-            playerId: p.id,
-            message: `${p.name || "Vos"} overleeft in zijn hol (BURROW).`,
-          });
-          continue;
-        }
+  const pRef = doc(db, "games", gameId, "players", p.id);
+  const already = !!p.burrowUsedThisRaid;
+
+  if (already) {
+    await addLog(gameId, {
+      round,
+      phase: "REVEAL",
+      kind: "EVENT",
+      playerId: p.id,
+      message: `${p.name || "Vos"} probeert opnieuw te burrowen, maar dat mag maar 1× per raid.`,
+    });
+    // géén continue -> laat event afhandelen (kan dus gepakt worden)
+  } else {
+    await updateDoc(pRef, { burrowUsedThisRaid: true });
+    p.burrowUsedThisRaid = true;
+
+    await addLog(gameId, {
+      round,
+      phase: "REVEAL",
+      kind: "EVENT",
+      playerId: p.id,
+      message: `${p.name || "Vos"} is veilig in zijn hol (BURROW).`,
+    });
+    continue;
+  }
+}
 
         if (p.decision === "DASH") continue;
 
@@ -585,6 +602,7 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
         } else {
           // 1e burrow = toegestaan → markeer in Firestore en skip event
           await updateDoc(pRef, { burrowUsedThisRaid: true });
+          p.burrowUsedThisRaid = true;
 
           await addLog(gameId, {
             round,
@@ -713,28 +731,38 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
       }
     }
   } else if (eventId === "MAGPIE_SNITCH") {
-    const ordered = [...players].sort((a, b) => {
-      const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
-      const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
-      return ao - bo;
-    });
+  const orderedAll = [...players].sort((a, b) => {
+    const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+    const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
+    return ao - bo;
+  });
 
-    let lead = null;
-    if (ordered.length) {
-      const idx = typeof game.leadIndex === "number" ? game.leadIndex : 0;
-      lead = ordered[idx] || ordered[0];
-    }
+  // leadIndex is gebaseerd op actieve yard-spelers (match host.js)
+  const orderedActive = orderedAll.filter((x) => x && x.inYard);
+  const base = orderedActive.length ? orderedActive : orderedAll;
 
-    if (lead && isInYardForEvents(lead)) {
-      if (lead.decision === "BURROW") {
+  let lead = null;
+  if (base.length) {
+    const idxRaw = typeof game.leadIndex === "number" ? game.leadIndex : 0;
+    const idx = ((idxRaw % base.length) + base.length) % base.length;
+    lead = base[idx] || base[0];
+  }
+
+  if (lead && isInYardForEvents(lead)) {
+    if (lead.decision === "BURROW") {
+      // ✅ BURROW is 1x per raid: consume token hier
+      const pRef = doc(db, "games", gameId, "players", lead.id);
+      const already = !!lead.burrowUsedThisRaid;
+
+      if (already) {
         await addLog(gameId, {
           round,
           phase: "REVEAL",
           kind: "EVENT",
           playerId: lead.id,
-          message: `Magpie Snitch ziet de Lead Fox, maar ${lead.name || "de vos"} zit veilig in zijn hol.`,
+          message: `${lead.name || "Lead Fox"} probeert opnieuw te burrowen, maar dat mag maar 1× per raid.`,
         });
-      } else if (lead.decision !== "DASH") {
+        // geen continue -> Magpie effect gaat door (dus kan gepakt worden)
         lead.inYard = false;
         lead.loot = [];
         await addLog(gameId, {
@@ -745,31 +773,63 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
           message: `Magpie Snitch verraadt de Lead Fox – ${lead.name || "de vos"} wordt gepakt en verliest alle buit.`,
         });
       } else {
+        await updateDoc(pRef, { burrowUsedThisRaid: true });
+        lead.burrowUsedThisRaid = true;
+
         await addLog(gameId, {
           round,
           phase: "REVEAL",
           kind: "EVENT",
           playerId: lead.id,
-          message: "Magpie Snitch vindt niets – de Lead Fox is al aan het dashen.",
+          message: `Magpie Snitch ziet de Lead Fox, maar ${lead.name || "de vos"} zit veilig in zijn hol (BURROW).`,
         });
       }
+    } else if (lead.decision !== "DASH") {
+      lead.inYard = false;
+      lead.loot = [];
+      await addLog(gameId, {
+        round,
+        phase: "REVEAL",
+        kind: "EVENT",
+        playerId: lead.id,
+        message: `Magpie Snitch verraadt de Lead Fox – ${lead.name || "de vos"} wordt gepakt en verliest alle buit.`,
+      });
+    } else {
+      await addLog(gameId, {
+        round,
+        phase: "REVEAL",
+        kind: "EVENT",
+        playerId: lead.id,
+        message: "Magpie Snitch vindt niets – de Lead Fox is al aan het dashen.",
+      });
     }
-    
+  } else {
+    await addLog(gameId, {
+      round,
+      phase: "REVEAL",
+      kind: "EVENT",
+      message: "Magpie Snitch: geen effect (Lead Fox is niet in de Yard).",
+    });
+  }
+
 } else if (eventId === "SILENT_ALARM") {
-  const ordered = [...players].sort((a, b) => {
+  const orderedAll = [...players].sort((a, b) => {
     const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
     const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
     return ao - bo;
   });
 
+  const orderedActive = orderedAll.filter((x) => x && x.inYard);
+  const base = orderedActive.length ? orderedActive : orderedAll;
+
   let lead = null;
-  if (ordered.length) {
-    const idx = typeof game.leadIndex === "number" ? game.leadIndex : 0;
-    lead = ordered[idx] || ordered[0];
+  if (base.length) {
+    const idxRaw = typeof game.leadIndex === "number" ? game.leadIndex : 0;
+    const idx = ((idxRaw % base.length) + base.length) % base.length;
+    lead = base[idx] || base[0];
   }
 
   if (lead && isInYardForEvents(lead)) {
-    // ✅ Belangrijk: DASH = al weg → Silent Alarm heeft dan geen effect
     if (lead.decision === "DASH") {
       await addLog(gameId, {
         round,
@@ -782,7 +842,6 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
       const loot = Array.isArray(lead.loot) ? [...lead.loot] : [];
 
       if (loot.length >= 2) {
-        // betaalt 2 loot (valt in de Sack)
         const drop1 = loot.pop();
         const drop2 = loot.pop();
         lead.loot = loot;
@@ -797,7 +856,6 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
           message: `${lead.name || "Lead Fox"} betaalt Silent Alarm en legt 2 buit af in de Sack.`,
         });
       } else {
-        // kan niet betalen -> verliest lead-status (extra lead-rotatie)
         leadAdvanceBonus = 1;
         await addLog(gameId, {
           round,
