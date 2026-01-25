@@ -109,7 +109,7 @@ body.player-body {
 @media (min-width: 900px) {
   .player-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1.1fr);
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
     align-items: stretch;
   }
 }
