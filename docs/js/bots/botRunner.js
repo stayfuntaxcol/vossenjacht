@@ -690,7 +690,9 @@ const isLead = (() => {
   const sackShareIfDash = expectedSackShareNow({ game: g, players: latestPlayers || [] });
   const caughtLoss = lootPts;
 
-  let options = ["LURK", "DASH", "BURROW"].filter((d) => d !== "BURROW" || !p.burrowUsed);
+ let options = ["LURK", "DASH", "BURROW"].filter(
+  (d) => d !== "BURROW" || !(p?.burrowUsedThisRaid === true)
+);
 
   // Anti-herding coordination for congestion events
   if (String(nextEvent0) === "HIDDEN_NEST") {
@@ -2483,15 +2485,14 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
     const dashDecisionsSoFar = countDashDecisions(freshPlayers);
     const isLead = computeIsLeadForPlayer(g, p, freshPlayers);
 
-    // ✅ burrowUsed uit Firestore (werkt met burrowUsed of burrowUsedThisRaid)
-    const burrowUsed = (p?.burrowUsedThisRaid === true) || (p?.burrowUsed === true);
+ // ✅ CANON: engine gebruikt alleen burrowUsedThisRaid
+const burrowUsed = (p?.burrowUsedThisRaid === true);
 
-    // ✅ strategy + heuristics verwachten me.burrowUsed
-    const meForDecision = {
-      ...p,
-      burrowUsed,
-      burrowUsedThisRaid: burrowUsed, // harmless alias (voor metrics consistentie)
-    };
+// ✅ strategy + heuristics verwachten me.burrowUsed (alias, niet schrijven naar Firestore)
+const meForDecision = {
+  ...p,
+  burrowUsed,
+};
 
     // ✅ metrics altijd berekenen (voor logs + fallback)
     const metricsNow = buildBotMetricsForLog({
@@ -2617,12 +2618,6 @@ if (!isHiddenNest && !isThirdCrowNext && decision === "DASH") {
     }
 
     const update = { decision };
-
-    // ✅ schrijf burrowUsed weg als BURROW gekozen is (jouw huidige Firestore veld)
-   if (decision === "BURROW") {
-  update.burrowUsedThisRaid = true;  // nieuw/canoniek
-  update.burrowUsed = true;          // legacy compat
-}
 
     tx.update(pRef, update);
 
@@ -2846,7 +2841,6 @@ export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLU
     den: color,
     inYard: true,
     dashed: false,
-    burrowUsed: false,
     burrowUsedThisRaid: false,
     decision: null,
     hand,
