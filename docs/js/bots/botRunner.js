@@ -106,95 +106,311 @@ function normColor(c) {
 
 // Alleen overrides (strategy.js merged dit over BOT_UTILITY_CFG heen)
 const DISC_STRATEGY_OVERRIDES = {
-  // D (RED) = direct, assertief: eerder kaarten spelen, minder sparen, iets minder risk-avers
+  // D (RED) = Driver (agressief cashen, weinig burrow, tempo drukken)
   D: {
-    wRisk: 1.00,
+    wLoot: 6.2,
+    wRisk: 0.95,
     wTeam: 0.45,
-    wShare: 0.65,
+    wShare: 0.55,
+    wDeny: 0.75,
+    wResource: 0.35,
 
-    // OPS early: minder krampachtig sparen
+    lookaheadN: 4,
+    dashPushScale: 1.05,
+    dashPushThreshold: 8.4,
+
+    // Panic cashout override
+    panicStayRisk: 7.2,
+    panicDashStayRisk: 6.4,
+    panicDashSafeDashRisk: 1.3,
+    panicDashCarryMin: 4,
+    suicideMargin: 0.4,
+
+    // Burrow rules (hard block if already used)
+    burrowMinSafetyGain: 2.8,
+    burrowMaxExtraCost: 0.9,
+    burrowAlreadyUsedPenalty: 999,
+
+    // Rooster handling
+    roosterEarlyDashPenalty: 2.8,
+    roosterEarlyBurrowPenalty: 3.5,
+    roosterEarlyLurkBonus: 1.0,
+    roosterLateDashBonus: 1.3,
+    roosterLateStayPenalty: 1.0,
+
+    dashBeforeBurrowPenalty: 1.0,
+    panicLurkPenalty: 6.0,
+    panicBurrowBonus: 3.0,
+
+    // SHIFT anti-spam
+    shiftMinGain: 3.2,
+    shiftDangerTrigger: 7.8,
+    shiftLookahead: 4,
+    shiftDistancePenalty: 0.28,
+    shiftBenefitMin: 2.0,
+    shiftCooldownRounds: 2,
+    shiftOverrideBenefit: 3.6,
+    shiftRequireLoot: true,
+
+    // OPS card play
+    actionDeckSampleN: 28,
+    actionReserveMinHand: 2,
+    actionPlayMinGain: 0.72,
+    comboMinGain: 0.95,
+    allowComboSearch: true,
+    comboMaxPairs: 24,
+
+    opsEarlyRounds: 2,
     opsReserveHandEarly: 2,
-    opsSpendCostBase: 0.48,
-    opsSpendCostEarlyMult: 1.00,
+    opsReserveHandMid: 1,
+    opsReserveHandLate: 0,
 
-    opsPlayTaxBase: 0.90,
+    opsPlayTaxBase: 0.88,
     opsPlayTaxEarlyMult: 1.05,
+    opsPlayTaxLateMult: 0.85,
 
-    // drempel om PASS te verslaan omlaag
-    actionPlayMinGain: 0.70,
-    actionPlayMinGainEarlyBonus: 0.10,
+    opsSpendCostBase: 0.50,
+    opsSpendCostEarlyMult: 1.00,
+    opsSpendCostLateMult: 0.82,
+
     opsMinAdvantage: 1.35,
-    opsMinAdvantageEarlyBonus: 0.20,
+    opsMinAdvantageEarlyBonus: 0.18,
+
+    // Threat-mode OPS (dangerlijk next event / lead-only threat)
+    opsThreatDangerTrigger: 5.2,
+    opsThreatPlayBoost: 0.65,
+    opsLeadThreatExtraBoost: 0.55,
+    opsThreatPlayTaxMult: 0.78,
   },
 
-  // I (YELLOW) = opportunistisch/speels: iets vaker utility/control kaarten, ook eerder spelen
+  // I (YELLOW) = Influencer (loot/tempo, cards & combos, opportunistisch)
   I: {
-    wRisk: 1.12,
-    wDeny: 0.95,
+    wLoot: 6.6,
+    wRisk: 1.05,
     wTeam: 0.60,
     wShare: 0.95,
-    wLoot: 6.40,
+    wDeny: 0.95,
+    wResource: 0.45,
 
-    shiftMinGain: 3.60,
-    dashPushThreshold: 8.20,
-    
-    opsReserveHandEarly: 2,
-    opsSpendCostBase: 0.52,
+    lookaheadN: 4,
+    dashPushScale: 1.12,
+    dashPushThreshold: 8.1,
 
-    opsPlayTaxBase: 0.92,
-    opsPlayTaxEarlyMult: 1.10,
+    panicStayRisk: 6.8,
+    panicDashStayRisk: 6.2,
+    panicDashSafeDashRisk: 1.4,
+    panicDashCarryMin: 3,
+    suicideMargin: 0.5,
 
-    actionPlayMinGain: 0.74,
-    actionPlayMinGainEarlyBonus: 0.15,
-    opsMinAdvantage: 1.45,
-    opsMinAdvantageEarlyBonus: 0.25,
+    burrowMinSafetyGain: 2.6,
+    burrowMaxExtraCost: 1.0,
+    burrowAlreadyUsedPenalty: 999,
+
+    roosterEarlyDashPenalty: 3.2,
+    roosterEarlyBurrowPenalty: 3.8,
+    roosterEarlyLurkBonus: 0.8,
+    roosterLateDashBonus: 1.5,
+    roosterLateStayPenalty: 1.2,
+
+    dashBeforeBurrowPenalty: 0.9,
+    panicLurkPenalty: 6.2,
+    panicBurrowBonus: 3.6,
+
+    // SHIFT anti-spam (I: soms, maar gecontroleerd)
+    shiftMinGain: 3.4,
+    shiftDangerTrigger: 7.1,
+    shiftLookahead: 4,
+    shiftDistancePenalty: 0.24,
+    shiftBenefitMin: 1.55,
+    shiftCooldownRounds: 1,
+    shiftOverrideBenefit: 2.8,
+    shiftRequireLoot: true,
 
     // net iets meer “shuffle durf”
     kickUpDustOptimism: 0.45,
+
+    // OPS (I speelt cards vaker)
+    actionDeckSampleN: 36,
+    actionReserveMinHand: 1,
+    actionPlayMinGain: 0.68,
+    comboMinGain: 0.82,
+    allowComboSearch: true,
+    comboMaxPairs: 34,
+
+    opsEarlyRounds: 2,
+    opsReserveHandEarly: 2,
+    opsReserveHandMid: 1,
+    opsReserveHandLate: 0,
+
+    opsPlayTaxBase: 0.82,
+    opsPlayTaxEarlyMult: 1.10,
+    opsPlayTaxLateMult: 0.80,
+
+    opsSpendCostBase: 0.48,
+    opsSpendCostEarlyMult: 0.95,
+    opsSpendCostLateMult: 0.78,
+
+    opsMinAdvantage: 1.30,
+    opsMinAdvantageEarlyBonus: 0.25,
+
+    // Threat-mode OPS
+    opsThreatDangerTrigger: 4.8,
+    opsThreatPlayBoost: 0.75,
+    opsLeadThreatExtraBoost: 0.60,
+    opsThreatPlayTaxMult: 0.75,
   },
 
-  // S (GREEN) = stabiel/defensief: speelt minder vaak early, maar niet verlamd
+  // S (GREEN) = Stabilizer (veilig, team, cash-out op tijd, weinig risico)
   S: {
-    wRisk: 1.25,
-    wTeam: 0.80,
-    wShare: 1.15,
+    wLoot: 5.5,
+    wRisk: 1.30,
+    wTeam: 0.85,
+    wShare: 1.20,
+    wDeny: 0.65,
+    wResource: 0.55,
 
-    burrowMinSafetyGain: 2.50,
-    
+    lookaheadN: 4,
+    dashPushScale: 0.95,
+    dashPushThreshold: 7.7,
+
+    panicStayRisk: 6.2,
+    panicDashStayRisk: 5.8,
+    panicDashSafeDashRisk: 1.6,
+    panicDashCarryMin: 3,
+    suicideMargin: 0.2,
+
+    burrowMinSafetyGain: 2.3,
+    burrowMaxExtraCost: 1.2,
+    burrowAlreadyUsedPenalty: 999,
+
+    roosterEarlyDashPenalty: 3.8,
+    roosterEarlyBurrowPenalty: 4.6,
+    roosterEarlyLurkBonus: 0.5,
+    roosterLateDashBonus: 1.2,
+    roosterLateStayPenalty: 1.6,
+
+    dashBeforeBurrowPenalty: 1.2,
+    panicLurkPenalty: 6.6,
+    panicBurrowBonus: 4.2,
+
+    // SHIFT anti-spam (S: zelden, cooldown langer)
+    shiftMinGain: 3.4,
+    shiftDangerTrigger: 7.3,
+    shiftLookahead: 4,
+    shiftDistancePenalty: 0.30,
+    shiftBenefitMin: 1.9,
+    shiftCooldownRounds: 2,
+    shiftOverrideBenefit: 3.1,
+    shiftRequireLoot: true,
+
+    // OPS (S speelt vooral defensief in threat)
+    actionDeckSampleN: 30,
+    actionReserveMinHand: 2,
+    actionPlayMinGain: 0.78,
+    comboMinGain: 0.98,
+    allowComboSearch: true,
+    comboMaxPairs: 22,
+
+    opsEarlyRounds: 3,
     opsReserveHandEarly: 2,
-    opsPlayTaxBase: 0.98,
-    opsPlayTaxEarlyMult: 1.18,
+    opsReserveHandMid: 2,
+    opsReserveHandLate: 1,
 
-    actionPlayMinGain: 0.84,
-    actionPlayMinGainEarlyBonus: 0.22,
-    opsMinAdvantage: 1.65,
-    opsMinAdvantageEarlyBonus: 0.45,
+    opsPlayTaxBase: 0.92,
+    opsPlayTaxEarlyMult: 1.18,
+    opsPlayTaxLateMult: 0.92,
+
+    opsSpendCostBase: 0.55,
+    opsSpendCostEarlyMult: 1.10,
+    opsSpendCostLateMult: 0.88,
+
+    opsMinAdvantage: 1.55,
+    opsMinAdvantageEarlyBonus: 0.40,
+
+    // Threat-mode OPS
+    opsThreatDangerTrigger: 4.6,
+    opsThreatPlayBoost: 0.70,
+    opsLeadThreatExtraBoost: 0.65,
+    opsThreatPlayTaxMult: 0.78,
   },
 
-  // C (BLUE) = analytisch: blijft selectief, maar betere combo/setup waardering early
+  // C (BLUE) = Calculator (analytisch, betere timing, meer lookahead & card-evaluatie)
   C: {
-    wRisk: 1.30,
-    wTeam: 0.55,
+    wLoot: 5.9,
+    wRisk: 1.18,
+    wTeam: 0.60,
     wShare: 0.95,
+    wDeny: 0.80,
+    wResource: 0.85,
 
-    burrowMinSafetyGain: 2.30,
-    kickUpDustOptimism: 0.40,
-    
     lookaheadN: 5,
-    actionDeckSampleN: 40,
-    comboMaxPairs: 30,
+    dashPushScale: 1.00,
+    dashPushThreshold: 8.0,
 
+    panicStayRisk: 6.6,
+    panicDashStayRisk: 6.0,
+    panicDashSafeDashRisk: 1.4,
+    panicDashCarryMin: 4,
+    suicideMargin: 0.35,
+
+    burrowMinSafetyGain: 2.4,
+    burrowMaxExtraCost: 1.0,
+    burrowAlreadyUsedPenalty: 999,
+
+    kickUpDustOptimism: 0.40,
+
+    roosterEarlyDashPenalty: 3.5,
+    roosterEarlyBurrowPenalty: 4.2,
+    roosterEarlyLurkBonus: 0.7,
+    roosterLateDashBonus: 1.35,
+    roosterLateStayPenalty: 1.35,
+
+    dashBeforeBurrowPenalty: 1.1,
+    panicLurkPenalty: 6.3,
+    panicBurrowBonus: 3.8,
+
+    // SHIFT anti-spam (C: kan iets vaker maar alleen als het echt loont)
+    shiftMinGain: 3.2,
+    shiftDangerTrigger: 7.2,
+    shiftLookahead: 5,
+    shiftDistancePenalty: 0.20,
+    shiftBenefitMin: 1.7,
+    shiftCooldownRounds: 1,
+    shiftOverrideBenefit: 3.0,
+    shiftRequireLoot: true,
+
+    // OPS (C: beste card evaluator)
+    actionDeckSampleN: 44,
+    actionReserveMinHand: 2,
+    actionPlayMinGain: 0.76,
+    comboMinGain: 0.88,
+    allowComboSearch: true,
+    comboMaxPairs: 36,
+
+    opsEarlyRounds: 2,
     opsReserveHandEarly: 2,
-    opsPlayTaxBase: 0.96,
-    opsPlayTaxEarlyMult: 1.15,
+    opsReserveHandMid: 1,
+    opsReserveHandLate: 0,
 
-    actionPlayMinGain: 0.84,
-    opsMinAdvantage: 1.70,
-    opsMinAdvantageEarlyBonus: 0.50,
+    opsPlayTaxBase: 0.90,
+    opsPlayTaxEarlyMult: 1.12,
+    opsPlayTaxLateMult: 0.85,
 
-    // C mag eerder “setup” doen als het combo’s opent
-    opsComboSetupBonusScale: 0.15,
+    opsSpendCostBase: 0.52,
+    opsSpendCostEarlyMult: 1.05,
+    opsSpendCostLateMult: 0.82,
+
+    opsMinAdvantage: 1.55,
+    opsMinAdvantageEarlyBonus: 0.45,
+
+    opsComboSetupBonusScale: 0.16,
     opsComboSetupEarlyMult: 0.65,
+
+    // Threat-mode OPS
+    opsThreatDangerTrigger: 4.9,
+    opsThreatPlayBoost: 0.65,
+    opsLeadThreatExtraBoost: 0.60,
+    opsThreatPlayTaxMult: 0.78,
   },
 };
 
