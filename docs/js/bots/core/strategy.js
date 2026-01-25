@@ -413,18 +413,24 @@ function decisionUtility({ decision, game, me, players, flagsRound, peekIntel, c
  const isThirdCrowNext = String(nextId) === "ROOSTER_CROW" && roostersNow >= 2;
 
    
-   // ✅ Den Signal: als jouw denImmune actief is, dan vrijwel nooit DASH/BURROW
+   // ✅ Den Signal: alleen relevant als het volgende event daadwerkelijk geneutraliseerd wordt (DEN_* / DOG_CHARGE / SECOND_CHARGE)
   const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
   const den = normColor(me?.color || me?.den || me?.denColor);
   const immune = !!flags?.denImmune?.[den];
 
- let denSignalBias = 0;
+  const denSignalRelevant =
+    immune &&
+    (String(nextId || "").startsWith("DEN_") ||
+      String(nextId) === "DOG_CHARGE" ||
+      String(nextId) === "SECOND_CHARGE");
 
-if (immune) {
-  if (decision === "LURK") denSignalBias += Number(c.denSignalStayBonus || 0);
-  if (decision === "DASH") denSignalBias -= Number(c.denSignalDashPenalty || 0);
-  if (decision === "BURROW") denSignalBias -= Number(c.denSignalBurrowPenalty || 0);
-}
+  let denSignalBias = 0;
+
+  if (denSignalRelevant) {
+    if (decision === "LURK") denSignalBias += Number(c.denSignalStayBonus || 0);
+    if (decision === "DASH") denSignalBias -= Number(c.denSignalDashPenalty || 0);
+    if (decision === "BURROW") denSignalBias -= Number(c.denSignalBurrowPenalty || 0);
+  }
 
   const riskNow = eventDangerForChoice({ eventId: nextId, choice: decision, game, me, players, flagsRound });
   const caughtP = clamp(riskNow / 10, 0, 1);
@@ -1681,3 +1687,4 @@ export function evaluatePhase({ phase, game, me, players, flagsRound = null, cfg
   }
   return { error: `Unknown phase: ${phase}` };
 }
+
