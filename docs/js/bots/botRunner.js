@@ -2551,14 +2551,33 @@ const extraGameUpdates = {
   if (logPayload) await logBotAction({ db, gameId, addLog: null, payload: logPayload });
 }
 
+async function fetchPlayersOutsideTx(db, gameId, latestPlayers = []) {
+  const ids = (latestPlayers || []).map((x) => x?.id).filter(Boolean);
+
+  // fallback: als er geen ids zijn, gebruik latestPlayers zelf
+  if (!ids.length) return Array.isArray(latestPlayers) ? latestPlayers : [];
+
+  const snaps = await Promise.all(
+    ids.map((id) => getDoc(doc(db, "games", gameId, "players", id)))
+  );
+
+  return snaps
+    .filter((s) => s.exists())
+    .map((s) => ({ id: s.id, ...s.data() }));
+}
+
 /** ===== smarter DECISION ===== */
 async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
   const gRef = doc(db, "games", gameId);
   const pRef = doc(db, "games", gameId, "players", botId);
 
-  let logPayload = null;
+ let logPayload = null;
 
-  await runTransaction(db, async (tx) => {
+// ✅ lees players OUTSIDE de transaction (voorkomt failed-precondition)
+const freshPlayersOuter = await fetchPlayersOutsideTx(db, gameId, latestPlayers);
+
+await runTransaction(db, async (tx) => {
+
     const gSnap = await tx.get(gRef);
     const pSnap = await tx.get(pRef);
     if (!gSnap.exists() || !pSnap.exists()) return;
@@ -2568,21 +2587,22 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
 
     if (!canBotDecide(g, p)) return;
 
-    // Read latest players fresh inside the transaction (prevents herding on HIDDEN_NEST)
-    const ids = (latestPlayers || []).map((x) => x?.id).filter(Boolean);
-    const freshPlayers = [];
-    for (const id of ids) {
-      const s = await tx.get(doc(db, "games", gameId, "players", id));
-      if (s.exists()) freshPlayers.push({ id: s.id, ...s.data() });
-    }
+    // ✅ gebruik de outside snapshot, maar update "me" naar de tx-versie
+const base = Array.isArray(freshPlayersOuter) && freshPlayersOuter.length
+  ? freshPlayersOuter
+  : (Array.isArray(latestPlayers) ? latestPlayers : []);
+
+const playersForDecision = base.length
+  ? base.map((x) => (String(x?.id) === String(botId) ? { ...x, ...p } : x))
+  : [{ ...p }];
 
     const flags = fillFlags(g?.flagsRound);
     const noPeek = flags?.noPeek === true;
 
     const denColor = normColor(p?.color || p?.den || p?.denColor);
     const presetKey = presetFromDenColor(denColor);
-    const dashDecisionsSoFar = countDashDecisions(freshPlayers);
-    const isLead = computeIsLeadForPlayer(g, p, freshPlayers);
+    const dashDecisionsSoFar = countDashDecisions(playersForDecision);
+    const isLead = computeIsLeadForPlayer(g, p, playersForDecision);
 
  // ✅ CANON: alleen burrowUsedThisRaid
 const burrowUsed = (p?.burrowUsedThisRaid === true);
@@ -2597,7 +2617,7 @@ const meForDecision = {
     const metricsNow = buildBotMetricsForLog({
       game: g,
       bot: meForDecision,
-      players: freshPlayers || [],
+      players: playersForDecision || [],
       flagsRoundOverride: flags,
     });
 
@@ -2619,7 +2639,7 @@ const meForDecision = {
       dec = evaluateDecision({
         game: g,
         me: meForDecision,
-        players: freshPlayers || [],
+        players: playersForDecision || [],
         flagsRound: g.flagsRound,
         cfg: getStrategyCfgForBot(meForDecision),
       });
@@ -2664,7 +2684,7 @@ const meForDecision = {
 
     // ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
-      const picked = pickHiddenNestDashSet({ game: g, gameId, players: freshPlayers || [] });
+      const picked = pickHiddenNestDashSet({ game: g, gameId, players: playersForDecision || [] });
       const dashSet = picked?.dashSet || null;
 
       if (dashSet && !dashSet.has(p.id)) {
