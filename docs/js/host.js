@@ -1730,7 +1730,7 @@ async function initRaidIfNeeded(gameRefParam) {
         den: color,
         inYard: true,
         dashed: false,
-        burrowUsed: false,
+        burrowUsedThisRaid: false,
         decision: null,
         hand,
         loot: [],
