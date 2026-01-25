@@ -71,12 +71,12 @@ export const BOT_UTILITY_CFG = {
   opsSpendCostLateMult: 0.8,
   
     // OPS "card has value": alleen spelen bij significant voordeel
-  opsPlayTaxBase: 1.1,              // vaste utility-kost per gespeelde kaart
-  opsPlayTaxEarlyMult: 1.35,        // early: harder sparen
+  opsPlayTaxBase: 0.85,              // vaste utility-kost per gespeelde kaart
+  opsPlayTaxEarlyMult: 1.15,        // early: harder sparen
   opsPlayTaxLateMult: 0.85,         // late: makkelijker uitgeven
 
-  opsMinAdvantage: 1.2,             // minimaal voordeel boven PASS om überhaupt te spelen
-  opsMinAdvantageEarlyBonus: 0.3,   // early: nog strenger
+  opsMinAdvantage: 1.0,             // minimaal voordeel boven PASS om überhaupt te spelen
+  opsMinAdvantageEarlyBonus: 0.2,   // early: nog strenger
 
   // combo planning: key pieces bewaren, maar "setup" plays toestaan
   opsComboHoldPenaltyScale: 0.18,   // penalty ~ scale * comboKeyScore
