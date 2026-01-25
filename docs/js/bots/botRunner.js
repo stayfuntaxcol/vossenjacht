@@ -2742,7 +2742,10 @@ const nextEvent0 = nextEventId(g, 0);
       }
     }
 
-    const update = { decision };
+    const update = {
+      decision,
+      ...(decision === "BURROW" && !burrowUsed ? { burrowUsedThisRaid: true } : {}),
+    };
 
     tx.update(pRef, update);
 
