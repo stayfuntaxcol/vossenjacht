@@ -100,6 +100,20 @@ function deriveEventDanger(ev, ctx) {
   let dangerBurrow = 0;
   let notes = [];
 
+  // Den Signal immunity helper (bots/advisor)
+  const ctxDen = String(
+    ctx?.denColor || ctx?.me?.denColor || ctx?.me?.den || ctx?.me?.color || ""
+  )
+    .trim()
+    .toUpperCase();
+
+  const denImmune =
+    (ctx?.flagsRound && typeof ctx.flagsRound === "object" ? ctx.flagsRound.denImmune : null) ||
+    (ctx?.flags && typeof ctx.flags === "object" ? ctx.flags.denImmune : null) ||
+    (ctx?.game?.flagsRound && typeof ctx.game.flagsRound === "object" ? ctx.game.flagsRound.denImmune : null) ||
+    null;
+
+  const myImmune = !!(denImmune && ctxDen && denImmune[ctxDen]);
   // DASH wordt vaak “veilig” bij catch-events (behalve Patrol). :contentReference[oaicite:3]{index=3}
   if (tags.has("CATCH_DASHERS")) {
     dangerDash = 9;
@@ -141,6 +155,14 @@ if (ev.id === "ROOSTER_CROW") {
     dangerBurrow = Math.max(dangerBurrow, 0);
     dangerLurk = Math.max(dangerLurk, 9);
     notes.push("CATCH_ALL_YARD: LURK is gevaarlijk (BURROW en DASH veilig).");
+
+    // ✅ DEN_SIGNAL: als jouw denImmune actief is, neutraliseert dit DOG_CHARGE/SECOND_CHARGE
+    if (myImmune && (ev.id === "DOG_CHARGE" || ev.id === "SECOND_CHARGE")) {
+      dangerDash = 0;
+      dangerLurk = 0;
+      dangerBurrow = 0;
+      notes.push("DEN_SIGNAL: jouw den is immune -> charge geneutraliseerd (stay veilig).");
+    }
   }
 
   if (cat === "DEN") {
@@ -153,8 +175,17 @@ if (ev.id === "ROOSTER_CROW") {
 
     if (myDen && evDen) {
       if (myDen === evDen) {
-        dangerLurk = Math.max(dangerLurk, 9);
-        notes.push("DEN: jouw kleur → LURK gevaarlijk (DASH/BURROW veilig).");
+        const immuneToDen = !!(denImmune && evDen && denImmune[evDen]);
+
+        if (immuneToDen) {
+          dangerDash = 0;
+          dangerLurk = 0;
+          dangerBurrow = 0;
+          notes.push("DEN_SIGNAL: jouw den is immune -> DEN-event geneutraliseerd (stay veilig).");
+        } else {
+          dangerLurk = Math.max(dangerLurk, 9);
+          notes.push("DEN: jouw kleur → LURK gevaarlijk (DASH/BURROW veilig).");
+        }
       } else {
         // Niet jouw kleur: praktisch geen reden om te dashen puur om dit event.
         dangerLurk = Math.max(dangerLurk, 0);
@@ -348,3 +379,4 @@ export function getEventFacts(eventId, ctx) {
 export function getActionFacts(actionId) {
   return RULES_INDEX.actions[actionId] || null;
 }
+
