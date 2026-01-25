@@ -1455,50 +1455,54 @@ export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg =
     hasActionIdInHand(hand, "DEN_SIGNAL") &&
     (t0.type === "DOG" || (t0.type === "DEN" && normColor(t0.color) === den));
 
-  // threat-mode: when danger is high or LEAD-only penalty is coming, play actions more often
-  const isLead = computeIsLead(game, me, players);
-  const facts0 = getEventFacts(String(next0 || ""), { game, me, denColor: den, isLead, flagsRound: flagsRound || game?.flagsRound });
-  const lurkDanger0 = Number(facts0?.dangerLurk || 0);
-  const leadThreat0 = (String(facts0?.appliesTo || "").toUpperCase() === "LEAD") && isLead;
-  const threatMode = (lurkDanger0 >= Number(c.opsThreatDangerTrigger || 5.0)) || leadThreat0;
+ // threat-mode: when danger is high or LEAD-only penalty is coming, play actions more often
+const isLead = computeIsLead(game, me, players);
+const factsThreat0 = getEventFacts(String(next0 || ""), {
+  game, me, denColor: den, isLead, flagsRound: flagsRound || game?.flagsRound
+});
+const lurkDanger0 = Number(factsThreat0?.dangerLurk || 0);
+const leadThreat0 = (String(factsThreat0?.appliesTo || "").toUpperCase() === "LEAD") && isLead;
+const threatMode = (lurkDanger0 >= Number(c.opsThreatDangerTrigger || 5.0)) || leadThreat0;
 
-  // baseline = PASS utility (decision best)
-  const intel = getPeekIntel({ game, me, flagsRound: flags, lookaheadN: c.lookaheadN });
-  const baseDecision = evaluateDecision({ game, me, players, flagsRound: flags, cfg: c, peekIntel: intel });
-  const passU = Number(baseDecision?.ranked?.[0]?.utility ?? 0);
+// baseline = PASS utility (decision best)
+const intel = getPeekIntel({ game, me, flagsRound: flags, lookaheadN: c.lookaheadN });
+const baseDecision = evaluateDecision({ game, me, players, flagsRound: flags, cfg: c, peekIntel: intel });
+const passU = Number(baseDecision?.ranked?.[0]?.utility ?? 0);
 
-  if (urgentDefense) {
-    return {
-      best: { kind: "PLAY", plays: [{ actionId: "DEN_SIGNAL", name: "Den Signal", targetId: null }], utility: passU + 9, reason: "urgentDenSignal" },
-      baseline: { passUtility: passU, decision: baseDecision?.decision || null },
-      ranked: [{ play: { actionId: "DEN_SIGNAL", name: "Den Signal", targetId: null }, utility: passU + 9 }],
-      comboBest: null,
-    };
-  }
-  
-  // ---- Spending discipline (early raid hoarding + combo saving) ----
-  const stage0 = opsStageFromGame(game, c);
-  let reserveTarget = stage0.reserveTarget;
-
-  const nextIdC = nextEventId(game, 0);
-  const denC = normColor(me?.color || me?.den || me?.denColor);
-  const isLeadC = computeIsLead(game, me, players);
-  const facts0 = nextIdC ? getEventFacts(String(nextIdC), { game, me, denColor: denC, isLead: isLeadC }) : null;
-
-  const ctxCombo = {
-    nextKnown: !flags.noPeek,
-    knownUpcomingEvents: flags.noPeek ? safeArr(me?.knownUpcomingEvents) : safeArr(intel?.events),
-    nextEventFacts: facts0
-      ? {
-          dangerDash: Number(facts0?.dangerDash || 0),
-          dangerLurk: Number(facts0?.dangerLurk || 0),
-          dangerBurrow: Number(facts0?.dangerBurrow || 0),
-        }
-      : null,
-    lockEventsActive: !!flags.lockEvents,
-    opsLockedActive: !!flags.opsLocked,
-    discardActionIds: discardActionIdsFromGame(game),
+if (urgentDefense) {
+  return {
+    best: { kind: "PLAY", plays: [{ actionId: "DEN_SIGNAL", name: "Den Signal", targetId: null }], utility: passU + 9, reason: "urgentDenSignal" },
+    baseline: { passUtility: passU, decision: baseDecision?.decision || null },
+    ranked: [{ play: { actionId: "DEN_SIGNAL", name: "Den Signal", targetId: null }, utility: passU + 9 }],
+    comboBest: null,
   };
+}
+
+// ---- Spending discipline (early raid hoarding + combo saving) ----
+const stage0 = opsStageFromGame(game, c);
+let reserveTarget = stage0.reserveTarget;
+
+const nextIdC = nextEventId(game, 0);
+const denC = normColor(me?.color || me?.den || me?.denColor);
+const isLeadC = computeIsLead(game, me, players);
+const factsNext0 = nextIdC
+  ? getEventFacts(String(nextIdC), { game, me, denColor: denC, isLead: isLeadC })
+  : null;
+
+const ctxCombo = {
+  nextKnown: !flags.noPeek,
+  knownUpcomingEvents: flags.noPeek ? safeArr(me?.knownUpcomingEvents) : safeArr(intel?.events),
+  nextEventFacts: factsNext0
+    ? {
+        dangerDash: Number(factsNext0?.dangerDash || 0),
+        dangerLurk: Number(factsNext0?.dangerLurk || 0),
+        dangerBurrow: Number(factsNext0?.dangerBurrow || 0),
+      }
+    : null,
+  lockEventsActive: !!flags.lockEvents,
+  opsLockedActive: !!flags.opsLocked,
+  discardActionIds: discardActionIdsFromGame(game),
+};
 
   const comboMeta = computeComboMeta(handActionIds(hand), ctxCombo, c);
   if (comboMeta.highCombo) reserveTarget += Number(c.opsReserveComboBoost || 0);
