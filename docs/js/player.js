@@ -1906,6 +1906,7 @@ const SOLO_NO_VALUE_ACTIONS = new Set([
   "burrowbeacon",
   "followthetail",
   "scentcheck",
+  "nogozone"
 ]);
 
 function normActionName(name) {
