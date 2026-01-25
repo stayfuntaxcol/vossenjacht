@@ -2485,10 +2485,10 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
     const dashDecisionsSoFar = countDashDecisions(freshPlayers);
     const isLead = computeIsLeadForPlayer(g, p, freshPlayers);
 
- // ✅ CANON: engine gebruikt alleen burrowUsedThisRaid
+ // ✅ CANON: alleen burrowUsedThisRaid
 const burrowUsed = (p?.burrowUsedThisRaid === true);
 
-// ✅ strategy + heuristics verwachten me.burrowUsed (alias, niet schrijven naar Firestore)
+// ✅ strategy + heuristics verwachten me.burrowUsed (alias, niet schrijven)
 const meForDecision = {
   ...p,
   burrowUsed,
@@ -2559,7 +2559,6 @@ const meForDecision = {
       decision = rec?.decision || "LURK";
     }
 
-    const burrowUsed = (p?.burrowUsedThisRaid === true);
     if (decision === "BURROW" && burrowUsed) decision = "LURK";
 
     const nextEvent0 = nextEventId(g, 0);
