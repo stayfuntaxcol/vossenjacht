@@ -2752,7 +2752,7 @@ const nextEvent0 = nextEventId(g, 0);
       message: `BOT kiest ${decision}`,
       kind: "BOT_DECISION",
       at: Date.now(),
-      metrics: buildBotMetricsForLog({ game: g, bot: botAfter, players: freshPlayers || [], flagsRoundOverride: flags }),
+      metrics: buildBotMetricsForLog({ game: g, bot: botAfter, players: playersForDecision || [], flagsRoundOverride: flags }),
     };
   });
 
