@@ -824,8 +824,8 @@ function pickDecisionLootMaximizer({ g, p, latestPlayers, gameId }) {
 
   const nextEvent0 = nextEventId(g, 0);
   const lootPts = sumLootPoints(p);
+  const roundNum = Number(g?.round || 0);
 
-  
   // Rooster pressure: after 2 roosters the next one can end the raid.
   // If you already have loot, prefer to bail out (DASH) instead of risking getting caught.
   const roosterSeen = Number.isFinite(Number(g?.roosterSeen)) ? Number(g.roosterSeen) : 0;
@@ -874,7 +874,6 @@ const isLead = (() => {
 
     const dashOpportunityCost = decision === "DASH" ? futureGain * 0.95 : 0;
 
-    const roundNum = Number(g?.round || 0);
     const burrowReservePenalty = decision === "BURROW" ? (roundNum <= 1 ? 1.2 : 0.6) : 0;
 
     const baseNow = lootPts;
@@ -1833,7 +1832,6 @@ if (share && denColor) {
     // Translate (carryValueRec + dangerEffective) into a MOVE choice.
     // Goal: bots aim for high score (keep farming), but invest in survivability + tools so OPS has real options.
     // New: allow SCOUT + SHIFT (aligned with player.js rules as close as possible).
-    const roundNum = Number(g.round || 0);
 
     const track = Array.isArray(g.eventTrack) ? [...g.eventTrack] : [];
     const eventIdx = Number.isFinite(Number(g.eventIndex)) ? Number(g.eventIndex) : 0;
