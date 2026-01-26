@@ -68,7 +68,15 @@ function nextEventKnownId(game, me, flags, ctx = {}) {
   return null;
 }
 
-function remainingBagIds(game) {
+function remainingBagIds(game, flags, opts = {}) {
+  // CANON / noPeek-safe:
+  // - noPeek=true: do NOT read game.eventTrack (it's the full shuffled order).
+  // - Instead, only use a caller-provided bag (e.g., deck composition minus revealed)
+  //   via opts.bagIds, or return null to signal unknown distribution.
+  const noPeek = getNoPeek(game, flags);
+  const fromCaller = Array.isArray(opts?.bagIds) ? opts.bagIds : null;
+  if (noPeek) return fromCaller;
+
   const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
   const idx = num(game?.eventIndex, 0);
   return track.slice(Math.max(0, idx)).map((x) => String(x || "")).filter(Boolean);
@@ -170,7 +178,7 @@ export function scoreOpsActionForSafeNow(actionKeyOrId, opts = {}) {
   const isLead0 = isLeadNow(game, me, ctx);
 
   const knownId = nextEventKnownId(game, me, flags, ctx);
-  const bagIds = remainingBagIds(game);
+  const bagIds = remainingBagIds(game, flags, opts) || [];
 
   const baseRiskCtx = buildRiskCtx({ game, me, flags, ctx, denColor: denColor0, isLead: isLead0 });
   const before = safetyStats({ knownEventId: knownId, bagIds, riskCtx: baseRiskCtx });
@@ -327,3 +335,4 @@ export function pickBestOpsActionForSafeNow(hand = [], opts = {}) {
   if (best.score >= minScore) return { play: best.id, ranked, reason: "best_safety_gain" };
   return { play: null, ranked, reason: "below_threshold" };
 }
+
