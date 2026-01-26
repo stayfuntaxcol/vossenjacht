@@ -1511,3 +1511,4 @@ export function evaluatePhase({ phase, game, me, players, flagsRound = null, cfg
   }
   return { error: `Unknown phase: ${phase}` };
 }
+
