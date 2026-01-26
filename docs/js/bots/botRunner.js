@@ -1606,25 +1606,24 @@ function getRunnerId() {
     return String(Math.random()).slice(2) + "-" + Date.now();
   }
 }
-
 /** ===== logging ===== */
 async function logBotAction({ db, gameId, addLog, payload }) {
-  // games/{game}/actions
+  // ✅ keep: structured action timeline
   await addDoc(collection(db, "games", gameId, "actions"), {
     ...payload,
     createdAt: serverTimestamp(),
   });
 
-  // games/{game}/log (via your helper)
-  if (typeof addLog === "function") {
-    await addLog(gameId, {
-      round: payload.round ?? 0,
-      phase: payload.phase ?? "",
-      kind: "BOT",
-      playerId: payload.playerId,
-      message: payload.message || `${payload.playerName || "BOT"}: ${payload.choice}`,
-    });
-  }
+  // ❌ disable: extra log writes (story log)
+  // if (typeof addLog === "function") {
+  //   await addLog(gameId, {
+  //     round: payload.round ?? 0,
+  //     phase: payload.phase ?? "",
+  //     kind: "BOT",
+  //     playerId: payload.playerId,
+  //     message: payload.message || `${payload.playerName || "BOT"}: ${payload.choice}`,
+  //   });
+  // }
 }
 
 async function applyOpsActionAndAdvanceTurn({ db, gameRef, actorId, isPass }) {
