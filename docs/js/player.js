@@ -3071,22 +3071,6 @@ if (typeof logMoveAction !== "function") {
       } catch (e) {
         console.warn("[logMoveAction] actions write failed", e);
       }
-
-      // 2) log (voor host log panel)
-      try {
-        const logCol = collection(db, "games", gameId, "log");
-        await addDoc(logCol, {
-          ...base,
-          kind: "CHOICE",
-          clientAt: Date.now(),
-          message: `${pname}: ${base.choice}`,
-        });
-      } catch (e) {
-        console.warn("[logMoveAction] log write failed", e);
-      }
-    } catch (err) {
-      console.warn("[logMoveAction] failed hard", err);
-    }
   };
 
   globalThis.logMoveAction = logMoveAction;
