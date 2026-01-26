@@ -33,11 +33,10 @@ function getLootCount(ctx) {
 }
 
 function getCarryValue(ctx) {
-  // Prefer an explicit value if your pipeline provides it.
+  // DEPRECATED (CANON): carryValue must NOT drive DASH/BURROW.
+  // Keep only for backward compatibility (e.g., logs).
   const explicit = ctx?.carryValue;
-  if (Number.isFinite(Number(explicit))) return Number(explicit);
-  // Fallback: treat each loot as ~1 value (conservative).
-  return getLootCount(ctx);
+  return Number.isFinite(Number(explicit)) ? Number(explicit) : getLootCount(ctx);
 }
 
 function getRooster(ctx) {
@@ -94,9 +93,10 @@ function getDanger(ctx) {
   const p = peakDanger(facts);
   const s = stayDanger(facts);
 
-  // If ctx.dangerNext exists, treat it as your authoritative effective metric.
-  // Otherwise use stayDanger as safer default to avoid peak-triggered herd DASH.
-  const effective = Number.isFinite(dn) ? dn : s;
+  // CANON: decision risk is primarily "LURK risk".
+  // If caller provides ctx.dangerNext (already scoped), use it.
+  // Otherwise fall back to dangerLurk from facts.
+  const effective = Number.isFinite(dn) ? dn : num(facts?.dangerLurk, 0);
 
   return { facts, peak: p, stay: s, effective };
 }
@@ -108,76 +108,43 @@ function preferBurrow(ctx) {
 /**
  * Decide with guardrails:
  * - If event does NOT apply to me: do NOT dash because of "danger".
- * - If staying is truly dangerous (effective >= HIGH): BURROW preferred (if available), else consider DASH only if carry is high.
- * - Add anti-herd: if others already dash, raise thresholds (dash becomes less attractive).
- */
+ * - If staying is truly dangerous (effective >= HIGH): BURROW preferred (if available), else DASH.
+  */
 function decideWithProfile(ctx, profileKey) {
-  const lootCount = getLootCount(ctx);
-  const carry = getCarryValue(ctx);
   const rooster = getRooster(ctx);
-  const { facts, peak, stay, effective } = getDanger(ctx);
+  const { facts, effective } = getDanger(ctx);
   const appliesToMe = getAppliesToMe(ctx, facts);
   const canBurrow = preferBurrow(ctx);
 
-  const plannedDashers = getPlannedDashers(ctx);
-  const herdPenalty = plannedDashers >= 1 ? 1 : 0; // mild
-
-  // Thresholds per profile
-  const T = {
-    GREEDY: {
-      DASH_SAFE_CARRY: 7 + herdPenalty,
-      DASH_ROOSTER_CARRY: 5 + herdPenalty,
-      DASH_DANGER_CARRY: 4 + herdPenalty,
-      HIGH_DANGER: 8,
-      MED_DANGER: 6,
-    },
-    CAUTIOUS: {
-      DASH_SAFE_CARRY: 8 + herdPenalty,
-      DASH_ROOSTER_CARRY: 6 + herdPenalty,
-      DASH_DANGER_CARRY: 6 + herdPenalty,
-      HIGH_DANGER: 7,
-      MED_DANGER: 5,
-    },
-    BALANCED: {
-      DASH_SAFE_CARRY: 8 + herdPenalty,
-      DASH_ROOSTER_CARRY: 6 + herdPenalty,
-      DASH_DANGER_CARRY: 5 + herdPenalty,
-      HIGH_DANGER: 8,
-      MED_DANGER: 6,
-    },
-  }[profileKey] || {
-    DASH_SAFE_CARRY: 8 + herdPenalty,
-    DASH_ROOSTER_CARRY: 6 + herdPenalty,
-    DASH_DANGER_CARRY: 5 + herdPenalty,
-    HIGH_DANGER: 8,
-    MED_DANGER: 6,
-  };
-
-  // If the event doesn't apply to me, don't let danger push DASH.
+  // If the event doesn't apply to me, danger must NOT push BURROW/DASH.
   const dangerEff = appliesToMe === false ? 0 : effective;
 
-  // 1) Truly dangerous to stay → defend first
+  // Hard-kill: 3rd Rooster Crow (known/derived) => DASH or you're caught for sure.
+  const isRooster3 =
+    (String(facts?.id || "").toUpperCase() === "ROOSTER_CROW" && rooster >= 2) ||
+    (num(facts?.dangerLurk, 0) >= 10 && num(facts?.dangerBurrow, 0) >= 10 && num(facts?.dangerDash, 0) <= 1);
+
+  if (isRooster3) return "DASH";
+
+  // Profile-tuned thresholds (NO carry-based cashout; DASH is final exit).
+  const T = {
+    GREEDY:   { HIGH_DANGER: 9, MED_DANGER: 7 },
+    BALANCED: { HIGH_DANGER: 8, MED_DANGER: 6 },
+    CAUTIOUS: { HIGH_DANGER: 7, MED_DANGER: 5 },
+  }[profileKey] || { HIGH_DANGER: 8, MED_DANGER: 6 };
+
+  // 1) Dire circumstances: staying is lethal => BURROW lifeline; else DASH.
   if (dangerEff >= T.HIGH_DANGER) {
-    if (canBurrow) return "BURROW";
-    // If no BURROW possible, only DASH if carrying enough to justify the exit.
-    if (carry >= T.DASH_DANGER_CARRY) return "DASH";
+    return canBurrow ? "BURROW" : "DASH";
+  }
+
+  // 2) Rising danger: cautious/balanced may pre-emptively BURROW.
+  if (dangerEff >= T.MED_DANGER) {
+    if (canBurrow && profileKey !== "GREEDY") return "BURROW";
     return "LURK";
   }
 
-  // 2) Medium danger → cautious: BURROW if possible (esp. for cautious/balanced)
-  if (dangerEff >= T.MED_DANGER && canBurrow && profileKey !== "GREEDY") {
-    return "BURROW";
-  }
-
-  // 3) Cashout conditions (safe or moderately safe)
-  //    Keep thresholds higher than old (loot>=3) to prevent early herd DASH.
-  if (carry >= T.DASH_SAFE_CARRY) return "DASH";
-
-  // Roosters: nudge towards banking, but do not auto-dash at low carry.
-  if (rooster >= 2 && carry >= T.DASH_ROOSTER_CARRY) return "DASH";
-
-  // 4) Default: keep looting / positioning
-  if (dangerEff >= T.MED_DANGER && canBurrow) return "BURROW";
+  // 3) Safe => stay (LURK)
   return "LURK";
 }
 
