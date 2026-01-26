@@ -1,5 +1,5 @@
 // js/bots/actionComboMatrix.js
-// Action Combo Matrix V2 — inclusief SCOUT/kennis tiers
+// Action Combo Matrix V2.1 — fix requires + extra synergies
 //
 // Doel:
 // - Data-only (makkelijk dagelijks uitbreiden)
@@ -7,12 +7,13 @@
 // - Scores per kennis-tier: NO_SCOUT / SOFT_SCOUT / HARD_SCOUT
 //
 // Kennis tiers (sluit aan op botHeuristics ctx):
-// - NO_SCOUT: geen zekerheid over komende events (ctx.nextKnown=false en knownUpcomingEvents<1)
-// - SOFT_SCOUT: 1 stuk zekerheid (ctx.nextKnown=true of knownUpcomingEvents>=1)
-// - HARD_SCOUT: meerdere posities bekend (knownUpcomingEvents>=2)
+// - NO_SCOUT: geen zekerheid over komende events
+// - SOFT_SCOUT: 1 stuk zekerheid
+// - HARD_SCOUT: meerdere posities bekend
 //
-// Belangrijk: HOLD_STILL als eerste kaart is altijd “anti” (blokkeert nieuwe actions).
-// (cards.js: "Vanaf nu mogen deze ronde geen nieuwe Action Cards meer worden gespeeld; alleen PASS.")
+// Belangrijk:
+// - HOLD_STILL als eerste kaart is altijd “anti” (blokkeert nieuwe actions).
+// - KICK_UP_DUST is BLOCKED_BY_LOCK (werkt niet als lockEvents actief is).
 //
 // Context (ctx) velden die we gebruiken:
 // ctx = {
@@ -21,7 +22,7 @@
 //   nextEventFacts: { dangerDash, dangerLurk, dangerBurrow } | null,
 //   lockEventsActive: boolean,
 //   opsLockedActive: boolean,
-//   discardActionIds: string[],   // bv. game.actionDiscardPile mapped naar ids
+//   discardActionIds: string[],
 //   isLast: boolean,
 //   scoreBehind: number
 // }
@@ -66,15 +67,20 @@ export function dangerNextFromCtx(ctx = {}) {
 // ------------------------------------------------------------
 export const ACTION_COMBO_MATRIX_V2 = {
   // =========================
-  // INFO → COMMIT / DENY
+  // INFO → COMMIT / DEFENSE / DENY
   // =========================
   SCENT_CHECK: {
     FOLLOW_THE_TAIL: {
       score: { NO_SCOUT: 8, SOFT_SCOUT: 9, HARD_SCOUT: 10 },
       notes: "Peek decision → copy decision. Beste 2-card combo als je dezelfde target pakt.",
     },
+    DEN_SIGNAL: {
+      score: { NO_SCOUT: 5, SOFT_SCOUT: 6, HARD_SCOUT: 7 },
+      notes: "Peek decision → daarna Den Signal timen (jij/target kan blijven LURK’en).",
+    },
     HOLD_STILL: {
       score: { NO_SCOUT: 5, SOFT_SCOUT: 6, HARD_SCOUT: 6 },
+      requiresNot: ["OPS_LOCKED_ACTIVE"],
       notes: "Peek → freeze actions zodat niemand jouw info-voordeel neutraliseert.",
     },
     SCATTER: {
@@ -93,12 +99,22 @@ export const ACTION_COMBO_MATRIX_V2 = {
 
   NOSE_FOR_TROUBLE: {
     // Nose is vaak “gok”, maar mét extra knowledge wordt hij betrouwbaarder.
+    DEN_SIGNAL: {
+      score: { NO_SCOUT: 2, SOFT_SCOUT: 4, HARD_SCOUT: 5 },
+      notes: "Prediction (of extra scout-kennis) → Den Signal als safety-net.",
+    },
+    KICK_UP_DUST: {
+      score: { NO_SCOUT: 3, SOFT_SCOUT: 5, HARD_SCOUT: 5 },
+      requiresNot: ["LOCK_EVENTS_ACTIVE"],
+      notes: "Als jij (denkt dat je) een dodelijke next event ziet: prediction → hail-mary chaos (swap).",
+    },
     SCATTER: {
       score: { NO_SCOUT: 2, SOFT_SCOUT: 4, HARD_SCOUT: 5 },
       notes: "Prediction edge → deny scout zodat anderen minder kunnen reageren/valideren.",
     },
     HOLD_STILL: {
       score: { NO_SCOUT: 2, SOFT_SCOUT: 4, HARD_SCOUT: 5 },
+      requiresNot: ["OPS_LOCKED_ACTIVE"],
       notes: "Prediction edge → freeze actions (bescherm je voorsprong).",
     },
     NO_GO_ZONE: {
@@ -112,7 +128,7 @@ export const ACTION_COMBO_MATRIX_V2 = {
   },
 
   // =========================
-  // TRACK CHAOS → LOCK / FREEZE / DENY
+  // TRACK CHAOS → LOCK / FREEZE / DEN_SIGNAL / DENY
   // =========================
   KICK_UP_DUST: {
     BURROW_BEACON: {
@@ -120,8 +136,13 @@ export const ACTION_COMBO_MATRIX_V2 = {
       requiresNot: ["LOCK_EVENTS_ACTIVE"],
       notes: "Shuffle future events → lock track zodat niemand terugdraait (top combo).",
     },
+    DEN_SIGNAL: {
+      score: { NO_SCOUT: 5, SOFT_SCOUT: 5, HARD_SCOUT: 5 },
+      notes: "Na chaos is er meer onzekerheid → Den Signal als brede bescherming.",
+    },
     HOLD_STILL: {
       score: { NO_SCOUT: 8, SOFT_SCOUT: 8, HARD_SCOUT: 8 },
+      requiresNot: ["OPS_LOCKED_ACTIVE"],
       notes: "Shuffle → freeze actions zodat niemand kan counteren in dezelfde ronde.",
     },
     SCATTER: {
@@ -141,7 +162,12 @@ export const ACTION_COMBO_MATRIX_V2 = {
   BURROW_BEACON: {
     HOLD_STILL: {
       score: { NO_SCOUT: 5, SOFT_SCOUT: 7, HARD_SCOUT: 8 },
+      requiresNot: ["OPS_LOCKED_ACTIVE"],
       notes: "Lock track → freeze actions (double lock). Sterk als je al voordeel hebt (knowledge).",
+    },
+    DEN_SIGNAL: {
+      score: { NO_SCOUT: 4, SOFT_SCOUT: 6, HARD_SCOUT: 7 },
+      notes: "Track vastzetten → daarna Den Signal kiezen (maximaliseer safeNow op een ‘vaste’ reveal).",
     },
     SCATTER: {
       score: { NO_SCOUT: 3, SOFT_SCOUT: 5, HARD_SCOUT: 6 },
@@ -154,15 +180,20 @@ export const ACTION_COMBO_MATRIX_V2 = {
   },
 
   // =========================
-  // DEN / COLOR CHAOS → DEFENSE / FREEZE
+  // DEN / COLOR CHAOS → DEFENSE / LEAD / FREEZE
   // =========================
   MASK_SWAP: {
     DEN_SIGNAL: {
       score: { NO_SCOUT: 7, SOFT_SCOUT: 8, HARD_SCOUT: 8 },
       notes: "Na den shuffle → kies immunity kleur die jou/veel spelers helpt.",
     },
+    ALPHA_CALL: {
+      score: { NO_SCOUT: 3, SOFT_SCOUT: 4, HARD_SCOUT: 4 },
+      notes: "Na den shuffle → lead opnieuw slim zetten (bijv. lead weg bij jou).",
+    },
     HOLD_STILL: {
       score: { NO_SCOUT: 6, SOFT_SCOUT: 7, HARD_SCOUT: 7 },
+      requiresNot: ["OPS_LOCKED_ACTIVE"],
       notes: "Na den shuffle → freeze actions zodat niemand countert met andere acties.",
     },
     SCATTER: {
@@ -178,16 +209,23 @@ export const ACTION_COMBO_MATRIX_V2 = {
     },
     HOLD_STILL: {
       score: { NO_SCOUT: 4, SOFT_SCOUT: 5, HARD_SCOUT: 5 },
+      requiresNot: ["OPS_LOCKED_ACTIVE"],
       notes: "Den change → freeze (anti-counter).",
     },
   },
 
   // =========================
-  // DEFENSE → FREEZE / DENY (winst locken)
+  // DEFENSE → LOCK / FREEZE / DENY (winst locken)
   // =========================
   DEN_SIGNAL: {
+    BURROW_BEACON: {
+      score: { NO_SCOUT: 3, SOFT_SCOUT: 5, HARD_SCOUT: 6 },
+      requiresNot: ["LOCK_EVENTS_ACTIVE"],
+      notes: "Eerst immunity zetten → daarna track locken zodat anderen niet kunnen ‘weg-swappen’.",
+    },
     HOLD_STILL: {
       score: { NO_SCOUT: 6, SOFT_SCOUT: 7, HARD_SCOUT: 7 },
+      requiresNot: ["OPS_LOCKED_ACTIVE"],
       notes: "Immunity neerzetten → freeze actions zodat niemand later nog ‘trucjes’ doet.",
     },
     SCATTER: {
@@ -198,14 +236,23 @@ export const ACTION_COMBO_MATRIX_V2 = {
       score: { NO_SCOUT: 1, SOFT_SCOUT: 3, HARD_SCOUT: 4 },
       notes: "Kleinere scout-deny variant.",
     },
+    ALPHA_CALL: {
+      score: { NO_SCOUT: 2, SOFT_SCOUT: 3, HARD_SCOUT: 3 },
+      notes: "Als jij ‘veilig’ bent door Den Signal kun je agressiever lead sturen (situational).",
+    },
   },
 
   // =========================
-  // LEAD CONTROL → FREEZE / DENY
+  // LEAD CONTROL → DEFENSE / FREEZE / DENY
   // =========================
   ALPHA_CALL: {
+    DEN_SIGNAL: {
+      score: { NO_SCOUT: 2, SOFT_SCOUT: 3, HARD_SCOUT: 4 },
+      notes: "Lead zetten → daarna Den Signal om de ‘nieuwe’ situatie te stabiliseren (situational).",
+    },
     HOLD_STILL: {
       score: { NO_SCOUT: 7, SOFT_SCOUT: 8, HARD_SCOUT: 8 },
+      requiresNot: ["OPS_LOCKED_ACTIVE"],
       notes: "Lead zetten → freeze actions zodat niemand lead/counters kan spelen.",
     },
     SCATTER: {
@@ -219,60 +266,60 @@ export const ACTION_COMBO_MATRIX_V2 = {
   },
 
   // =========================
-  // PACK TINKER = DISCARD ENABLE (haal B uit discard → speel direct)
-  // Let op: Pack Tinker zelf is utility. Synergy is vooral "fetch finisher".
+  // PACK TINKER = DISCARD ENABLE (swap uit hand ↔ discard; daarna eventueel B spelen)
   // =========================
   PACK_TINKER: {
     HOLD_STILL: {
       score: { NO_SCOUT: 8, SOFT_SCOUT: 8, HARD_SCOUT: 8 },
       requiresDiscardHas: ["HOLD_STILL"],
-      notes: "Fetch Hold Still → speel direct als finisher (zeer sterk).",
+      requiresNot: ["OPS_LOCKED_ACTIVE"],
+      notes: "Swap Hold Still uit discard → speel direct als finisher (zeer sterk).",
     },
     DEN_SIGNAL: {
       score: { NO_SCOUT: 7, SOFT_SCOUT: 7, HARD_SCOUT: 8 },
       requiresDiscardHas: ["DEN_SIGNAL"],
-      notes: "Fetch Den Signal → direct defense.",
+      notes: "Swap Den Signal uit discard → direct defense.",
     },
     BURROW_BEACON: {
       score: { NO_SCOUT: 7, SOFT_SCOUT: 8, HARD_SCOUT: 8 },
       requiresDiscardHas: ["BURROW_BEACON"],
-      notes: "Fetch Burrow Beacon → direct lock events (sterk bij knowledge).",
+      notes: "Swap Burrow Beacon uit discard → direct lock events (sterk bij knowledge).",
     },
     KICK_UP_DUST: {
       score: { NO_SCOUT: 6, SOFT_SCOUT: 6, HARD_SCOUT: 7 },
       requiresDiscardHas: ["KICK_UP_DUST"],
       requiresNot: ["LOCK_EVENTS_ACTIVE"],
-      notes: "Fetch Kick Up Dust → direct chaos (vooral hail-mary / emergency).",
+      notes: "Swap Kick Up Dust uit discard → direct chaos (hail-mary / emergency).",
     },
     MASK_SWAP: {
       score: { NO_SCOUT: 5, SOFT_SCOUT: 5, HARD_SCOUT: 6 },
       requiresDiscardHas: ["MASK_SWAP"],
-      notes: "Fetch Mask Swap → direct den chaos.",
+      notes: "Swap Mask Swap uit discard → direct den chaos.",
     },
     SCENT_CHECK: {
       score: { NO_SCOUT: 5, SOFT_SCOUT: 6, HARD_SCOUT: 6 },
       requiresDiscardHas: ["SCENT_CHECK"],
-      notes: "Fetch Scent Check → direct info.",
+      notes: "Swap Scent Check uit discard → direct info.",
     },
     FOLLOW_THE_TAIL: {
       score: { NO_SCOUT: 5, SOFT_SCOUT: 6, HARD_SCOUT: 6 },
       requiresDiscardHas: ["FOLLOW_THE_TAIL"],
-      notes: "Fetch Follow the Tail → direct commit (ideal met info).",
+      notes: "Swap Follow the Tail uit discard → direct commit (ideal met info).",
     },
     SCATTER: {
       score: { NO_SCOUT: 4, SOFT_SCOUT: 6, HARD_SCOUT: 7 },
       requiresDiscardHas: ["SCATTER"],
-      notes: "Fetch Scatter → direct info denial (sterker met knowledge).",
+      notes: "Swap Scatter uit discard → direct info denial (sterker met knowledge).",
     },
     NO_GO_ZONE: {
       score: { NO_SCOUT: 3, SOFT_SCOUT: 5, HARD_SCOUT: 6 },
       requiresDiscardHas: ["NO_GO_ZONE"],
-      notes: "Fetch No-Go Zone → direct block scout spot.",
+      notes: "Swap No-Go Zone uit discard → direct block scout spot.",
     },
     ALPHA_CALL: {
       score: { NO_SCOUT: 4, SOFT_SCOUT: 5, HARD_SCOUT: 6 },
       requiresDiscardHas: ["ALPHA_CALL"],
-      notes: "Fetch Alpha Call → direct lead control.",
+      notes: "Swap Alpha Call uit discard → direct lead control.",
     },
   },
 
@@ -282,6 +329,7 @@ export const ACTION_COMBO_MATRIX_V2 = {
   SCATTER: {
     HOLD_STILL: {
       score: { NO_SCOUT: 2, SOFT_SCOUT: 3, HARD_SCOUT: 4 },
+      requiresNot: ["OPS_LOCKED_ACTIVE"],
       notes: "Deny scout → daarna freeze actions (situational).",
     },
     NO_GO_ZONE: {
@@ -293,6 +341,7 @@ export const ACTION_COMBO_MATRIX_V2 = {
   NO_GO_ZONE: {
     HOLD_STILL: {
       score: { NO_SCOUT: 1, SOFT_SCOUT: 2, HARD_SCOUT: 3 },
+      requiresNot: ["OPS_LOCKED_ACTIVE"],
       notes: "Kleine denial → daarna freeze actions.",
     },
     SCATTER: {
@@ -301,14 +350,10 @@ export const ACTION_COMBO_MATRIX_V2 = {
     },
   },
 
-  // =========================
-  // FOLLOW_THE_TAIL als opener (meestal niet)
-  // =========================
   FOLLOW_THE_TAIL: {
     // Geen echte follow-ups die beter worden door Follow als eerste.
   },
 
-  // HOLD_STILL: bewust leeg (anti-combo als opener)
   HOLD_STILL: {},
 };
 
@@ -320,7 +365,7 @@ export const ACTION_COMBO_NEG_V2 = [
 
   { a: "BURROW_BEACON", b: "KICK_UP_DUST", score: -9, notes: "Kick Up Dust is BLOCKED_BY_LOCK (lockEvents actief)." },
 
-  { a: "DEN_SIGNAL", b: "MOLTING_MASK", score: -6, notes: "Den Signal → daarna kleur wijzigen: je protection kan misvallen." },
+  { a: "DEN_SIGNAL", b: "MOLTING_MASK", score: -6, notes: "Den Signal → daarna eigen den veranderen: je protection kan misvallen." },
   { a: "DEN_SIGNAL", b: "MASK_SWAP", score: -6, notes: "Den Signal → daarna den shuffle: protection wordt onbetrouwbaar." },
 ];
 
@@ -328,7 +373,6 @@ export const ACTION_COMBO_NEG_V2 = [
 // Helper: combo score A→B met ctx checks
 // ------------------------------------------------------------
 function condValue(cond, ctx) {
-  // cond strings: "LOCK_EVENTS_ACTIVE", "OPS_LOCKED_ACTIVE"
   if (cond === "LOCK_EVENTS_ACTIVE") return !!ctx.lockEventsActive;
   if (cond === "OPS_LOCKED_ACTIVE") return !!ctx.opsLockedActive;
   return false;
@@ -337,7 +381,10 @@ function condValue(cond, ctx) {
 export function comboScore(aId, bId, ctx = {}) {
   if (!aId || !bId) return 0;
 
-  // hard neg: Hold Still blocks
+  // als ops al gelocked is: combos zijn feitelijk irrelevant (geen nieuwe actions)
+  if (ctx.opsLockedActive) return 0;
+
+  // hard neg: Hold Still blocks as opener
   if (aId === "HOLD_STILL") return -10;
 
   // apply neg list
@@ -347,6 +394,11 @@ export function comboScore(aId, bId, ctx = {}) {
 
   const rec = ACTION_COMBO_MATRIX_V2?.[aId]?.[bId];
   if (!rec) return 0;
+
+  // requires (NIEUW: dit ontbrak in V2)
+  if (Array.isArray(rec.requires)) {
+    for (const c of rec.requires) if (!condValue(c, ctx)) return 0;
+  }
 
   // requiresNot
   if (Array.isArray(rec.requiresNot)) {
