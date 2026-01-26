@@ -691,7 +691,9 @@ export function scoreActionFacts(actionKey, opts = {}) {
   if (affectsFlags.includes("noPeek")) soft.control += 0.5;
 
   // --- Context-aware heuristics ---
-  const dangerNext = getDangerNext(opts);
+  const dangerNext = Number.isFinite(Number(ctx?.dangerNext))
+    ? Number(ctx.dangerNext)
+    : getDangerNext(opts);
   const emergency = dangerNext >= 8 || ctx?.emergency === true;
 
   const playedThisRound = getActionsPlayedThisRound(opts);
@@ -1033,11 +1035,43 @@ export function rankActions(actionKeys = [], opts = {}) {
     };
   })();
 
- // ---- comboInfo: build from hand unless botRunner already passed one ----
-const comboInfo = opts?.comboInfo || buildComboInfoFromHand(actionIds, ctx);
+   // ---- comboInfo: build from hand unless caller passed one ----
+  const comboInfo = opts?.comboInfo || buildComboInfoFromHand(actionIds, ctx);
 
   const core = evaluateCorePolicy(ctx, comboInfo, cfg);
-   const strat = applyActionStrategies(ctx, comboInfo);
+
+  // ---- derive combo eligibility + expose to heuristics/scoring ----
+  const isLast = !!ctx?.isLast;
+  const scoreBehind = Number(ctx?.scoreBehind || 0);
+  const hailMary = isLast || scoreBehind >= Number(cfg?.HAILMARY_BEHIND ?? 6);
+
+  const comboThreshold = hailMary ? Number(cfg.COMBO_THRESHOLD_HAILMARY ?? 6.5) : Number(cfg.COMBO_THRESHOLD ?? 7.5);
+  const bestPair = comboInfo?.bestPair || { a: null, b: null, score: 0 };
+  const comboEligible =
+    !!bestPair.a && !!bestPair.b && Number(bestPair.score || 0) >= comboThreshold;
+
+  // Flag combo possibility for budget logic inside scoreActionFacts()
+  if (comboEligible) ctx.comboAllowed = true;
+
+  // If we've already played once this round, only allow "real follow-up"
+  const discThis = Array.isArray(ctx?.discardThisRoundActionIds) ? ctx.discardThisRoundActionIds : [];
+  const lastPlayed = discThis.length ? discThis[discThis.length - 1] : null;
+
+  let comboTarget = null;
+  if (comboEligible && Number(ctx?.actionsPlayedThisRound || 0) >= 1) {
+    if (lastPlayed === bestPair.a) comboTarget = bestPair.b;
+    else if (lastPlayed === bestPair.b) comboTarget = bestPair.a;
+  }
+
+  if (comboTarget) {
+    ctx.comboPrimed = true;
+    ctx.comboFollowUp = true;
+    ctx.comboTarget = comboTarget;
+  } else if (comboEligible && Number(ctx?.actionsPlayedThisRound || 0) < 1) {
+    ctx.comboPrimed = true;
+  }
+
+  const strat = applyActionStrategies(ctx, comboInfo);
 
 // deny merge (core + strategies)
 const denySet = new Set([
@@ -1149,17 +1183,45 @@ export function pickActionOrPass(actionKeys = [], opts = {}) {
 export function recommendDecision(opts = {}) {
   const { ctx, game, me } = getCtx(opts);
   const denColor = getScopedDenColor(opts);
-  const presetKey = String(opts?.presetKey || presetFromDenColor(denColor) || "NEUTRAL");
-  const preset = getPreset(presetKey, denColor);
 
-  // Prefer already-computed metrics when botRunner passes them (works even in probabilistic/noPeek mode)
+  // Prefer probabilistic risks from botRunner metrics (works in noPeek)
   const ctxDangerVec = (ctx && typeof ctx.dangerVec === "object") ? ctx.dangerVec : null;
-  const dDash = Number(ctxDangerVec?.dash ?? ctxDangerVec?.DASH ?? ctxDangerVec?.dashRisk ?? ctxDangerVec?.dangerDash ?? 0);
-  const dLurk = Number(ctxDangerVec?.lurk ?? ctxDangerVec?.LURK ?? ctxDangerVec?.lurkRisk ?? ctxDangerVec?.dangerLurk ?? 0);
-  const dBurrow = Number(ctxDangerVec?.burrow ?? ctxDangerVec?.BURROW ?? ctxDangerVec?.burrowRisk ?? ctxDangerVec?.dangerBurrow ?? 0);
 
-  // Fallback: try to get next event facts (peek/intel) if metrics weren't passed
-  const nextEventFacts = ctxDangerVec ? null : getNextEventFactsFromOpts(opts);
+  const dDash = Number(ctxDangerVec?.dash ?? ctxDangerVec?.DASH ?? ctxDangerVec?.dashRisk ?? ctxDangerVec?.dangerDash ?? NaN);
+  const dLurk = Number(ctxDangerVec?.lurk ?? ctxDangerVec?.LURK ?? ctxDangerVec?.lurkRisk ?? ctxDangerVec?.dangerLurk ?? NaN);
+  const dBurrow = Number(ctxDangerVec?.burrow ?? ctxDangerVec?.BURROW ?? ctxDangerVec?.burrowRisk ?? ctxDangerVec?.dangerBurrow ?? NaN);
+
+  // Fallback (only when peeking is allowed and botRunner didn't pass risks)
+  const nextEventFacts =
+    (Number.isFinite(dDash) || Number.isFinite(dLurk) || Number.isFinite(dBurrow))
+      ? null
+      : getNextEventFactsFromOpts(opts);
+
+  const lurkRisk = Number.isFinite(dLurk) ? dLurk : Number(nextEventFacts?.dangerLurk ?? 0);
+  const burrowRisk = Number.isFinite(dBurrow) ? dBurrow : Number(nextEventFacts?.dangerBurrow ?? 0);
+  const dashRisk = Number.isFinite(dDash) ? dDash : Number(nextEventFacts?.dangerDash ?? 0);
+
+  // BURROW availability (one-time per RAID)
+  const burrowUsed = !!(me?.burrowUsedThisRaid ?? me?.burrowUsed);
+  const canBurrow = !burrowUsed;
+
+  // Den Signal (if your den is immune this round, staying is safe)
+  const denImmune =
+    (ctx?.flagsRound && typeof ctx.flagsRound === "object" ? ctx.flagsRound.denImmune : null) ||
+    (game?.flagsRound && typeof game.flagsRound === "object" ? game.flagsRound.denImmune : null) ||
+    null;
+
+  const myDenKey = String(denColor || "").trim().toUpperCase();
+  const safeBySignal = !!(denImmune && myDenKey && denImmune[myDenKey]);
+
+  // Rooster timing (only matters when the bot can genuinely know it)
+  const roosterSeen = Number.isFinite(Number(ctx?.roosterSeen))
+    ? Number(ctx.roosterSeen)
+    : (Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0);
+
+  const confidence = Number(ctx?.confidence);
+  const knowsNext = ctx?.nextKnown === true || (Array.isArray(me?.knownUpcomingEvents) && me.knownUpcomingEvents.length > 0);
+  const canTrustNextId = (game?.flagsRound?.noPeek !== true) || knowsNext || (Number.isFinite(confidence) && confidence >= 0.99);
 
   const nextEventId =
     (ctx?.nextEventIdUsed != null ? String(ctx.nextEventIdUsed || "") : "") ||
@@ -1169,162 +1231,90 @@ export function recommendDecision(opts = {}) {
     getNextEventKey(game, ctx) ||
     null;
 
-  const carryValue =
-  Number.isFinite(Number(opts?.carryValue)) ? Number(opts.carryValue)
-  : (Number.isFinite(Number(ctx?.carryValueExact)) ? Number(ctx.carryValueExact)
-  : (Number.isFinite(Number(ctx?.carryValue)) ? Number(ctx.carryValue)
-  : (Number.isFinite(Number(me?.carryValue)) ? Number(me.carryValue)
-  : estimateCarryValue(me))));
+  const isRooster3 = canTrustNextId && String(nextEventId || "") === "ROOSTER_CROW" && roosterSeen >= 2;
 
-  // danger aggregates (prefer ctx values if present)
-  const dangerPeak = Number.isFinite(Number(ctx?.dangerPeak))
-    ? Number(ctx.dangerPeak)
-    : getDangerPeakFromFacts(nextEventFacts);
+  // === CANON: decision layer ===
+  // - DASH = definitive exit (keep loot, wait for RAID end)
+  // - LURK = stay for reveal (continue if not caught)
+  // - BURROW = one-time emergency brake that prevents a forced DASH when staying is too risky
 
-  const dangerStayFacts = getDangerStayFromFacts(nextEventFacts);
-  const dangerStay = Number.isFinite(Number(ctx?.dangerStay))
-    ? Number(ctx.dangerStay)
-    : dangerStayFacts;
+  // Safety threshold: under this, we treat "stay" as safe enough to LURK
+  const SAFE_MAX = 3.0;
 
-  const dangerEffective = Number.isFinite(Number(ctx?.dangerEffective))
-    ? Number(ctx.dangerEffective)
-    : dangerStay;
+  // "Would DASH" trigger: above this, staying is too risky (unless you can BURROW)
+  const DASH_TRIGGER = 7.0;
 
-const burrowUsed = !!(me?.burrowUsedThisRaid ?? me?.burrowUsed);
-const canBurrow = !burrowUsed;
+  // dashPush: rising pressure to bail out (derived from danger over time + endgame pressure),
+  // but BURROW can be used to avoid an early DASH.
+  const dashPush = Number.isFinite(Number(me?.dashPush)) ? Number(me.dashPush) : 0;
+  const dashers = Number.isFinite(Number(ctx?.dashDecisionsSoFar)) ? Number(ctx.dashDecisionsSoFar) : 0;
 
-  // Lead detection: prefer explicit ctx.isLead if passed by botRunner; fallback to game.leadFoxId
-  const isLead =
-    typeof ctx?.isLead === "boolean"
-      ? ctx.isLead
-      : String(game?.leadFoxId || game?.leadFox || "") === String(me?.id || "");
+  // If many dashers already, threshold drops (bag splits -> less attractive to stay forever)
+  const dashPushThreshold = Math.max(4.5, 7.0 - (Math.min(3, dashers) * 0.75));
 
-  // anti-herd support: botRunner can pass dashDecisionsSoFar
-  const dashDecisionsSoFarRaw = ctx?.dashDecisionsSoFar ?? ctx?.dashersPlanned ?? 0;
-  const dashDecisionsSoFar = Number.isFinite(Number(dashDecisionsSoFarRaw)) ? Number(dashDecisionsSoFarRaw) : 0;
+  const safeNow = safeBySignal || lurkRisk <= SAFE_MAX;
 
-  const roosterSeen = Number.isFinite(Number(ctx?.roosterSeen))
-    ? Number(ctx.roosterSeen)
-    : (Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0);
+  // Update dashPush (returned for botRunner to persist if desired)
+  let dashPushNext = dashPush;
+  if (isRooster3) {
+    dashPushNext = 10;
+  } else if (safeNow) {
+    dashPushNext = Math.max(0, dashPush - 1.0);
+  } else {
+    const gain =
+      lurkRisk >= 9 ? 3.0 :
+      lurkRisk >= 8 ? 2.2 :
+      lurkRisk >= 7 ? 1.4 :
+      lurkRisk >= 6 ? 1.0 :
+      0.6;
+    dashPushNext = Math.min(10, dashPush + gain);
 
-  const postRooster2Window =
-    typeof ctx?.postRooster2Window === "boolean"
-      ? ctx.postRooster2Window
-      : roosterSeen >= 2;
-
-  // core policy (cashoutBias + dangerEffective)
-  const cfg = { ...DEFAULT_CORE_CONFIG, ...(preset?.coreOverride || {}), ...(opts?.coreConfig || {}) };
-
-  // Use computed dangerEffective for cashout pressure (works when next event is unknown)
-  const policyCtx = {
-    ...ctx,
-    round: Number.isFinite(Number(ctx?.round))
-      ? Number(ctx.round)
-      : (Number.isFinite(Number(game?.round)) ? Number(game.round) : 0),
-    denColor,
-    isLead,
-    carryValue,
-    nextEventKey: nextEventId,
-    nextEventFacts: nextEventFacts || ctx?.nextEventFacts || null,
-    dangerNext: dangerEffective,
-    roosterSeen,
-    postRooster2Window,
-    dashDecisionsSoFar,
-    dashersPlanned: dashDecisionsSoFar,
-    debug: false,
-  };
-
-  const comboInfo = {
-    bestPair: { a: null, b: null, score: 0 },
-    bestPartnerScoreByActionId: {},
-    allowsDuplicatePair: () => false,
-  };
-
-  const core = evaluateCorePolicy(policyCtx, comboInfo, cfg);
-  const cashoutBias = Number(core?.cashoutBias ?? 0);
-
-  // --- Decision logic ---
-  // BURROW is ONE-TIME per RAID. Treat it as a scarce resource with a small "cost".
-  // We still use it when it prevents capture (high lurk danger) or when Lead is targeted.
-  const leadTargetEvent = nextEventId === "MAGPIE_SNITCH" || nextEventId === "SILENT_ALARM";
-
-  // Cost model: save BURROW early, spend it late. Lead-target events override the cost.
-  let burrowCost = postRooster2Window ? 0.7 : 1.4;
-  if (leadTargetEvent && isLead) burrowCost = 0.0;
-
-  const lurkRisk = ctxDangerVec ? dLurk : Number(nextEventFacts?.dangerLurk ?? 0);
-  const burrowRisk = ctxDangerVec ? dBurrow : Number(nextEventFacts?.dangerBurrow ?? 0);
-  const dashRisk = ctxDangerVec ? dDash : Number(nextEventFacts?.dangerDash ?? 0);
-
-  // Choose best "stay" action with BURROW scarcity in mind
-  let stayChoice = "LURK";
-  if (canBurrow) {
-    const burrowUtility = burrowRisk + burrowCost;
-    const lurkUtility = lurkRisk;
-
-    // Only pick BURROW if it is meaningfully better than LURK
-    if (lurkUtility >= 2 && burrowUtility <= (lurkUtility - 0.8)) {
-      stayChoice = "BURROW";
-    }
+    // mild end-pressure after Rooster #2 (not a "cashout", just urgency)
+    if (roosterSeen >= 2) dashPushNext = Math.min(10, dashPushNext + 0.5);
   }
 
-  let stayRisk = stayChoice === "BURROW" ? burrowRisk : lurkRisk;
+  // Decision: default is LURK. Only switch to DASH when truly necessary.
+  let decision = "LURK";
 
-  let decision = stayChoice;
-
-  // Lead-target survival override: if you're Lead and the next event targets Lead, avoid LURK.
-  if (leadTargetEvent && isLead) {
-    if (canBurrow) {
-      // Prefer BURROW to keep farming (avoid early DASH unless cashout pressure is high and dash is safe)
-      if (cashoutBias >= 3 && dashRisk <= 2) decision = "DASH";
-      else decision = "BURROW";
-    } else {
-      // No BURROW left: if DASH is safe-ish, dash out
-      if (dashRisk <= 3) decision = "DASH";
-      else decision = "LURK";
-    }
-  }
-
-  // If chosen stay is lethal and BURROW is available, use it.
-  if (decision === "LURK" && canBurrow && lurkRisk >= 8 && burrowRisk <= 3) {
-    decision = "BURROW";
-    stayRisk = burrowRisk;
-  }
-
-  // Cashout rules:
-  // - high cashoutBias pushes towards DASH, but don't DASH into obvious death.
-  if (decision !== "DASH") {
-    if (cashoutBias >= 4) {
-      if (dashRisk <= stayRisk + 1 || stayRisk >= 7) decision = "DASH";
-    } else if (cashoutBias >= 2) {
-      if (dashRisk <= stayRisk) decision = "DASH";
-    } else {
-      // low cashout pressure: only dash to avoid death when you have no BURROW
-      if (stayRisk >= 9 && !canBurrow && dashRisk <= 3) decision = "DASH";
-    }
-  }
-
-  // Death-risk override: if staying is very dangerous and DASH is clearly safe, allow DASH.
-  if (stayRisk >= 9 && dashRisk <= 2 && (!canBurrow || cashoutBias >= 1.5)) {
+  if (isRooster3) {
+    // hard rule: on 3rd Rooster Crow, everyone still in the RAID gets caught -> DASH
     decision = "DASH";
+  } else if (safeNow) {
+    decision = "LURK";
+  } else {
+    // If we'd normally be forced to DASH, use BURROW instead (if available).
+    const dashShould = (lurkRisk >= DASH_TRIGGER) || (dashPushNext >= dashPushThreshold);
+
+    if (dashShould) decision = canBurrow ? "BURROW" : "DASH";
+    else decision = "LURK";
   }
 
-  if (decision === "BURROW" && burrowUsed) decision = "LURK";
+  if (decision === "BURROW" && !canBurrow) decision = "LURK";
+
+  // Keep carryValue purely for logging / compatibility (NOT used in the decision)
+  const carryValue =
+    Number.isFinite(Number(ctx?.carryValueExact)) ? Number(ctx.carryValueExact)
+    : (Number.isFinite(Number(ctx?.carryValue)) ? Number(ctx.carryValue)
+    : (Number.isFinite(Number(me?.carryValue)) ? Number(me.carryValue) : 0));
 
   return {
     decision,
     nextEventId,
-    carryValue,
-    dangerPeak,
-    dangerStay,
-    dangerEffective: Number(core?.dangerEffective ?? dangerEffective ?? 0),
-    cashoutBias,
-    isLead,
-    dashDecisionsSoFar,
-    appliesToMe: (ctx && typeof ctx.appliesToMe === "boolean") ? ctx.appliesToMe : null,
-    dangerVec: ctxDangerVec
-      ? { dash: dDash, lurk: dLurk, burrow: dBurrow }
-      : (nextEventFacts ? { dash: dashRisk, lurk: lurkRisk, burrow: burrowRisk } : null),
+    carryValue,     // informational only
+    cashoutBias: null, // removed (was non-canon)
+
+    // risk telemetry
+    dangerStay: Number.isFinite(Number(ctx?.dangerStay)) ? Number(ctx.dangerStay) : Math.min(lurkRisk, canBurrow ? burrowRisk : lurkRisk),
+    dangerEffective: Number.isFinite(Number(ctx?.dangerEffective)) ? Number(ctx.dangerEffective) : lurkRisk,
+    dangerVec: { dash: dashRisk, lurk: lurkRisk, burrow: burrowRisk },
+
+    // canon pressure telemetry
+    dashPushNext,
+    dashPushThreshold,
+    dashDecisionsSoFar: dashers,
+    confidence: Number.isFinite(confidence) ? confidence : null,
+    canTrustNextId,
+    isRooster3,
+    safeBySignal,
   };
 }
-
