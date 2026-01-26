@@ -51,9 +51,19 @@ export function scoutTierFromCtx(ctx = {}) {
 }
 
 export function dangerNextFromCtx(ctx = {}) {
+  // CANON: "dangerNext" for OPS/action valuation must reflect STAY-risk,
+  // not peak(DASH,LURK,BURROW). Peak breaks things like SHEEPDOG_PATROL
+  // (where DASH is risky but LURK is safe).
   const f = ctx.nextEventFacts || null;
   if (!f) return 0;
-  return Math.max(f.dangerDash || 0, f.dangerLurk || 0, f.dangerBurrow || 0);
+  const lurk = Number(f.dangerLurk || 0);
+  const burrow = Number(f.dangerBurrow || 0);
+
+  // Staying risk: if BURROW is your lifeline, you still prefer to make LURK safe in OPS.
+  // Use LURK-danger as primary driver; BURROW-danger only matters if it's worse than LURK.
+  const stay = Math.max(0, lurk);
+  const bur = Math.max(0, burrow);
+  return stay;
 }
 
 // ------------------------------------------------------------
@@ -495,3 +505,4 @@ export function buildComboInfoFromHand(handActionIds = [], ctx = {}, opts = {}) 
     allowsDuplicatePair,
   };
 }
+
