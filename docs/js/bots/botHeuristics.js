@@ -1035,43 +1035,11 @@ export function rankActions(actionKeys = [], opts = {}) {
     };
   })();
 
-   // ---- comboInfo: build from hand unless caller passed one ----
-  const comboInfo = opts?.comboInfo || buildComboInfoFromHand(actionIds, ctx);
+ // ---- comboInfo: build from hand unless botRunner already passed one ----
+const comboInfo = opts?.comboInfo || buildComboInfoFromHand(actionIds, ctx);
 
   const core = evaluateCorePolicy(ctx, comboInfo, cfg);
-
-  // ---- derive combo eligibility + expose to heuristics/scoring ----
-  const isLast = !!ctx?.isLast;
-  const scoreBehind = Number(ctx?.scoreBehind || 0);
-  const hailMary = isLast || scoreBehind >= Number(cfg?.HAILMARY_BEHIND ?? 6);
-
-  const comboThreshold = hailMary ? Number(cfg.COMBO_THRESHOLD_HAILMARY ?? 6.5) : Number(cfg.COMBO_THRESHOLD ?? 7.5);
-  const bestPair = comboInfo?.bestPair || { a: null, b: null, score: 0 };
-  const comboEligible =
-    !!bestPair.a && !!bestPair.b && Number(bestPair.score || 0) >= comboThreshold;
-
-  // Flag combo possibility for budget logic inside scoreActionFacts()
-  if (comboEligible) ctx.comboAllowed = true;
-
-  // If we've already played once this round, only allow "real follow-up"
-  const discThis = Array.isArray(ctx?.discardThisRoundActionIds) ? ctx.discardThisRoundActionIds : [];
-  const lastPlayed = discThis.length ? discThis[discThis.length - 1] : null;
-
-  let comboTarget = null;
-  if (comboEligible && Number(ctx?.actionsPlayedThisRound || 0) >= 1) {
-    if (lastPlayed === bestPair.a) comboTarget = bestPair.b;
-    else if (lastPlayed === bestPair.b) comboTarget = bestPair.a;
-  }
-
-  if (comboTarget) {
-    ctx.comboPrimed = true;
-    ctx.comboFollowUp = true;
-    ctx.comboTarget = comboTarget;
-  } else if (comboEligible && Number(ctx?.actionsPlayedThisRound || 0) < 1) {
-    ctx.comboPrimed = true;
-  }
-
-  const strat = applyActionStrategies(ctx, comboInfo);
+   const strat = applyActionStrategies(ctx, comboInfo);
 
 // deny merge (core + strategies)
 const denySet = new Set([
@@ -1079,7 +1047,7 @@ const denySet = new Set([
   ...(Array.isArray(strat?.denyActionIds) ? strat.denyActionIds : []),
 ]);
    
-    const out = actionIds
+  return actionIds
     .map((id) => {
       if (denySet.has(id)) return null;
 
@@ -1089,28 +1057,25 @@ const denySet = new Set([
       const base = totalScore(s);
       const coreDelta = Number(core?.addToActionTotal?.[id] || 0);
       const stratDelta = Number(strat?.addToActionTotal?.[id] || 0);
-      const total = base + coreDelta + stratDelta;
+      const delta = coreDelta + stratDelta;
+      const total = base + delta;
 
       return {
         id,
         s: {
-          ...s,
-          coreDelta,
-          stratDelta,
-          coreDangerEffective: core?.dangerEffective,
-          coreCashoutBias: core?.cashoutBias,
-        },
-        total,
+           ...s,
+           coreDelta,
+           stratDelta,
+           coreDangerEffective: core?.dangerEffective,
+           coreCashoutBias: core?.cashoutBias,
+            },
+      total,
       };
     })
     .filter(Boolean)
     .sort((a, b) => (b.total - a.total));
-
-  // attach meta for pickActionOrPass (array is an object too)
-  out._meta = { core, comboInfo, ctx, cfg, comboThreshold };
-
-  return out;
 }
+
 /* ============================================================
    6) Action gate: play vs PASS (bot economy)
 ============================================================ */
@@ -1152,6 +1117,7 @@ export function pickActionOrPass(actionKeys = [], opts = {}) {
 
   // If playing would break reserve, PASS unless emergency and action is strong enough
   if (!emergency && projectedAfter < reserve) {
+    // If the hand is large we don't need to be strict (rare edge case with stale ctx)
     return { play: null, ranked, reason: "reserve_hold" };
   }
 
@@ -1159,78 +1125,24 @@ export function pickActionOrPass(actionKeys = [], opts = {}) {
   // When danger is low -> be more conservative (save cards).
   // When danger is high -> allow spending cards to survive/control.
   const dangerFactor = Math.max(0, Math.min(10, dangerNext));
-  let step = 0.75 - (dangerFactor * 0.06); // 0.75 .. 0.15 roughly
+  let step = 0.75 - (dangerFactor * 0.06);   // 0.75 .. 0.15 roughly
   step = Math.max(0.15, Math.min(0.75, step));
 
-  // ---- combo gating (real follow-up only) ----
-  const meta = ranked?._meta || {};
-  const core = meta.core || null;
-  const comboInfo = meta.comboInfo || null;
-  const ctxUse = meta.ctx || ctx || {};
-  const comboThreshold = Number(
-    meta.comboThreshold ?? (DEFAULT_CORE_CONFIG?.COMBO_THRESHOLD ?? 7.5)
-  );
+  // Combo context can justify a second card in the same round (lower threshold a bit)
+  const comboPrimed = !!(ctx?.comboAllowed || ctx?.comboFollowUp || ctx?.comboPrimed);
+  const comboDiscount = comboPrimed ? 0.55 : 0;
 
-  // If this would be a 2nd play and CORE says "no", then PASS (unless emergency)
-  if (!emergency && playedThisRound >= 1 && core?.denySecondAction) {
-    return { play: null, ranked, reason: "deny_second_action" };
-  }
-
-  const bestPair = comboInfo?.bestPair || { a: null, b: null, score: 0 };
-  const comboEligible =
-    !!bestPair.a &&
-    !!bestPair.b &&
-    Number(bestPair.score || 0) >= comboThreshold;
-
-  // Determine if we're actually in a follow-up situation
-  const discThis = Array.isArray(ctxUse?.discardThisRoundActionIds)
-    ? ctxUse.discardThisRoundActionIds
-    : [];
-  const lastPlayed = discThis.length ? discThis[discThis.length - 1] : null;
-
-  let comboTarget = null;
-  if (comboEligible && playedThisRound >= 1) {
-    if (lastPlayed === bestPair.a) comboTarget = bestPair.b;
-    else if (lastPlayed === bestPair.b) comboTarget = bestPair.a;
-  }
-
-  // HARD RULE: 2e action alleen als partner (behalve emergency)
-  if (!emergency && playedThisRound >= 1 && !comboTarget) {
-    return { play: null, ranked, reason: "no_combo_followup" };
-  }
-
-  // Candidate = best, tenzij echte follow-up partner bestaat
-  let candidate = best;
-  if (comboTarget) {
-    const follow = ranked.find((x) => x?.id === comboTarget);
-    if (follow) candidate = follow;
-    else if (!emergency && playedThisRound >= 1) {
-      // partner niet in hand -> geen 2e play
-      return { play: null, ranked, reason: "combo_partner_missing" };
-    }
-  }
-
-  const comboDiscount = (playedThisRound >= 1 && comboTarget) ? 0.85 : 0;
   const dynamicMin = baseMin + (playedThisRound * step) - comboDiscount;
 
-  const candidateTotal = Number(candidate?.total ?? -Infinity);
-
-  // Emergency override: best card only
   if (emergency) {
     if (bestTotal >= emergencyTotal) return { play: best.id, ranked, reason: "emergency_play" };
     return { play: null, ranked, reason: "emergency_but_no_good_action" };
   }
 
-  if (candidateTotal >= dynamicMin) {
-    return {
-      play: candidate.id,
-      ranked,
-      reason: comboTarget ? "combo_followup" : "above_dynamic_threshold",
-    };
-  }
-
+  if (bestTotal >= dynamicMin) return { play: best.id, ranked, reason: "above_dynamic_threshold" };
   return { play: null, ranked, reason: "below_dynamic_threshold" };
 }
+
 
 /* ============================================================
    7) Optional decision recommendation (DASH/BURROW/LURK)
