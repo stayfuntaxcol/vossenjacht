@@ -14,7 +14,7 @@
 import { RULES_INDEX, getEventFacts, getActionFacts } from "./rulesIndex.js";
 import { evaluateCorePolicy, DEFAULT_CORE_CONFIG } from "./botPolicyCore.js";
 import { applyActionStrategies } from "./strategies/actionStrategies.js";
-
+import { buildComboInfoFromHand } from "./actionComboMatrix.js";
 
 /* ============================================================
    1) Presets (koppel aan Den-kleur)
@@ -1033,12 +1033,8 @@ export function rankActions(actionKeys = [], opts = {}) {
     };
   })();
 
-  // ---- comboInfo: optioneel (CORE werkt ook zonder matrix) ----
-  const comboInfo = opts?.comboInfo || {
-    bestPair: { a: null, b: null, score: 0 },
-    bestPartnerScoreByActionId: {},
-    allowsDuplicatePair: () => false,
-  };
+ // ---- comboInfo: build from hand unless botRunner already passed one ----
+const comboInfo = opts?.comboInfo || buildComboInfoFromHand(actionIds, ctx);
 
   const core = evaluateCorePolicy(ctx, comboInfo, cfg);
    const strat = applyActionStrategies(ctx, comboInfo);
