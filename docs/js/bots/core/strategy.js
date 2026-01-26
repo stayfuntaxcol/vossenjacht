@@ -21,30 +21,27 @@ export const BOT_UTILITY_CFG = {
   // lookahead (peek)
   lookaheadN: 4,
 
-  // DECISION
-  dashPushScale: 10,          // carry points -> dashPush=10
-  dashPushThreshold: 7.5,     // dashPush above this: bias to DASH if risk not worse
-  panicStayRisk: 6.5,         // anti-suicide lurk trigger
-  suicideMargin: 1.2,         // "dashRisk not worse than stayRisk" margin
-  panicDashStayRisk: 5.0,     // force DASH sooner when dash is very safe
-  panicDashSafeDashRisk: 1.2, // "dash is safe" threshold
-  panicDashCarryMin: 4,       // only force dash if carrying at least this much
-  burrowMinSafetyGain: 1.8,   // BURROW only if safety gain large
-  burrowMaxExtraCost: 3.5,    // spending your 1x BURROW is a resource cost
+  // DECISION (CANON)
+  // dangerScore is 0..10 for the NEXT REVEAL if you choose LURK.
+  // dashPush is 0..10 and is UPDATED over time (NOT derived from carry).
+  canonSafeDangerMax: 3.0,      // <= this: "safe enough" -> LURK
+  canonCautionDangerMax: 5.0,   // <= this: cautious LURK (stay, but build dashPush)
+  canonHighDangerMin: 6.5,      // >= this: unsafe -> BURROW else DASH
+  canonCritDangerMin: 8.5,      // >= this: emergency -> BURROW else DASH
 
-  // BURROW voor DASH 
-  roosterEarlyDashPenalty: 12.0,
-  roosterEarlyBurrowPenalty: 6.0,
-  roosterEarlyLurkBonus: 2.0,
+  // DASH is definitive; more dashers => more Loot Sack split => raise threshold
+  canonDashPushBase: 7.0,
+  canonDashPushDashersBonusCap: 3,
 
-  roosterLateDashBonus: 10.0,       // mag gelijk blijven aan je oude gedrag
-  roosterLateStayPenalty: 10.0,
-  
-  // BURROW voor DASH 
-  dashBeforeBurrowPenalty: 8.0,   // hoe hard we DASH ontmoedigen als burrow nog niet gebruikt is
-  panicLurkPenalty: 6.0,          // bij paniek: LURK zwaar afstraffen
-  panicBurrowBonus: 4.0,          // bij paniek: BURROW aantrekkelijker maken
-  burrowAlreadyUsedPenalty: 999,
+  // noPeek end-pressure (probabilistic)
+  canonPThirdRoosterThreshold: 0.75,
+
+  // dashPush update per round
+  canonDashPushSafeDecay: 1.0,
+  canonDashPushUnsafeGainMax: 2.0,
+  canonDashPushEndPressureBoost: 2.0,
+
+
 
   // MOVE
   shiftMinGain: 3.0,          // SHIFT must beat next-best by this much (after cost)
@@ -119,14 +116,6 @@ export const BOT_UTILITY_CFG = {
   // Random actions sampling
   kickUpDustSamples: 6,
   kickUpDustOptimism: 0.55,
-
-  // Share modeling
-  dashersLikelyThreshold: 6.0,
-
- // Den Signal bonus (hard)
-denSignalStayBonus: 3.0,        // alleen LURK
-denSignalDashPenalty: 16.0,     // DASH vrijwel onkiesbaar
-denSignalBurrowPenalty: 16.0,   // BURROW vrijwel onkiesbaar
 
   // Hidden Nest coordination (anti-herding)
   hiddenNestCoordination: true,
@@ -217,10 +206,7 @@ function computeIsLead(game, me, players) {
  *  but also tolerate array forms (future-proof). */
 function getFlags(flagsRound, meId = null) {
   const fr = flagsRound || {};
-  let noPeek = fr.noPeek === true; // strict boolean
-  if (!noPeek && Array.isArray(fr.noPeek) && meId) {
-    noPeek = fr.noPeek.includes(meId);
-  }
+  const noPeek = fr.noPeek === true; // STRICT boolean only (no arrays)
   return {
     lockEvents: false,
     scatter: false,
@@ -296,16 +282,19 @@ function eventDangerForChoice({ eventId, choice, game, me, players, flagsRound }
   const dLurk = Number(facts.dangerLurk || 0);
   const dBurrow = Number(facts.dangerBurrow || 0);
 
-  // Rooster Crow: 3rd+ rooster => staying is guaranteed caught
+  // Rooster Crow: alleen de 3e crow is dodelijk (dan wordt iedereen in RAID/YARD gevangen).
+  // De 1e en 2e crow zijn TEMPO, geen caught-risk -> danger = 0 voor stay.
   if (eid === "ROOSTER_CROW") {
     const seen = countRevealedRoosters(game);
     if (seen >= 2) {
       if (ch === "DASH") return 0;
-      return 10; // LURK/BURROW guaranteed caught
+      return 10; // LURK/BURROW gegarandeerd gevangen (3e crow)
     }
+    // 1e/2e crow: niet gevaarlijk
+    if (ch === "DASH") return 0;
+    return 0;
   }
-
-  // Fence Patrol: GREEN burrow gets caught
+// Fence Patrol: GREEN burrow gets caught
   if (eid === "FENCE_PATROL") {
     if (ch === "BURROW" && den === "GREEN") return 10;
     if (ch === "BURROW") return Math.max(dBurrow, 7);
@@ -328,48 +317,29 @@ function peakDangerForEvent({ eventId, game, me, players, flagsRound }) {
 /** =========================
  *  DECISION
  *  ========================= */
-function dashPushFromCarry(carryPts, cfg) {
-  const scale = Math.max(1, Number(cfg?.dashPushScale || DEFAULTS.dashPushScale));
-  return clamp((Number(carryPts || 0) / scale) * 10, 0, 10);
+function getDashPush(me, cfg = null) {
+  // dashPush is persisted on player doc and updated over time (0..10).
+  // Never derive it from carry/loot. If missing, assume 0.
+  return clamp(Number(me?.dashPush ?? 0), 0, 10);
 }
 
 function countRevealedRoosters(game) {
-  const track = safeArr(game?.eventTrack).map((x) => String(x));
-  const idx = Number.isFinite(Number(game?.eventIndex)) ? Number(game.eventIndex) : 0;
-
-  const rev = safeArr(game?.eventRevealed);
-
-  let c = 0;
-
-  if (rev.length) {
-    // count revealed roosters once
-    const n = Math.min(track.length, rev.length);
-    for (let i = 0; i < n; i++) {
-      if (rev[i] === true && track[i] === "ROOSTER_CROW") c++;
-    }
-  } else {
-    // fallback: count roosters before current index
-    for (let i = 0; i < Math.min(idx, track.length); i++) {
-      if (track[i] === "ROOSTER_CROW") c++;
-    }
-  }
-
-  if (c === 0 && Number.isFinite(Number(game?.roosterSeen))) c = Number(game.roosterSeen);
-  return c;
+  // Public info only. Never infer from eventTrack (noPeek-safe).
+  const n = Number(game?.roosterSeen);
+  return Number.isFinite(n) ? n : 0;
 }
 
 function estimateLikelyDashers({ game, players, me, cfg }) {
+  // Very rough: who already has high dashPush while still in-yard.
   const c = cfg || DEFAULTS;
   const meId = String(me?.id || "");
   const inYard = safeArr(players).filter((p) => isInYard(p) && String(p?.id || "") !== meId);
 
+  const base = Number(c?.canonDashPushBase ?? DEFAULTS.canonDashPushBase ?? 7.0);
   let count = 0;
   for (const p of inYard) {
-    const carry = sumLootPoints(p);
-    const push = dashPushFromCarry(carry, c);
-    const roosters = countRevealedRoosters(game);
-    const latePressure = roosters >= 2 ? 1.2 : 0;
-    if (push + latePressure >= Number(c.dashersLikelyThreshold || 6)) count++;
+    const push = getDashPush(p, c);
+    if (push >= base) count++;
   }
   return count;
 }
@@ -412,363 +382,175 @@ function isMeAllowedToDashHiddenNest({ game, players, meId }) {
   return ranked.includes(String(meId));
 }
 
-function decisionUtility({ decision, game, me, players, flagsRound, peekIntel, cfg, predictedDashers }) {
-  const c = cfg || DEFAULTS;
+function canonCountDashers(players = []) {
+  let n = 0;
+  for (const p of safeArr(players)) {
+    if (!p) continue;
+    const status = String(p?.raidStatus || p?.status || "").toUpperCase();
+    const dashed =
+      p?.hasDashed === true ||
+      status === "DASH" ||
+      (typeof p?.decision === "string" && String(p.decision).toUpperCase() === "DASH");
+    if (dashed) n++;
+  }
+  return n;
+}
 
-  const carry = sumLootPoints(me);
-  const dashPush = dashPushFromCarry(carry, c);
+function canonIsBurrowReady(me) {
+  const used = !!(me?.burrowUsedThisRaid ?? me?.burrowUsed);
+  if (used) return false;
+  if (me?.burrowCharges != null) return Number(me.burrowCharges) > 0;
+  return true;
+}
 
-  const events = safeArr(peekIntel?.events);
-  const nextId = events[0] || nextEventId(game, 0);
-  
-  const burrowUsed = !!(me?.burrowUsedThisRaid ?? me?.burrowUsed);
-
-  const isHiddenNest = String(nextId) === "HIDDEN_NEST";
-
-  // 3e Rooster Crow = volgende is ROOSTER_CROW terwijl er al 2 gezien zijn
- const roostersNow = countRevealedRoosters(game);
- const isThirdCrowNext = String(nextId) === "ROOSTER_CROW" && roostersNow >= 2;
-
-   
-   // ✅ Den Signal: alleen relevant als het volgende event daadwerkelijk geneutraliseerd wordt (DEN_* / DOG_CHARGE / SECOND_CHARGE)
-  const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
+function canonDenSignalRelevant({ game, me, flags, nextId }) {
   const den = normColor(me?.color || me?.den || me?.denColor);
   const immune = !!flags?.denImmune?.[den];
+  if (!immune) return false;
 
-  const denSignalRelevant =
-    immune &&
-    (String(nextId || "").startsWith("DEN_") ||
-      String(nextId) === "DOG_CHARGE" ||
-      String(nextId) === "SECOND_CHARGE");
-
-  let denSignalBias = 0;
-
-  if (denSignalRelevant) {
-    if (decision === "LURK") denSignalBias += Number(c.denSignalStayBonus || 0);
-    if (decision === "DASH") denSignalBias -= Number(c.denSignalDashPenalty || 0);
-    if (decision === "BURROW") denSignalBias -= Number(c.denSignalBurrowPenalty || 0);
-  }
-
-  const riskNow = eventDangerForChoice({ eventId: nextId, choice: decision, game, me, players, flagsRound });
-  const caughtP = clamp(riskNow / 10, 0, 1);
-  const surviveP = 1 - caughtP;
-  
-  // stayRisk is het risico als je zou blijven (LURK)
-  const stayRiskNow = eventDangerForChoice({ eventId: nextId, choice: "LURK", game, me, players, flagsRound });
-
-  // expected carry after next event
-  let expectedCarryAfter = surviveP * carry;
-
-  // Hidden Nest bonus for DASH (approx)
-  if (String(nextId) === "HIDDEN_NEST" && decision === "DASH") {
-    const dashers = Math.max(0, Number(predictedDashers || 0));
-    const dashersInclMe = dashers + 1;
-
-    let bonusCards = 0;
-    if (dashersInclMe === 1) bonusCards = 3;
-    else if (dashersInclMe === 2) bonusCards = 2;
-    else if (dashersInclMe === 3) bonusCards = 1;
-
-    expectedCarryAfter += surviveP * bonusCards * avgLootDeckValue(game);
-  }
-
-  // Gate Toll: lose 1 loot if you don't DASH (if you have any)
-  if (String(nextId) === "GATE_TOLL" && decision !== "DASH") {
-    if (carry > 0) expectedCarryAfter -= surviveP * 1;
-  }
-
-  // Silent Alarm: lead pays 2 loot into sack if possible
-  if (String(nextId) === "SILENT_ALARM") {
-    const isLead = computeIsLead(game, me, players);
-    if (isLead && decision !== "DASH") {
-      if (carry >= 2) expectedCarryAfter -= surviveP * 2;
-      else expectedCarryAfter -= surviveP * 0.5;
-    }
-  }
-
-  // share penalty: prefer dashing when fewer dash
-  let sharePenalty = 0;
-  if (decision === "DASH") {
-    const dashersInclMe = Math.max(1, Number(predictedDashers || 0) + 1);
-    sharePenalty = c.wShare * Math.log(1 + dashersInclMe);
-  }
-
-  // future pressure: staying means you face upcoming dangers
- let futurePressure = 0;
-if (c.decisionUseFutureEvents && decision !== "DASH") {
-  const future = events.slice(1);
-  let best = 0;
-  for (let i = 0; i < future.length; i++) {
-    const pd = peakDangerForEvent({ eventId: future[i], game, me, players, flagsRound });
-    const w = i === 0 ? 0.7 : i === 1 ? 0.45 : 0.28;
-    best = Math.max(best, pd * w);
-  }
-  futurePressure = best;
+  const eid = String(nextId || "");
+  // Den Signal canon: only matters if it actually neutralizes the upcoming threat
+  return eid.startsWith("DEN_") || eid === "DOG_CHARGE" || eid === "SECOND_CHARGE";
 }
 
-// rooster pressure
-let roosterBias = 0;
+function canonIsRooster3({ game, nextId, nextFacts }) {
+  const eid = String(nextId || "");
+  if (eid !== "ROOSTER_CROW") return false;
 
-// 1e + 2e ROOSTER_CROW = veilig: straf DASH (en BURROW), beloon LURK een beetje
-if (String(nextId) === "ROOSTER_CROW" && roostersNow < 2) {
-  if (decision === "DASH") roosterBias -= Number(c.roosterEarlyDashPenalty ?? 4.0);
-  if (decision === "BURROW") roosterBias -= Number(c.roosterEarlyBurrowPenalty ?? 2.0);
-  if (decision === "LURK") roosterBias += Number(c.roosterEarlyLurkBonus ?? 0.5);
+  // Prefer explicit tag if rulesIndex provides it
+  const tags = new Set(safeArr(nextFacts?.tags || nextFacts?.rules?.tags || nextFacts?.meta?.tags));
+  if (tags.has("raid_end_trigger")) return true;
+
+  // Fallback: public rooster counter
+  const seen = countRevealedRoosters(game);
+  return seen >= 2;
 }
 
-// 3e ROOSTER (roostersNow >=2) = einde nadert: dan mag DASH juist aantrekkelijk zijn
-else if (roostersNow >= 2) {
-  roosterBias = decision === "DASH" ? Number(c.roosterLateDashBonus ?? 2.0) : -Number(c.roosterLateStayPenalty ?? 3.0);
+function canonDashPushThreshold(c, dashers) {
+  const base = Number(c?.canonDashPushBase ?? DEFAULTS.canonDashPushBase ?? 7.0);
+  const cap = Number(c?.canonDashPushDashersBonusCap ?? DEFAULTS.canonDashPushDashersBonusCap ?? 3);
+  const bonus = Math.min(cap, Math.max(0, Number(dashers || 0)));
+  return base + bonus;
 }
 
-  // BURROW cost: 1x per raid resource
-  const burrowCost = decision === "BURROW" ? Number(c.burrowMaxExtraCost || 0) : 0;
+function canonUpdateDashPush({ cfg, dashPushNow, safeNow, dangerStay, endPressure }) {
+  const c = cfg || DEFAULTS;
+  let dp = clamp(Number(dashPushNow ?? 0), 0, 10);
 
-  const lootTerm = c.wLoot * expectedCarryAfter;
-  const riskTerm = c.wRisk * (riskNow + futurePressure);
-  const dashPushBonus =
-    decision === "DASH"
-      ? Math.max(0, dashPush - Number(c.dashPushThreshold || 6.5)) * 0.6
-      : 0;
+  const safeDecay = Number(c?.canonDashPushSafeDecay ?? DEFAULTS.canonDashPushSafeDecay ?? 1.0);
+  const unsafeGainMax = Number(c?.canonDashPushUnsafeGainMax ?? DEFAULTS.canonDashPushUnsafeGainMax ?? 2.0);
+  const endBoost = Number(c?.canonDashPushEndPressureBoost ?? DEFAULTS.canonDashPushEndPressureBoost ?? 2.0);
 
-  let utility = lootTerm - riskTerm - sharePenalty - burrowCost + roosterBias + dashPushBonus + denSignalBias;
-
-    // ✅ HARD RULE maar als utility (geen runner-override)
-  // Paniek-drempel gebaseerd op stayRisk (LURK risico)
-  const panicStayRisk = Number(c.panicStayRisk ?? 6.5);
-  const isPanic = stayRiskNow >= panicStayRisk;
-
-  // A) BURROW mag maar 1x per raid: maak het praktisch onmogelijk als al gebruikt
-  if (decision === "BURROW" && burrowUsed) {
-    utility -= Number(c.burrowAlreadyUsedPenalty ?? 999);
+  if (safeNow) {
+    dp = Math.max(0, dp - safeDecay);
+  } else {
+    // gain based on "how unsafe staying is"
+    const gain = clamp((Number(dangerStay) - 5.0) / 2.0, 0, unsafeGainMax);
+    dp = dp + gain;
+    if (endPressure) dp = dp + endBoost;
   }
 
-  // B) Bij paniek: LURK zwaar afstraffen (tenzij uitzonderingen)
-  if (isPanic && decision === "LURK" && !isHiddenNest && !isThirdCrowNext) {
-    utility -= Number(c.panicLurkPenalty ?? 6.0);
-  }
-
-  // C) Bij paniek: BURROW extra aantrekkelijk (als token nog beschikbaar is)
-  if (isPanic && decision === "BURROW" && !burrowUsed && !isHiddenNest && !isThirdCrowNext) {
-    utility += Number(c.panicBurrowBonus ?? 4.0);
-  }
-
-  // D) Geen “greed DASH” vóór 1e BURROW (behalve Hidden Nest / 3e crow), maar alleen als geen paniek
-  if (!burrowUsed && decision === "DASH" && !isHiddenNest && !isThirdCrowNext && !isPanic) {
-    utility -= Number(c.dashBeforeBurrowPenalty ?? 8.0);
-  }
-
-  // Hidden Nest coordination: discourage DASH if not in deterministic slot
-  if (
-    c.hiddenNestCoordination &&
-    String(nextId) === "HIDDEN_NEST" &&
-    decision === "DASH" &&
-    !isMeAllowedToDashHiddenNest({ game, players, meId: me?.id })
-  ) {
-    utility -= Number(c.hiddenNestDashPenalty || 4.0);
-  }
-  // Hidden Nest: discourage BURROW (you miss the bonus opportunity; prefer LURK or DASH)
-if (String(nextId) === "HIDDEN_NEST" && decision === "BURROW") {
-  utility -= Number(c.hiddenNestBurrowPenalty || 3.0);
-}  
-  
-// ✅ Force LURK on safe Rooster Crow (#1 and #2) IF we have next-event knowledge
-// "knowledge" = peekIntel had events (so nextId came from events[0])
-const hasNextKnowledge = !!(events && events[0]);
-
-if (hasNextKnowledge && String(nextId) === "ROOSTER_CROW" && roostersNow < 2) {
-  // make LURK always dominate
-  if (decision === "LURK") utility += 1000;
-  else utility -= 1000;
+  return clamp(dp, 0, 10);
 }
 
-// ================================
-// PERFECT-INFO HARD RULES (alleen als bot next-event kent)
-// ================================
-const hasPerfectInfo = !!(events && events[0]); // noPeek=false (of knownUpcomingEvents)
-
-if (hasPerfectInfo) {
-  const force = (want) => {
-    utility += (decision === want) ? 1000 : -1000;
-  };
-
-  const id = String(nextId || "");
-
-  // 1) 1e + 2e ROOSTER = super veilig -> altijd LURK
-  if (id === "ROOSTER_CROW" && roostersNow < 2) {
-    force("LURK");
-  }
-
-  // 2) SHEEPDOG_PATROL: alleen DASH wordt gepakt -> altijd LURK
-  if (id === "SHEEPDOG_PATROL") {
-    force("LURK");
-  }
-
-  // 3) DEN_<COLOR> die jou NIET raakt (of geneutraliseerd) -> altijd LURK
-  if (id.startsWith("DEN_")) {
-    const target = String(id.slice(4)).toUpperCase(); // RED/BLUE/GREEN/YELLOW
-    const myDen = normColor(me?.color || me?.den || me?.denColor);
-    const denImmuneTarget = !!getFlags(flagsRound || game?.flagsRound, String(me?.id || ""))?.denImmune?.[target];
-
-    if (myDen !== target || denImmuneTarget) {
-      force("LURK");
-    }
-  }
-
-  // 4) LEAD-only events: als jij NIET lead bent -> altijd LURK
-  if ((id === "MAGPIE_SNITCH" || id === "SILENT_ALARM") && !computeIsLead(game, me, players)) {
-    force("LURK");
-  }
-}
- 
-  return { utility, surviveP, riskNow, futurePressure, carry, dashPush, sharePenalty, expectedCarryAfter };
-}
-
+/** =========================
+ *  DECISION (CANON)
+ *  ========================= */
 export function evaluateDecision({ game, me, players, flagsRound = null, cfg = null, peekIntel = null }) {
   const cfg0 = { ...DEFAULTS, ...(cfg || {}) };
   const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
   const intel = peekIntel || getPeekIntel({ game, me, flagsRound: flags, lookaheadN: cfg0.lookaheadN });
 
-  const predictedDashers = estimateLikelyDashers({ game, players, me, cfg: cfg0 });
-  const burrowUsed = !!(me?.burrowUsedThisRaid ?? me?.burrowUsed);
+  const events = safeArr(intel?.events).filter(Boolean).map(String);
 
-  const options = [
-    { decision: "DASH" },
-    { decision: "LURK" },
-    { decision: "BURROW", illegal: burrowUsed },
-  ];
+  // noPeek safety: only use known upcoming events; never peek track here
+  const nextId = events[0] || (!flags.noPeek ? nextEventId(game, 0) : null);
 
-  const scored = [];
-  for (const o of options) {
-    if (o.illegal) {
-      scored.push({ decision: o.decision, illegal: true, utility: -1e9, reason: "burrowUsed=true" });
-      continue;
-    }
-    const res = decisionUtility({
-      decision: o.decision,
-      game,
-      me,
-      players,
-      flagsRound: flags,
-      peekIntel: intel,
-      cfg: cfg0,
-      predictedDashers,
-    });
-    scored.push({ decision: o.decision, illegal: false, ...res });
+  // If we genuinely don't know the next event, default to LURK (caller should avoid strategy in this case).
+  if (!nextId) {
+    return {
+      decision: "LURK",
+      meta: { reason: "no_intel", dashPushNext: getDashPush(me, cfg0), intel },
+    };
   }
 
-  const lurk = scored.find((x) => x.decision === "LURK");
-  const dash = scored.find((x) => x.decision === "DASH");
-  const burrow = scored.find((x) => x.decision === "BURROW");
+  const den = normColor(me?.color || me?.den || me?.denColor);
+  const isLead = computeIsLead(game, me, players);
 
-  const stayRisk = lurk?.riskNow ?? 0;
-  const dashRisk = dash?.riskNow ?? 0;
-  const burrowRisk = burrow?.riskNow ?? 0;
+  const nextFacts = getEventFacts(String(nextId), { game, me, denColor: den, isLead, flagsRound: flagsRound || game?.flagsRound });
 
-  // HARD RULE: anti-suicide lurk (panic) — maar BURROW eerst als dat kan
-let forced = null;
+  // danger of staying in-yard for the REVEAL
+  const dangerStay = eventDangerForChoice({ eventId: nextId, choice: "LURK", game, me, players, flagsRound });
 
-if (stayRisk >= cfg0.panicStayRisk) {
-  const burrowOk = !burrowUsed && burrow && !burrow.illegal;
+  // CANON: Den Signal (when relevant) makes you safe -> always LURK
+  const denSignalSafe = canonDenSignalRelevant({ game, me, flags, nextId });
 
-  // ✅ liever BURROW dan DASH als het ongeveer even veilig is
-  if (burrowOk && (burrowRisk <= dashRisk + 0.8)) {
-    forced = "BURROW";
-  } else if (dashRisk + cfg0.suicideMargin <= stayRisk) {
-    forced = "DASH";
+  const safeMax = Number(cfg0.canonSafeDangerMax ?? DEFAULTS.canonSafeDangerMax ?? 3.0);
+  const cautionMax = Number(cfg0.canonCautionDangerMax ?? DEFAULTS.canonCautionDangerMax ?? 5.0);
+  const highMin = Number(cfg0.canonHighDangerMin ?? DEFAULTS.canonHighDangerMin ?? 6.5);
+  const critMin = Number(cfg0.canonCritDangerMin ?? DEFAULTS.canonCritDangerMin ?? 8.5);
+
+  const safeNow = denSignalSafe || Number(dangerStay) <= safeMax;
+
+  const isRooster3 = canonIsRooster3({ game, nextId, nextFacts });
+
+  // end-pressure in noPeek: either we know rooster3, or we have probabilistic pressure
+  const pThird = Number(me?.pThirdRooster ?? me?.metrics?.pThirdRooster ?? 0);
+  const pThirdThr = Number(cfg0.canonPThirdRoosterThreshold ?? DEFAULTS.canonPThirdRoosterThreshold ?? 0.75);
+  const endPressure = isRooster3 || (flags.noPeek && pThird >= pThirdThr);
+
+  const dashers = canonCountDashers(players);
+  const dashPushNow = getDashPush(me, cfg0);
+  const dashPushNext = canonUpdateDashPush({ cfg: cfg0, dashPushNow, safeNow, dangerStay, endPressure });
+  const dashPushThreshold = canonDashPushThreshold(cfg0, dashers);
+
+  const burrowReady = canonIsBurrowReady(me);
+
+  // ===== RULE 1: Rooster3 -> DASH always (anyone still in yard gets caught)
+  if (isRooster3) {
+    return {
+      decision: "DASH",
+      meta: { nextEventIdUsed: nextId, isRooster3, dangerStay, safeNow, dashers, dashPushNow, dashPushNext, dashPushThreshold, intel },
+    };
   }
 
-}
-
-// ✅ Panic cashout override: if DASH is extremely safe and stay-risk is high, cash out (Prince R7 fix)
-if (
-  !forced &&
-  (dashRisk <= Number(cfg0.panicDashSafeDashRisk || 1.2)) &&
-  (stayRisk >= Number(cfg0.panicDashStayRisk || 5.0)) &&
-  (carry0 >= Number(cfg0.panicDashCarryMin || 4))
-) {
-  forced = "DASH";
-}
-
-// ✅ BURROW-FIRST wanneer DASH alleen "vluchten" is (niet bankdruk) en BURROW de veilige stay-optie is
-const events0 = safeArr(intel?.events);
-const nextId0 = events0[0] || nextEventId(game, 0);
-const dashPush0 = Number(dash?.dashPush ?? dashPushFromCarry(sumLootPoints(me), cfg0));
-
-if (
-  !forced &&
-  !burrowUsed &&
-  burrow && !burrow.illegal &&
-  String(nextId0) !== "HIDDEN_NEST" &&                 // hidden nest mag DASH lonen
-  dashPush0 < Number(cfg0.dashPushThreshold || 6.5) && // niet “ik wil cashen”
-  (stayRisk - burrowRisk) >= 1.0 &&                    // BURROW helpt echt t.o.v. blijven
-  (burrowRisk <= dashRisk + 0.8)                       // BURROW is minstens zo veilig als DASH
-) {
-  forced = "BURROW";
-}
-
-// BURROW gating: only if it really helps
-if (!forced && !burrowUsed && burrow && !burrow.illegal) {
-  const bestNonBurrow = [dash, lurk].slice().sort((a, b) => b.utility - a.utility)[0];
-  const safetyGain = (bestNonBurrow?.riskNow ?? 0) - (burrowRisk ?? 0);
-
-  const ok =
-    safetyGain >= cfg0.burrowMinSafetyGain &&
-    (burrow.utility ?? -1e9) >= (bestNonBurrow?.utility ?? -1e9) - 1.5;
-
-  if (!ok) burrow.utility -= 3.5;
-}
-
-  // pick best
-  let best = scored.slice().sort((a, b) => b.utility - a.utility)[0];
-  if (forced) {
-    const f = scored.find((x) => x.decision === forced);
-    if (f) best = f;
+  // ===== RULE 3: safe -> LURK
+  if (safeNow) {
+    return {
+      decision: "LURK",
+      meta: { nextEventIdUsed: nextId, isRooster3: false, dangerStay, safeNow, dashers, dashPushNow, dashPushNext, dashPushThreshold, intel },
+    };
   }
 
+  // ===== Emergency / high danger -> BURROW else DASH
+  if (Number(dangerStay) >= critMin || Number(dangerStay) >= highMin) {
+    return {
+      decision: burrowReady ? "BURROW" : "DASH",
+      meta: { nextEventIdUsed: nextId, isRooster3: false, dangerStay, safeNow, dashers, dashPushNow, dashPushNext, dashPushThreshold, intel },
+    };
+  }
+
+  // ===== Caution zone: still LURK, but build dashPush
+  if (Number(dangerStay) <= cautionMax) {
+    return {
+      decision: "LURK",
+      meta: { nextEventIdUsed: nextId, isRooster3: false, dangerStay, safeNow, dashers, dashPushNow, dashPushNext, dashPushThreshold, intel },
+    };
+  }
+
+  // ===== dashPush trigger (only when not safe): BURROW is the anti-DASH brake
+  if (dashPushNext >= dashPushThreshold) {
+    return {
+      decision: burrowReady ? "BURROW" : "DASH",
+      meta: { nextEventIdUsed: nextId, isRooster3: false, dangerStay, safeNow, dashers, dashPushNow, dashPushNext, dashPushThreshold, intel },
+    };
+  }
+
+  // ===== default: unsafe -> BURROW else DASH
   return {
-    decision: best?.decision || "LURK",
-    needsBurrowWrite: best?.decision === "BURROW" && !burrowUsed,
-    meta: {
-      predictedDashers,
-      stayRisk,
-      dashRisk,
-      burrowRisk,
-      dashPush: best?.dashPush ?? dashPushFromCarry(sumLootPoints(me), cfg0),
-      carry: best?.carry ?? sumLootPoints(me),
-      intel,
-      flags,
-    },
-    ranked: scored
-      .slice()
-      .sort((a, b) => b.utility - a.utility)
-      .map((x) => ({
-        decision: x.decision,
-        utility: Number(x.utility || 0),
-        illegal: !!x.illegal,
-        riskNow: Number(x.riskNow || 0),
-        surviveP: Number(x.surviveP || 0),
-        expectedCarryAfter: Number(x.expectedCarryAfter || 0),
-        sharePenalty: Number(x.sharePenalty || 0),
-        futurePressure: Number(x.futurePressure || 0),
-      })),
+    decision: burrowReady ? "BURROW" : "DASH",
+    meta: { nextEventIdUsed: nextId, isRooster3: false, dangerStay, safeNow, dashers, dashPushNow, dashPushNext, dashPushThreshold, intel },
   };
-}
-
-/** =========================
- *  MOVE (SNATCH / FORAGE / SHIFT / SCOUT)
- *  ========================= */
-export function applyShiftCost({ loot, lootDeck }) {
-  const l = safeArr(loot).slice();
-  const d = safeArr(lootDeck).slice();
-  const idx = highestLootCardIndex(l);
-  if (idx < 0) return { loot: l, lootDeck: d, removedCard: null, removedValue: 0 };
-
-  const [removedCard] = l.splice(idx, 1);
-  const removedValue = lootCardValue(removedCard);
-  // bottom of deck (engine draws with pop from end) => put card at front
-  d.unshift(removedCard);
-  return { loot: l, lootDeck: d, removedCard, removedValue };
 }
 
 function evaluateShiftPlan({ game, me, players, flagsRound, cfg, peekIntel }) {
@@ -889,7 +671,7 @@ export function evaluateMoveOptions({ game, me, players, flagsRound = null, cfg 
   const loot = safeArr(me?.loot);
 
   const carry = sumLootPoints(me);
-  const dashPush = dashPushFromCarry(carry, c);
+  const dashPush = getDashPush(me, c);
   const ctx = { game, me, players, flags, intel, carry, dashPush };
 
   const options = [];
@@ -1508,7 +1290,7 @@ const ctxCombo = {
   if (comboMeta.highCombo) reserveTarget += Number(c.opsReserveComboBoost || 0);
 
   const carry0 = sumLootPoints(me);
-  const dashPush0 = dashPushFromCarry(carry0, c);
+  const dashPush0 = getDashPush(me, c);
   const expFutureCard = Math.max(
     0.4,
     avgActionDeckValue(game, { game, me, players, flags, intel, carry: carry0, dashPush: dashPush0 }, c) || 0.8
@@ -1729,5 +1511,3 @@ export function evaluatePhase({ phase, game, me, players, flagsRound = null, cfg
   }
   return { error: `Unknown phase: ${phase}` };
 }
-
-
