@@ -428,96 +428,70 @@ export function comboScore(aId, bId, ctx = {}) {
 }
 
 // ------------------------------------------------------------
-// bestPair helper: vind beste 2-card combo in hand (A -> B)
-// Geeft comboInfo terug voor botHeuristics:
-// { bestPair, bestPartnerScoreByActionId, allowsDuplicatePair }
+// Build comboInfo from a hand (bestPair + per-card saveValue)
+// Shape matches botPolicyCore.safeComboInfo()
 // ------------------------------------------------------------
-export function bestPairFromHand(handActionIds = [], ctx = {}, opts = {}) {
-  const ids = (Array.isArray(handActionIds) ? handActionIds : [])
-    .map((x) => String(x || "").trim())
-    .filter(Boolean);
+export function buildComboInfoFromHand(handActionIds = [], ctx = {}, opts = {}) {
+  const idsRaw = Array.isArray(handActionIds) ? handActionIds : [];
+  const ids = [...new Set(idsRaw.map((x) => String(x || "").trim()).filter(Boolean))];
 
-  const minScore = Number.isFinite(Number(opts.minScore)) ? Number(opts.minScore) : 2;
+  // init per-card partner score
+  const bestPartnerScoreByActionId = {};
+  for (const id of ids) bestPartnerScoreByActionId[id] = 0;
 
-  // Als OPS al gelocked is: geen combos meer mogelijk
-  if (ctx?.opsLockedActive) {
-    return {
-      bestPair: { a: null, b: null, score: 0 },
-      bestPartnerScoreByActionId: {},
-      allowsDuplicatePair: () => false,
-    };
-  }
+  let bestA = null;
+  let bestB = null;
+  let bestScore = -Infinity;
+  let bestNotes = "";
 
-  // Als je al een action gespeeld hebt deze ronde, is "bestPair" als opener minder relevant.
-  // (Je kunt dit later uitbreiden met “followUp op lastPlayed”.)
-  const played = Number(ctx?.actionsPlayedThisRound ?? 0);
-  if (played >= 1 && opts?.ignoreWhenPlayed !== false) {
-    return {
-      bestPair: { a: null, b: null, score: 0 },
-      bestPartnerScoreByActionId: {},
-      allowsDuplicatePair: () => false,
-    };
-  }
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = 0; j < ids.length; j++) {
+      if (i === j) continue;
+      const a = ids[i];
+      const b = ids[j];
 
-  // counts voor duplicate pairs
-  const count = {};
-  for (const id of ids) count[id] = (count[id] || 0) + 1;
+      const s = comboScore(a, b, ctx);
 
-  const allowsDuplicatePair = (a, b) => {
-    if (!a || !b) return false;
-    if (a !== b) return true;
-    // alleen als je echt 2 copies hebt
-    if ((count[a] || 0) >= 2) {
-      // hard stop: 2x Hold Still is nooit zinnig als combo
-      if (a === "HOLD_STILL") return false;
-      return true;
-    }
-    return false;
-  };
+      // saveValue voor BEIDE kanten (opener én follow-up)
+      if (s > (bestPartnerScoreByActionId[a] || 0)) bestPartnerScoreByActionId[a] = s;
+      if (s > (bestPartnerScoreByActionId[b] || 0)) bestPartnerScoreByActionId[b] = s;
 
-  function comboScoreStrict(aId, bId) {
-    if (!aId || !bId) return 0;
-
-    const rec = ACTION_COMBO_MATRIX_V2?.[aId]?.[bId] || null;
-    if (!rec) return 0;
-
-    // requires (werd nog niet afgevangen in comboScore)
-    if (Array.isArray(rec.requires)) {
-      for (const c of rec.requires) {
-        // condValue bestaat al in dit bestand
-        if (!condValue(c, ctx)) return 0;
+      if (s > bestScore) {
+        bestScore = s;
+        bestA = a;
+        bestB = b;
+        bestNotes = ACTION_COMBO_MATRIX_V2?.[a]?.[b]?.notes || "";
       }
     }
-
-    return comboScore(aId, bId, ctx);
   }
 
-  let best = { a: null, b: null, score: 0 };
-
-  const bestPartnerScoreByActionId = {};
-  const uniq = [...new Set(ids)];
-
-  for (const a of uniq) {
-    let bestForA = 0;
-
-    for (const b of uniq) {
-      if (a === b && !allowsDuplicatePair(a, b)) continue;
-
-      const s = comboScoreStrict(a, b);
-      if (s > bestForA) bestForA = s;
-
-      if (s > best.score) best = { a, b, score: s };
-    }
-
-    bestPartnerScoreByActionId[a] = bestForA >= minScore ? bestForA : 0;
+  // Als er geen echte synergy is, zet bestPair "uit"
+  if (!Number.isFinite(bestScore) || bestScore <= 0) {
+    bestA = null;
+    bestB = null;
+    bestScore = 0;
+    bestNotes = "";
   }
 
-  if (best.score < minScore) best = { a: null, b: null, score: 0 };
+  const allowsDuplicatePair = (aId, bId, ctx2 = {}) => {
+    const r1 = ACTION_COMBO_MATRIX_V2?.[aId]?.[bId];
+    const r2 = ACTION_COMBO_MATRIX_V2?.[bId]?.[aId];
+    // future-proof: je kunt later per combo `allowDuplicatePair:true` zetten
+    return !!(r1?.allowDuplicatePair || r2?.allowDuplicatePair);
+  };
+
+  // optioneel: minimumscore afdwingen
+  const minScore = Number.isFinite(Number(opts?.minScore)) ? Number(opts.minScore) : null;
+  if (minScore != null && bestScore < minScore) {
+    bestA = null;
+    bestB = null;
+    bestScore = 0;
+    bestNotes = "";
+  }
 
   return {
-    bestPair: best,
+    bestPair: { a: bestA, b: bestB, score: bestScore, notes: bestNotes },
     bestPartnerScoreByActionId,
     allowsDuplicatePair,
   };
 }
-
