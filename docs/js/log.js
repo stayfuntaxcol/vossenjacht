@@ -36,43 +36,45 @@ const db = getFirestore();
 export async function addLog(gameId, entry = {}) {
   if (!gameId) throw new Error("addLog: missing gameId");
 
-  const logCol = collection(db, "games", gameId, "log");
+  // OFF | BUFFER | FIRESTORE
+  const mode = (() => {
+    try {
+      const w = typeof window !== "undefined" ? window : null;
+      return String(w?.__VJ_LOG_MODE__ || "OFF").toUpperCase();
+    } catch {
+      return "OFF";
+    }
+  })();
+
+  if (mode === "OFF") return; // ✅ geen writes, engine blijft werken
 
   const e = entry || {};
   const actorId = e.actorId || e.playerId || null;
 
-  // Minimal sanity: message string
   const message =
     typeof e.message === "string"
       ? e.message
       : (e.message == null ? "" : String(e.message));
 
-  // Zorg dat payload/ details geen functies bevatten (Firestore faalt daarop)
-  const payload =
-    e.payload && typeof e.payload === "object" ? e.payload : null;
-
-  const details =
-    e.details && typeof e.details === "object" ? e.details : (e.details ?? null);
+  const payload = e.payload && typeof e.payload === "object" ? e.payload : null;
+  const details = e.details && typeof e.details === "object" ? e.details : (e.details ?? null);
 
   const docData = {
-    createdAt: serverTimestamp(),
+    createdAt: mode === "FIRESTORE" ? serverTimestamp() : null, // sentinel alleen als we echt schrijven
     clientAt: typeof e.clientAt === "number" ? e.clientAt : Date.now(),
 
     round: Number.isFinite(Number(e.round)) ? Number(e.round) : null,
     phase: e.phase ?? null,
     kind: e.kind ?? "SYSTEM",
 
-    // nieuw (machine-friendly)
     type: e.type ?? null,
     actorId,
     choice: e.choice ?? null,
-    
-    // legacy / UI friendly
+
     playerId: e.playerId ?? null,
     playerName: e.playerName ?? null,
     cardId: e.cardId ?? null,
 
-    // snelle velden (optioneel, maar handig voor filteren)
     move: e.move ?? null,
     decision: e.decision ?? null,
 
@@ -81,6 +83,18 @@ export async function addLog(gameId, entry = {}) {
     details,
   };
 
+  if (mode === "BUFFER") {
+    const w = typeof window !== "undefined" ? window : null;
+    if (!w) return;
+    if (!Array.isArray(w.__VJ_LOG_BUFFER__)) w.__VJ_LOG_BUFFER__ = [];
+    w.__VJ_LOG_BUFFER__.push({ gameId, ...docData });
+    // cap buffer
+    if (w.__VJ_LOG_BUFFER__.length > 500) w.__VJ_LOG_BUFFER__.splice(0, w.__VJ_LOG_BUFFER__.length - 500);
+    return;
+  }
+
+  // FIRESTORE
+  const logCol = collection(db, "games", gameId, "log");
   await addDoc(logCol, docData);
 }
 
