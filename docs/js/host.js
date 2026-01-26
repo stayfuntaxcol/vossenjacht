@@ -22,6 +22,8 @@ import {
   getDocs,
   orderBy,
   limit,
+  startAfter,
+  documentId,
   addDoc,
   serverTimestamp,
   runTransaction, } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
@@ -29,6 +31,21 @@ import {
 const AUTO_FLOW = true;
 const AUTO_PAUSE_MS = 5000; // jouw “adempauze”
 const db = getFirestore();
+
+// ===== DEV EXPORT HOOKS (voor JSON export in console) =====
+try {
+  window.__DB__ = db;
+  window.__FS__ = {
+    collection, getDocs, query, orderBy, limit, startAfter, documentId,
+    doc, getDoc,
+  };
+
+  // (optioneel alias)
+  window.__VJ_DB__ = db;
+  window.__VJ_FS__ = window.__FS__;
+} catch (e) {
+  console.warn("Expose __DB__/__FS__ failed", e);
+}
 
 const params = new URLSearchParams(window.location.search);
 let gameId = params.get("game");
