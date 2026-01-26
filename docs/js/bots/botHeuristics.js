@@ -1110,7 +1110,7 @@ const denySet = new Set([
   out._meta = { core, comboInfo, ctx, cfg, comboThreshold };
 
   return out;
-
+}
 /* ============================================================
    6) Action gate: play vs PASS (bot economy)
 ============================================================ */
