@@ -105,8 +105,10 @@ function normColor(c) {
 }
 
 // Alleen overrides (strategy.js merged dit over BOT_UTILITY_CFG heen)
+// Alleen overrides (strategy.js merged dit over BOT_UTILITY_CFG heen)
+// CANON: geen carry/rooster/panic-cashout bias in config. DASH/BURROW/LURK worden bepaald in strategy.js.
 const DISC_STRATEGY_OVERRIDES = {
-  // D (RED) = Driver (agressief cashen, weinig burrow, tempo drukken)
+  // D (RED) = direct/agressief: vaker kaarten spelen, iets minder sparen
   D: {
     wLoot: 6.2,
     wRisk: 0.95,
@@ -116,33 +118,8 @@ const DISC_STRATEGY_OVERRIDES = {
     wResource: 0.35,
 
     lookaheadN: 4,
-    dashPushScale: 1.05,
-    dashPushThreshold: 8.4,
 
-    // Panic cashout override
-    panicStayRisk: 7.2,
-    panicDashStayRisk: 6.4,
-    panicDashSafeDashRisk: 1.3,
-    panicDashCarryMin: 4,
-    suicideMargin: 0.4,
-
-    // Burrow rules (hard block if already used)
-    burrowMinSafetyGain: 2.8,
-    burrowMaxExtraCost: 0.9,
-    burrowAlreadyUsedPenalty: 999,
-
-    // Rooster handling
-    roosterEarlyDashPenalty: 2.8,
-    roosterEarlyBurrowPenalty: 3.5,
-    roosterEarlyLurkBonus: 1.0,
-    roosterLateDashBonus: 1.3,
-    roosterLateStayPenalty: 1.0,
-
-    dashBeforeBurrowPenalty: 1.0,
-    panicLurkPenalty: 6.0,
-    panicBurrowBonus: 3.0,
-
-    // SHIFT anti-spam
+    // SHIFT
     shiftMinGain: 3.2,
     shiftDangerTrigger: 7.8,
     shiftLookahead: 4,
@@ -150,7 +127,6 @@ const DISC_STRATEGY_OVERRIDES = {
     shiftBenefitMin: 2.0,
     shiftCooldownRounds: 2,
     shiftOverrideBenefit: 3.6,
-    shiftRequireLoot: true,
 
     // OPS card play
     actionDeckSampleN: 28,
@@ -176,14 +152,14 @@ const DISC_STRATEGY_OVERRIDES = {
     opsMinAdvantage: 1.35,
     opsMinAdvantageEarlyBonus: 0.18,
 
-    // Threat-mode OPS (dangerlijk next event / lead-only threat)
+    // Threat-mode OPS
     opsThreatDangerTrigger: 5.2,
     opsThreatPlayBoost: 0.65,
     opsLeadThreatExtraBoost: 0.55,
     opsThreatPlayTaxMult: 0.78,
   },
 
-  // I (YELLOW) = Influencer (loot/tempo, cards & combos, opportunistisch)
+  // I (YELLOW) = opportunistisch: cards/combos, iets meer delen
   I: {
     wLoot: 6.6,
     wRisk: 1.05,
@@ -193,74 +169,48 @@ const DISC_STRATEGY_OVERRIDES = {
     wResource: 0.45,
 
     lookaheadN: 4,
-    dashPushScale: 1.12,
-    dashPushThreshold: 8.1,
 
-    panicStayRisk: 6.8,
-    panicDashStayRisk: 6.2,
-    panicDashSafeDashRisk: 1.4,
-    panicDashCarryMin: 3,
-    suicideMargin: 0.5,
-
-    burrowMinSafetyGain: 2.6,
-    burrowMaxExtraCost: 1.0,
-    burrowAlreadyUsedPenalty: 999,
-
-    roosterEarlyDashPenalty: 3.2,
-    roosterEarlyBurrowPenalty: 3.8,
-    roosterEarlyLurkBonus: 0.8,
-    roosterLateDashBonus: 1.5,
-    roosterLateStayPenalty: 1.2,
-
-    dashBeforeBurrowPenalty: 0.9,
-    panicLurkPenalty: 6.2,
-    panicBurrowBonus: 3.6,
-
-    // SHIFT anti-spam (I: soms, maar gecontroleerd)
-    shiftMinGain: 3.4,
-    shiftDangerTrigger: 7.1,
+    // SHIFT
+    shiftMinGain: 3.0,
+    shiftDangerTrigger: 7.4,
     shiftLookahead: 4,
-    shiftDistancePenalty: 0.24,
-    shiftBenefitMin: 1.55,
-    shiftCooldownRounds: 1,
-    shiftOverrideBenefit: 2.8,
-    shiftRequireLoot: true,
+    shiftDistancePenalty: 0.26,
+    shiftBenefitMin: 1.8,
+    shiftCooldownRounds: 2,
+    shiftOverrideBenefit: 3.2,
 
-    // net iets meer “shuffle durf”
-    kickUpDustOptimism: 0.45,
-
-    // OPS (I speelt cards vaker)
-    actionDeckSampleN: 36,
-    actionReserveMinHand: 1,
-    actionPlayMinGain: 0.68,
-    comboMinGain: 0.82,
+    // OPS card play
+    actionDeckSampleN: 30,
+    actionReserveMinHand: 2,
+    actionPlayMinGain: 0.70,
+    comboMinGain: 0.92,
     allowComboSearch: true,
-    comboMaxPairs: 34,
+    comboMaxPairs: 28,
 
     opsEarlyRounds: 2,
     opsReserveHandEarly: 2,
     opsReserveHandMid: 1,
     opsReserveHandLate: 0,
 
-    opsPlayTaxBase: 0.82,
-    opsPlayTaxEarlyMult: 1.10,
-    opsPlayTaxLateMult: 0.80,
+    opsPlayTaxBase: 0.90,
+    opsPlayTaxEarlyMult: 1.02,
+    opsPlayTaxLateMult: 0.86,
 
-    opsSpendCostBase: 0.48,
-    opsSpendCostEarlyMult: 0.95,
-    opsSpendCostLateMult: 0.78,
+    opsSpendCostBase: 0.52,
+    opsSpendCostEarlyMult: 1.00,
+    opsSpendCostLateMult: 0.84,
 
-    opsMinAdvantage: 1.30,
-    opsMinAdvantageEarlyBonus: 0.25,
+    opsMinAdvantage: 1.32,
+    opsMinAdvantageEarlyBonus: 0.16,
 
     // Threat-mode OPS
-    opsThreatDangerTrigger: 4.8,
-    opsThreatPlayBoost: 0.75,
-    opsLeadThreatExtraBoost: 0.60,
-    opsThreatPlayTaxMult: 0.75,
+    opsThreatDangerTrigger: 5.0,
+    opsThreatPlayBoost: 0.70,
+    opsLeadThreatExtraBoost: 0.50,
+    opsThreatPlayTaxMult: 0.80,
   },
 
-  // S (GREEN) = Stabilizer (veilig, team, cash-out op tijd, weinig risico)
+  // S (GREEN) = veilig/team: iets meer sparen, team & share hoger
   S: {
     wLoot: 5.5,
     wRisk: 1.30,
@@ -270,71 +220,48 @@ const DISC_STRATEGY_OVERRIDES = {
     wResource: 0.55,
 
     lookaheadN: 4,
-    dashPushScale: 0.95,
-    dashPushThreshold: 7.7,
 
-    panicStayRisk: 6.2,
-    panicDashStayRisk: 5.8,
-    panicDashSafeDashRisk: 1.6,
-    panicDashCarryMin: 3,
-    suicideMargin: 0.2,
-
-    burrowMinSafetyGain: 2.3,
-    burrowMaxExtraCost: 1.2,
-    burrowAlreadyUsedPenalty: 999,
-
-    roosterEarlyDashPenalty: 3.8,
-    roosterEarlyBurrowPenalty: 4.6,
-    roosterEarlyLurkBonus: 0.5,
-    roosterLateDashBonus: 1.2,
-    roosterLateStayPenalty: 1.6,
-
-    dashBeforeBurrowPenalty: 1.2,
-    panicLurkPenalty: 6.6,
-    panicBurrowBonus: 4.2,
-
-    // SHIFT anti-spam (S: zelden, cooldown langer)
+    // SHIFT
     shiftMinGain: 3.4,
-    shiftDangerTrigger: 7.3,
+    shiftDangerTrigger: 7.0,
     shiftLookahead: 4,
     shiftDistancePenalty: 0.30,
-    shiftBenefitMin: 1.9,
-    shiftCooldownRounds: 2,
-    shiftOverrideBenefit: 3.1,
-    shiftRequireLoot: true,
+    shiftBenefitMin: 2.2,
+    shiftCooldownRounds: 3,
+    shiftOverrideBenefit: 3.4,
 
-    // OPS (S speelt vooral defensief in threat)
-    actionDeckSampleN: 30,
-    actionReserveMinHand: 2,
+    // OPS card play
+    actionDeckSampleN: 26,
+    actionReserveMinHand: 3,
     actionPlayMinGain: 0.78,
-    comboMinGain: 0.98,
+    comboMinGain: 1.00,
     allowComboSearch: true,
-    comboMaxPairs: 22,
+    comboMaxPairs: 18,
 
-    opsEarlyRounds: 3,
-    opsReserveHandEarly: 2,
+    opsEarlyRounds: 2,
+    opsReserveHandEarly: 3,
     opsReserveHandMid: 2,
     opsReserveHandLate: 1,
 
     opsPlayTaxBase: 0.92,
-    opsPlayTaxEarlyMult: 1.18,
-    opsPlayTaxLateMult: 0.92,
+    opsPlayTaxEarlyMult: 1.05,
+    opsPlayTaxLateMult: 0.90,
 
-    opsSpendCostBase: 0.55,
-    opsSpendCostEarlyMult: 1.10,
-    opsSpendCostLateMult: 0.88,
+    opsSpendCostBase: 0.56,
+    opsSpendCostEarlyMult: 1.02,
+    opsSpendCostLateMult: 0.92,
 
-    opsMinAdvantage: 1.55,
-    opsMinAdvantageEarlyBonus: 0.40,
+    opsMinAdvantage: 1.45,
+    opsMinAdvantageEarlyBonus: 0.22,
 
     // Threat-mode OPS
-    opsThreatDangerTrigger: 4.6,
-    opsThreatPlayBoost: 0.70,
-    opsLeadThreatExtraBoost: 0.65,
-    opsThreatPlayTaxMult: 0.78,
+    opsThreatDangerTrigger: 4.8,
+    opsThreatPlayBoost: 0.75,
+    opsLeadThreatExtraBoost: 0.60,
+    opsThreatPlayTaxMult: 0.82,
   },
 
-  // C (BLUE) = Calculator (analytisch, betere timing, meer lookahead & card-evaluatie)
+  // C (BLUE) = analytisch: iets meer lookahead & resource, strakker ops-filter
   C: {
     wLoot: 5.9,
     wRisk: 1.18,
@@ -344,48 +271,23 @@ const DISC_STRATEGY_OVERRIDES = {
     wResource: 0.85,
 
     lookaheadN: 5,
-    dashPushScale: 1.00,
-    dashPushThreshold: 8.0,
 
-    panicStayRisk: 6.6,
-    panicDashStayRisk: 6.0,
-    panicDashSafeDashRisk: 1.4,
-    panicDashCarryMin: 4,
-    suicideMargin: 0.35,
-
-    burrowMinSafetyGain: 2.4,
-    burrowMaxExtraCost: 1.0,
-    burrowAlreadyUsedPenalty: 999,
-
-    kickUpDustOptimism: 0.40,
-
-    roosterEarlyDashPenalty: 3.5,
-    roosterEarlyBurrowPenalty: 4.2,
-    roosterEarlyLurkBonus: 0.7,
-    roosterLateDashBonus: 1.35,
-    roosterLateStayPenalty: 1.35,
-
-    dashBeforeBurrowPenalty: 1.1,
-    panicLurkPenalty: 6.3,
-    panicBurrowBonus: 3.8,
-
-    // SHIFT anti-spam (C: kan iets vaker maar alleen als het echt loont)
-    shiftMinGain: 3.2,
-    shiftDangerTrigger: 7.2,
+    // SHIFT
+    shiftMinGain: 3.0,
+    shiftDangerTrigger: 7.6,
     shiftLookahead: 5,
-    shiftDistancePenalty: 0.20,
-    shiftBenefitMin: 1.7,
-    shiftCooldownRounds: 1,
-    shiftOverrideBenefit: 3.0,
-    shiftRequireLoot: true,
+    shiftDistancePenalty: 0.26,
+    shiftBenefitMin: 1.9,
+    shiftCooldownRounds: 2,
+    shiftOverrideBenefit: 3.2,
 
-    // OPS (C: beste card evaluator)
-    actionDeckSampleN: 44,
+    // OPS card play
+    actionDeckSampleN: 30,
     actionReserveMinHand: 2,
-    actionPlayMinGain: 0.76,
-    comboMinGain: 0.88,
+    actionPlayMinGain: 0.74,
+    comboMinGain: 0.98,
     allowComboSearch: true,
-    comboMaxPairs: 36,
+    comboMaxPairs: 24,
 
     opsEarlyRounds: 2,
     opsReserveHandEarly: 2,
@@ -393,26 +295,24 @@ const DISC_STRATEGY_OVERRIDES = {
     opsReserveHandLate: 0,
 
     opsPlayTaxBase: 0.90,
-    opsPlayTaxEarlyMult: 1.12,
-    opsPlayTaxLateMult: 0.85,
+    opsPlayTaxEarlyMult: 1.03,
+    opsPlayTaxLateMult: 0.86,
 
-    opsSpendCostBase: 0.52,
-    opsSpendCostEarlyMult: 1.05,
-    opsSpendCostLateMult: 0.82,
+    opsSpendCostBase: 0.54,
+    opsSpendCostEarlyMult: 1.00,
+    opsSpendCostLateMult: 0.86,
 
-    opsMinAdvantage: 1.55,
-    opsMinAdvantageEarlyBonus: 0.45,
-
-    opsComboSetupBonusScale: 0.16,
-    opsComboSetupEarlyMult: 0.65,
+    opsMinAdvantage: 1.38,
+    opsMinAdvantageEarlyBonus: 0.20,
 
     // Threat-mode OPS
-    opsThreatDangerTrigger: 4.9,
-    opsThreatPlayBoost: 0.65,
-    opsLeadThreatExtraBoost: 0.60,
-    opsThreatPlayTaxMult: 0.78,
+    opsThreatDangerTrigger: 5.1,
+    opsThreatPlayBoost: 0.68,
+    opsLeadThreatExtraBoost: 0.55,
+    opsThreatPlayTaxMult: 0.80,
   },
 };
+
 
 function getStrategyCfgForBot(botOrPlayer, game = null) {
   const den = normColor(botOrPlayer?.color || botOrPlayer?.den || botOrPlayer?.denColor);
@@ -428,7 +328,18 @@ function getStrategyCfgForBot(botOrPlayer, game = null) {
       : null;
 
   if (!base && !fromGame) return null;
-  return { ...(base || {}), ...(fromGame || {}) };
+
+  const merged = { ...(base || {}), ...(fromGame || {}) };
+
+  // CANON guard: blokkeer legacy keys die DASH/BURROW/LURK zouden kunnen vervuilen
+  const FORBIDDEN = new Set(["dashPushScale", "dashPushThreshold", "panicStayRisk", "panicDashStayRisk", "panicDashSafeDashRisk", "panicDashCarryMin", "suicideMargin", "burrowMinSafetyGain", "burrowMaxExtraCost", "burrowAlreadyUsedPenalty", "roosterEarlyDashPenalty", "roosterEarlyBurrowPenalty", "roosterEarlyLurkBonus", "roosterLateDashBonus", "roosterLateStayPenalty", "dashBeforeBurrowPenalty", "panicLurkPenalty", "panicBurrowBonus"]);
+  for (const k of Object.keys(merged)) {
+    if (FORBIDDEN.has(k)) delete merged[k];
+    // extra safety: alle keys die met 'panic' of 'rooster' beginnen zijn legacy
+    if (/^(panic|rooster)/i.test(k)) delete merged[k];
+  }
+
+  return merged;
 }
 
 function extractIntelForDenShare({ game, player }) {
@@ -599,9 +510,12 @@ function buildBotMetricsForLog({ game, bot, players, flagsRoundOverride = null, 
       presetKey,
       riskWeight,
       isLead,
-        carryValue,
-      carryValueExact: carryValue,
-      carryValueRec,
+
+      // CANON: danger/caught-risk is not scaled by carry/loot
+      carryValue: 0,
+      carryValueExact: 0,
+      carryValueRec: 0,
+
       ...(extraIntel || {}),
     },
   });
@@ -1033,133 +947,6 @@ function pickHiddenNestDashSet({ game, gameId, players }) {
   return { dashSet, targetTotal, remainingSlots };
 }
 
-function pickDecisionLootMaximizer({ g, p, latestPlayers, gameId }) {
-  const myColor = String(p?.color || "").trim().toUpperCase();
-  const flags = fillFlags(g?.flagsRound);
-  const immune = !!flags.denImmune?.[myColor];
-
-  const nextEvent0 = nextEventId(g, 0);
-  const lootPts = sumLootPoints(p);
-  const roundNum = Number(g?.round || 0);
-
-  // Rooster pressure: after 2 roosters the next one can end the raid.
-  // If you already have loot, prefer to bail out (DASH) instead of risking getting caught.
-  const roosterSeen = Number.isFinite(Number(g?.roosterSeen)) ? Number(g.roosterSeen) : 0;
-const isLead = (() => {
-    const ordered = [...(latestPlayers || [])].sort(
-      (a, b) => (a.joinOrder ?? 9999) - (b.joinOrder ?? 9999)
-    );
-    const idx = Number.isFinite(g?.leadIndex) ? g.leadIndex : 0;
-    return ordered[idx]?.id === p.id;
-  })();
-
-  const avgLoot = avgLootValueFromDeck(g?.lootDeck);
-  const roundsLeft = estimateRoundsLeft(g);
-  const futureGain = roundsLeft * avgLoot;
-
-  const sackShareIfDash = expectedSackShareNow({ game: g, players: latestPlayers || [] });
-  const caughtLoss = lootPts;
-
- const burrowUsedCoalesced = !!(p?.burrowUsedThisRaid ?? p?.burrowUsed);
-
- let options = ["LURK", "DASH", "BURROW"].filter(
-  (d) => d !== "BURROW" || !burrowUsedCoalesced
-);
-// Anti-herding coordination for congestion events
-  if (String(nextEvent0) === "HIDDEN_NEST") {
-    const picked = pickHiddenNestDashSet({ game: g, gameId, players: latestPlayers || [] });
-    const dashSet = picked?.dashSet || null;
-
-    // If you are not selected for one of the limited DASH slots, remove DASH from options.
-    if (dashSet && !dashSet.has(p.id)) {
-      options = options.filter((d) => d !== "DASH");
-    }
-  }
-
-  const scored = options.map((decision) => {
-    const surviveP = survivalProbNextEvent({
-      eventId: nextEvent0,
-      decision,
-      myColor,
-      immune,
-      isLead,
-      lootPts,
-    });
-
-    const alarmPenalty = silentAlarmPenalty({ eventId: nextEvent0, decision, isLead, lootPts });
-
-    const dashOpportunityCost = decision === "DASH" ? futureGain * 0.95 : 0;
-
-    const burrowReservePenalty = decision === "BURROW" ? (roundNum <= 1 ? 1.2 : 0.6) : 0;
-
-    const baseNow = lootPts;
-
-    let ev = 0;
-
-    if (decision === "DASH") {
-      ev = baseNow + sackShareIfDash - dashOpportunityCost;
-    } else {
-      ev =
-        baseNow +
-        surviveP * futureGain -
-        (1 - surviveP) * caughtLoss -
-        alarmPenalty -
-        burrowReservePenalty;
-    }
-
-    // -------------------------
-    // HIDDEN_NEST exploit: bonus loot bij weinig dashers (later in track = interessanter)
-    // -------------------------
-    if (String(nextEvent0) === "HIDDEN_NEST") {
-      // hoeveel spelers hebben al DASH gekozen deze DECISION-fase?
-      const alreadyDash = (latestPlayers || []).filter((x) => isInYard(x) && x?.decision === "DASH").length;
-
-      const totalDashers = alreadyDash + (decision === "DASH" ? 1 : 0);
-
-      // bonus kaarten per speler op basis van totaal dashers
-      let bonusCards = 0;
-      if (decision === "DASH") {
-        if (totalDashers <= 1) bonusCards = 3;
-        else if (totalDashers === 2) bonusCards = 2;
-        else if (totalDashers === 3) bonusCards = 1;
-        else bonusCards = 0; // 4+ => niets
-      }
-
-      // later in track => bonus waardevoller
-      const track = Array.isArray(g?.eventTrack) ? g.eventTrack : [];
-      const idx = Number.isFinite(g?.eventIndex) ? g.eventIndex : 0;
-      const denom = Math.max(1, track.length - 1);
-      const prog = Math.max(0, Math.min(1, idx / denom));     // 0..1
-      const lateBoost = 0.75 + prog * 0.75;                   // 0.75..1.5
-
-      // bonus in punten ≈ bonusCards * avgLootValue
-      ev += bonusCards * avgLoot * lateBoost;
-
-      // anti-crowding: 4e dasher is meestal dom -> harde straf
-      if (decision === "DASH" && totalDashers >= 4) ev -= 6;
-    }
-
-    // extra: dash met 0 loot is normaal onaantrekkelijk,
-    // maar bij HIDDEN_NEST kan dash juist loot opleveren → geen straf daar
-    if (String(nextEvent0) !== "HIDDEN_NEST" && lootPts <= 0 && decision === "DASH") ev -= 5;
-
-    // Rooster risk bias (late raid)
-    if (roosterSeen >= 2 && lootPts > 0) {
-      if (decision === "DASH") ev += 6;
-      else ev -= 8;
-    } else if (roosterSeen === 1 && lootPts >= 3) {
-      if (decision === "DASH") ev += 2;
-      else ev -= 3;
-    }
-
-
-    return { decision, ev, surviveP };
-  });
-
-  scored.sort((a, b) => b.ev - a.ev);
-  return scored[0]?.decision || "LURK";
-}
-
 function nextEventId(game, offset = 0) {
   const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
   const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : 0;
@@ -1205,20 +992,7 @@ function getNextEventId(game) {
   return game.currentEventId || null;
 }
 
-function pickSafestDecisionForUpcomingEvent(game) {
-  const nextId = getNextEventId(game);
-  const f = nextId ? getEventFacts(nextId) : null;
-  if (!f) return "LURK"; // fallback
 
-  // laagste danger wint; tie-break: BURROW > DASH > LURK (veiliger feel)
-  const options = [
-    { k: "BURROW", d: f.dangerBurrow ?? 0 },
-    { k: "DASH",   d: f.dangerDash ?? 0 },
-    { k: "LURK",   d: f.dangerLurk ?? 0 },
-  ].sort((a, b) => a.d - b.d);
-
-  return options[0].k;
-}
 function toActionId(nameOrId) {
   const n = String(nameOrId || "").trim();
   if (!n) return null;
@@ -3000,8 +2774,10 @@ const useStrategy = !noPeek || hasKnown;
         : countRevealedRoosters(g),
       postRooster2Window: countRevealedRoosters(g) >= 2,
 
-      carryValue: metricsNow?.carryValue,
-      carryValueRec: metricsNow?.carryValueRec,
+      carryValue: 0, // CANON: nooit cashout op carry
+
+      carryValueRec: 0,
+
       dangerVec: metricsNow?.dangerVec,
       dangerPeak: metricsNow?.dangerPeak,
       dangerStay: metricsNow?.dangerStay,
@@ -3017,29 +2793,18 @@ const useStrategy = !noPeek || hasKnown;
   decision = rec?.decision || "LURK";
 }
 
-// ✅ Runner-level panic cashout override (works even if strategy is disabled/noPeek)
-// If staying is risky, DASH is extremely safe, and we're carrying meaningful loot -> force DASH.
-try {
-  const stay = Number(metricsNow?.dangerEffective ?? NaN);
-  const dv = metricsNow?.dangerVec || null;
-  const dash = Number(dv?.dash ?? dv?.DASH ?? dv?.dashDanger ?? NaN);
-  const carry = Number(metricsNow?.carryValue ?? 0);
+// (CANON) geen runner-level carry/panic cashout overrides
+if (decision === "BURROW" && burrowUsed) {
+  // CANON: BURROW kan niet meer. Als blijven onveilig is -> DASH (definitieve exit), anders LURK.
+  const dStay = Number(metricsNow?.dangerStay ?? metricsNow?.dangerEffective ?? 0);
+  decision = (Number.isFinite(dStay) && dStay <= 3.0) ? "LURK" : "DASH";
+}
 
-  if (Number.isFinite(stay) && Number.isFinite(dash)) {
-    const stayThresh = 5.0;
-    const safeDash = 1.2;
-    const carryMin = 4;
-    if (carry >= carryMin && stay >= stayThresh && dash <= safeDash) {
-      decision = "DASH";
-    }
-  }
-} catch (e) {}
-
-if (decision === "BURROW" && burrowUsed) decision = "LURK";
-
-const nextEvent0 = nextEventId(g, 0);
-
-    // ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
+// Next event id only when allowed (noPeek=false OR bot has known intel)
+const nextEvent0 = (!noPeek)
+  ? nextEventId(g, 0)
+  : (hasKnown ? String(known[0] || "") : null);
+// ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
       const picked = pickHiddenNestDashSet({ game: g, gameId, players: playersForDecision || [] });
       const dashSet = picked?.dashSet || null;
@@ -3055,8 +2820,13 @@ const nextEvent0 = nextEventId(g, 0);
       }
     }
 
+    const dashPushNext = Number.isFinite(Number(dec?.meta?.dashPushNext))
+      ? Number(dec.meta.dashPushNext)
+      : (Number.isFinite(Number(p?.dashPush)) ? Number(p.dashPush) : 0);
+
     const update = {
       decision,
+      ...(Number.isFinite(Number(dashPushNext)) ? { dashPush: dashPushNext } : {}),
       ...(decision === "BURROW" && !burrowUsed ? { burrowUsedThisRaid: true, burrowUsed: true } : {}),
     };
 
