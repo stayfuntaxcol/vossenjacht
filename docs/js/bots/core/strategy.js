@@ -294,15 +294,17 @@ function eventDangerForChoice({ eventId, choice, game, me, players, flagsRound }
     if (ch === "DASH") return 0;
     return 0;
   }
-// Fence Patrol: GREEN burrow gets caught
+  
+  // CANON (jouw regel): BURROW is altijd veilig (geen dangerVec), behalve Rooster #3
+  // (Rooster #3 wordt hierboven al hard-afgevangen met return 10)
+  if (ch === "BURROW") return 0;
+
+  // Fence Patrol: alleen LURK tweaken; BURROW blijft safe
   if (eid === "FENCE_PATROL") {
-    if (ch === "BURROW" && den === "GREEN") return 10;
-    if (ch === "BURROW") return Math.max(dBurrow, 7);
     if (ch === "LURK") return Math.min(dLurk, 2);
   }
 
   if (ch === "DASH") return dDash;
-  if (ch === "BURROW") return dBurrow;
   return dLurk;
 }
 
