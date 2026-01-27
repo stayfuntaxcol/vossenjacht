@@ -1166,7 +1166,10 @@ export function recommendDecision(opts = {}) {
       : getNextEventFactsFromOpts(opts);
 
   const lurkRisk = Number.isFinite(dLurk) ? dLurk : Number(nextEventFacts?.dangerLurk ?? 0);
-  const burrowRisk = Number.isFinite(dBurrow) ? dBurrow : Number(nextEventFacts?.dangerBurrow ?? 0);
+
+   // CANON (jouw regel): BURROW is altijd veilig -> geen burrow dangerVec
+  const burrowRisk = 0;
+
   const dashRisk = Number.isFinite(dDash) ? dDash : Number(nextEventFacts?.dangerDash ?? 0);
 
   // BURROW availability (one-time per RAID)
@@ -1271,8 +1274,8 @@ export function recommendDecision(opts = {}) {
     carryValue,     // informational only
     cashoutBias: null, // removed (was non-canon)
 
-    // risk telemetry
-    dangerStay: Number.isFinite(Number(ctx?.dangerStay)) ? Number(ctx.dangerStay) : Math.min(lurkRisk, canBurrow ? burrowRisk : lurkRisk),
+       // CANON: dangerStay is puur "stay met LURK" (BURROW is een noodrem, niet een stay-risk)
+    dangerStay: Number.isFinite(Number(ctx?.dangerStay)) ? Number(ctx.dangerStay) : lurkRisk,
     dangerEffective: Number.isFinite(Number(ctx?.dangerEffective)) ? Number(ctx.dangerEffective) : lurkRisk,
     dangerVec: { dash: dashRisk, lurk: lurkRisk, burrow: burrowRisk },
 
