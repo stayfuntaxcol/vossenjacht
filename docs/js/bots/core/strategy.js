@@ -415,15 +415,11 @@ function canonDenSignalRelevant({ game, me, flags, nextId }) {
   return eid.startsWith("DEN_") || eid === "DOG_CHARGE" || eid === "SECOND_CHARGE";
 }
 
-function canonIsRooster3({ game, nextId, nextFacts }) {
+function canonIsRooster3({ game, nextId /*, nextFacts*/ }) {
   const eid = String(nextId || "");
   if (eid !== "ROOSTER_CROW") return false;
 
-  // Prefer explicit tag if rulesIndex provides it
-  const tags = new Set(safeArr(nextFacts?.tags || nextFacts?.rules?.tags || nextFacts?.meta?.tags));
-  if (tags.has("raid_end_trigger")) return true;
-
-  // Fallback: public rooster counter
+  // 3e Rooster Crow = als er al 2 Rooster Crows onthuld zijn in deze raid
   const seen = countRevealedRoosters(game);
   return seen >= 2;
 }
