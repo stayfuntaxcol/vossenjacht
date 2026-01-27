@@ -2820,6 +2820,25 @@ if (decision === "BURROW" && burrowUsed) {
 const nextEvent0 = (!noPeek)
   ? nextEventId(g, 0)
   : (hasKnown ? String(known[0] || "") : null);
+
+  // ===== HARD RULE: eigen DEN_* (zonder Den Signal) => LURK is lethal (caught)
+// Alleen veilig: DASH of BURROW. Als BURROW al op is -> force DASH.
+// (En als bot al DASH kiest voor carry/Hidden Nest, laten we dat staan.)
+try {
+  const ne = String(nextEvent0 || "");
+  if (ne.startsWith("DEN_")) {
+    const evDen = ne.slice(4).toUpperCase();
+    const myDen = String(denColor || "").toUpperCase();
+
+    const denImmune = (flags && typeof flags === "object" ? flags.denImmune : null) || null;
+    const immuneToDen = !!(denImmune && evDen && (denImmune[evDen] || denImmune[String(evDen).toLowerCase()]));
+
+    if (myDen && evDen && myDen === evDen && !immuneToDen) {
+      if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
+    }
+  }
+} catch (e) {}
+
 // ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
       const picked = pickHiddenNestDashSet({ game: g, gameId, players: playersForDecision || [] });
