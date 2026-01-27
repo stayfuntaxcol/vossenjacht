@@ -2286,7 +2286,7 @@ initAuth(async (authUser) => {
           lockEvents: false,
           scatter: false,
           denImmune: {},
-          noPeek: [],
+          noPeek: false,
           predictions: [],
           opsLocked: false,
           followTail: {},
