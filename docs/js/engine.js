@@ -449,7 +449,7 @@ export async function resolveAfterReveal(gameId) {
     lockEvents: false,
     scatter: false,
     denImmune: {},
-    noPeek: [],
+    noPeek:false,
     predictions: [],
     opsLocked: false,
     followTail: {},
