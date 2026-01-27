@@ -100,7 +100,7 @@ export const EVENT_DEFS = {
     imageBack: CARD_BACK,
     category: "ROOSTER",
     crowIncrement: 1,
-    tags: ["crow_tick", "raid_end_trigger", "ROOSTER_TICK"],
+    tags: ["crow_tick", "ROOSTER_TICK"],
   },
 
   // ---- Variabel / Special ----
