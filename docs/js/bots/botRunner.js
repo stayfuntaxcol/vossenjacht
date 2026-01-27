@@ -520,6 +520,22 @@ function buildBotMetricsForLog({ game, bot, players, flagsRoundOverride = null, 
     },
   });
 
+   const dvIn = (danger?.dangerVec && typeof danger.dangerVec === "object") ? danger.dangerVec : null;
+
+  // CANON: BURROW heeft geen dangerVec (altijd veilig)
+  const dv = dvIn ? { ...dvIn, burrow: 0, BURROW: 0, dangerBurrow: 0, burrowRisk: 0 } : null;
+
+  const lurkRisk = Number(dv?.lurk ?? dv?.LURK ?? NaN);
+  const dashRisk = Number(dv?.dash ?? dv?.DASH ?? NaN);
+
+  const dangerStayFix = Number.isFinite(lurkRisk) ? lurkRisk : (danger?.dangerStay ?? 0);
+  const dangerEffectiveFix = Number.isFinite(lurkRisk) ? lurkRisk : (danger?.dangerEffective ?? 0);
+
+  const dangerPeakFix =
+    (Number.isFinite(dashRisk) || Number.isFinite(lurkRisk))
+      ? Math.max(Number.isFinite(dashRisk) ? dashRisk : 0, Number.isFinite(lurkRisk) ? lurkRisk : 0)
+      : (danger?.dangerPeak ?? 0);
+
   return {
     carryValue,
     carryValueRec,
@@ -527,16 +543,17 @@ function buildBotMetricsForLog({ game, bot, players, flagsRoundOverride = null, 
     lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
     lootSample: Array.isArray(bot?.loot) ? bot.loot.slice(0, 3) : [],
     dangerScore: danger?.dangerScore ?? 0,
-    dangerVec: danger?.dangerVec ?? null,
-    dangerPeak: danger?.dangerPeak ?? 0,
-    dangerStay: danger?.dangerStay ?? 0,
-    dangerEffective: danger?.dangerEffective ?? 0,
+    dangerVec: dv,
+    dangerPeak: dangerPeakFix,
+    dangerStay: dangerStayFix,
+    dangerEffective: dangerEffectiveFix,
     nextEventIdUsed: danger?.nextEventIdUsed ?? null,
     pDanger: danger?.pDanger ?? 0,
     confidence: danger?.confidence ?? 0,
     intel: danger?.intel ?? null,
     debug: danger?.debug ?? null,
   };
+
 }
 
 
@@ -2809,14 +2826,10 @@ const nextEvent0 = (!noPeek)
       const dashSet = picked?.dashSet || null;
 
       if (dashSet && !dashSet.has(p.id)) {
-        // fall back to safest stay
-        const dv = (rec?.dangerVec || metricsNow?.dangerVec || {});
-        const dBurrow = Number(dv?.burrow ?? dv?.BURROW ?? 0);
-        const dLurk = Number(dv?.lurk ?? dv?.LURK ?? 0);
-
-        if (!burrowUsed && dBurrow <= dLurk) decision = "BURROW";
-        else decision = "LURK";
+      // CANON (jouw regel): Hidden Nest / winst-DASH mag nooit BURROW triggeren.
+        decision = "LURK";
       }
+
     }
 
     const dashPushNext = Number.isFinite(Number(dec?.meta?.dashPushNext))
