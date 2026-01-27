@@ -419,8 +419,12 @@ function canonIsRooster3({ game, nextId /*, nextFacts*/ }) {
   const eid = String(nextId || "");
   if (eid !== "ROOSTER_CROW") return false;
 
-  // 3e Rooster Crow = als er al 2 Rooster Crows onthuld zijn in deze raid
-  const seen = countRevealedRoosters(game);
+  // Alleen 3e rooster is raid-einde
+  // Prefer game.roosterSeen als die betrouwbaar is; anders fallback tellen via revealed track.
+  const seen =
+    Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen)
+    : countRevealedRoosters(game);
+
   return seen >= 2;
 }
 
