@@ -419,13 +419,12 @@ function canonIsRooster3({ game, nextId /*, nextFacts*/ }) {
   const eid = String(nextId || "");
   if (eid !== "ROOSTER_CROW") return false;
 
-  // Alleen 3e rooster is raid-einde
-  // Prefer game.roosterSeen als die betrouwbaar is; anders fallback tellen via revealed track.
+  // Prefer roosterSeen; fallback revealed-count
   const seen =
     Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen)
     : countRevealedRoosters(game);
 
-  return seen >= 2;
+  return seen >= 2; // 3e rooster
 }
 
 function canonDashPushThreshold(c, dashers) {
