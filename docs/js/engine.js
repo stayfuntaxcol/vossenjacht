@@ -659,7 +659,7 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
         continue;
       }
 
-   if (p.decision === "BURROW") {
+ if (p.decision === "BURROW") {
   const pRef = doc(db, "games", gameId, "players", p.id);
   const already = !!p.burrowUsedThisRaid;
 
@@ -671,7 +671,7 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
       playerId: p.id,
       message: `${p.name || "Vos"} probeert opnieuw te burrowen, maar dat mag maar 1× per raid.`,
     });
-    // geen continue -> laat normale afhandeling doorgaan (dus kan gepakt worden)
+    // geen continue → normale afhandeling (kan gepakt worden)
   } else {
     await updateDoc(pRef, { burrowUsedThisRaid: true });
     p.burrowUsedThisRaid = true;
@@ -681,7 +681,7 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
       phase: "REVEAL",
       kind: "EVENT",
       playerId: p.id,
-      message: `${p.name || "Vos"} zit veilig in zijn hol (BURROW) en ontwijkt de tweede charge.`,
+      message: `${p.name || "Vos"} duikt onder en ontwijkt de tweede charge (BURROW).`,
     });
 
     continue;
