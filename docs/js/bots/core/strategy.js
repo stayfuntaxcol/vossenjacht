@@ -9,7 +9,7 @@ import { comboScore } from "../actionComboMatrix.js";
 /** =========================
  *  TUNING (edit here)
  *  ========================= */
-export const BOT_UTILITY_CFG = {
+window.BOT_UTILITY_CFG = {
   // utility = gainLoot + denyOpponents + teamSynergy − riskPenalty − resourcePenalty
   wLoot: 6.0,
   wDeny: 0.8,
@@ -244,7 +244,7 @@ function hasActionIdInHand(hand, actionId) {
 /** =========================
  *  Peek intel (N=3..5)
  *  ========================= */
-export function getPeekIntel({ game, me, flagsRound = null, lookaheadN = null }) {
+window.getPeekIntel = function getPeekIntel({ game, me, flagsRound = null, lookaheadN = null }) {
   const n = Number.isFinite(Number(lookaheadN)) ? Number(lookaheadN) : DEFAULTS.lookaheadN;
   const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
 
@@ -464,7 +464,7 @@ function canonUpdateDashPush({ cfg, dashPushNow, safeNow, dangerStay, endPressur
 /** =========================
  *  DECISION (CANON)
  *  ========================= */
-export function evaluateDecision({ game, me, players, flagsRound = null, cfg = null, peekIntel = null }) {
+window.evaluateDecision = function evaluateDecision({ game, me, players, flagsRound = null, cfg = null, peekIntel = null }) {
   const cfg0 = { ...DEFAULTS, ...(cfg || {}) };
   const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
   const intel = peekIntel || getPeekIntel({ game, me, flagsRound: flags, lookaheadN: cfg0.lookaheadN });
@@ -669,7 +669,7 @@ function avgActionDeckValue(game, ctx, cfg) {
   return used ? s / used : 0.8;
 }
 
-export function evaluateMoveOptions({ game, me, players, flagsRound = null, cfg = null }) {
+window.evaluateMoveOptions = function evaluateMoveOptions({ game, me, players, flagsRound = null, cfg = null }) {
   const c = { ...DEFAULTS, ...(cfg || {}) };
   const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
   const intel = getPeekIntel({ game, me, flagsRound: flags, lookaheadN: c.lookaheadN });
@@ -1255,7 +1255,7 @@ if (facts?.engineImplemented === false && !RUNNER_IMPLEMENTED.has(actionId)) {
 
 return { play, utility, baseU };
 
-export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg = null }) {
+window.evaluateOpsActions = function evaluateOpsActions({ game, me, players, flagsRound = null, cfg = null }) {
   const c = { ...DEFAULTS, ...(cfg || {}) };
   const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
 
@@ -1538,7 +1538,7 @@ if (hand.length <= Number(c.actionReserveMinHand || 1)) {
  *  Convenience
  *  ========================= */
     
-export function evaluatePhase({ phase, game, me, players, flagsRound = null, cfg = null }) {
+window.evaluatePhase = function evaluatePhase({ phase, game, me, players, flagsRound = null, cfg = null }) {
   const p = String(phase || "").toUpperCase();
   if (p === "MOVE") return evaluateMoveOptions({ game, me, players, flagsRound, cfg });
   if (p === "OPS" || p === "ACTIONS") return evaluateOpsActions({ game, me, players, flagsRound, cfg });
