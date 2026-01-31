@@ -1175,6 +1175,10 @@ function scoreOpsPlay({ play, game, me, players, flagsRound, cfg }) {
 
       denyDelta += (bU - aU); // enemy utility down => positive deny
     }
+    
+if (facts?.engineImplemented === false && !RUNNER_IMPLEMENTED.has(actionId)) {
+  console.log("[OPS] unimplemented penalty:", actionId, facts);
+}
 
     // implementation multiplier
     let implMult = 1;
