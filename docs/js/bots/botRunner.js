@@ -54,28 +54,28 @@ const DISC_UTILITY_OVERRIDES = {
     wRisk: 1.00,
     wDeny: 0.95,
     opsPlayTaxBase: 0.80,
-    opsMinAdvantage: 0.90,
+    opsMinAdvantage: 1.05,
     opsReserveHandEarly: 2,
     opsSpendCostBase: 0.38,
   },
   I: { // YELLOW: iets speelser, iets vaker control/tempo
     wRisk: 1.10,
     opsPlayTaxBase: 0.82,
-    opsMinAdvantage: 0.95,
+    opsMinAdvantage: 1.08,
     opsReserveHandEarly: 3,
     kickUpDustOptimism: 0.60,
   },
   S: { // GREEN: defensiever, iets meer sparen
     wRisk: 1.25,
     opsPlayTaxBase: 0.90,
-    opsMinAdvantage: 1.05,
+    opsMinAdvantage: 1.15,
     opsReserveHandEarly: 3,
     opsReserveHandMid: 2,
   },
   C: { // BLUE: analytisch, minst random, iets hogere drempel
     wRisk: 1.30,
     opsPlayTaxBase: 0.92,
-    opsMinAdvantage: 1.10,
+    opsMinAdvantage: 1.12,
     kickUpDustOptimism: 0.48,
     opsHighComboScore: 11,
   },
@@ -150,7 +150,7 @@ const DISC_STRATEGY_OVERRIDES = {
     opsSpendCostLateMult: 0.82,
 
     opsMinAdvantage: 1.35,
-    opsMinAdvantageEarlyBonus: 0.18,
+    opsMinAdvantageEarlyBonus: 0.12,
 
     // Threat-mode OPS
     opsThreatDangerTrigger: 5.2,
@@ -201,7 +201,7 @@ const DISC_STRATEGY_OVERRIDES = {
     opsSpendCostLateMult: 0.84,
 
     opsMinAdvantage: 1.32,
-    opsMinAdvantageEarlyBonus: 0.16,
+    opsMinAdvantageEarlyBonus: 0.12,
 
     // Threat-mode OPS
     opsThreatDangerTrigger: 5.0,
@@ -252,7 +252,7 @@ const DISC_STRATEGY_OVERRIDES = {
     opsSpendCostLateMult: 0.92,
 
     opsMinAdvantage: 1.45,
-    opsMinAdvantageEarlyBonus: 0.22,
+    opsMinAdvantageEarlyBonus: 0.14,
 
     // Threat-mode OPS
     opsThreatDangerTrigger: 4.8,
@@ -303,7 +303,7 @@ const DISC_STRATEGY_OVERRIDES = {
     opsSpendCostLateMult: 0.86,
 
     opsMinAdvantage: 1.38,
-    opsMinAdvantageEarlyBonus: 0.20,
+    opsMinAdvantageEarlyBonus: 0.12,
 
     // Threat-mode OPS
     opsThreatDangerTrigger: 5.1,
