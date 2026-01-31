@@ -191,15 +191,22 @@ function computeIsLead(game, me, players) {
   const meName = String(me?.name || "");
   if (leadFoxName && meName && leadFoxName === meName) return true;
 
-  const idx = Number.isFinite(Number(game?.leadIndex)) ? Number(game.leadIndex) : null;
-  if (idx === null) return false;
+  const idxRaw = Number.isFinite(Number(game?.leadIndex)) ? Number(game.leadIndex) : null;
+  if (idxRaw === null) return false;
 
-  const ordered = safeArr(players).slice().sort((a, b) => {
+  const orderedAll = safeArr(players).slice().sort((a, b) => {
     const ao = typeof a?.joinOrder === "number" ? a.joinOrder : 9999;
     const bo = typeof b?.joinOrder === "number" ? b.joinOrder : 9999;
     return ao - bo;
   });
-  return String(ordered[idx]?.id || "") === meId;
+
+  // match engine/host: leadIndex is op actieve yard spelers
+  const orderedActive = orderedAll.filter(isInYard);
+  const base = orderedActive.length ? orderedActive : orderedAll;
+  if (!base.length) return false;
+
+  const idx = ((idxRaw % base.length) + base.length) % base.length;
+  return String(base[idx]?.id || "") === meId;
 }
 
 /** flags: keep compatible with your fillFlags strict boolean noPeek,
