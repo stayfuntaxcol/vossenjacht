@@ -1183,13 +1183,23 @@ function scoreOpsPlay({ play, game, me, players, flagsRound, cfg }) {
       denyDelta += (bU - aU); // enemy utility down => positive deny
     }
     
-if (facts?.engineImplemented === false && !RUNNER_IMPLEMENTED.has(actionId)) {
+// implementation multiplier (fix TDZ: facts eerst definiëren)
+const facts = getActionFacts(actionId);
+
+if (
+  facts?.engineImplemented === false &&
+  !RUNNER_IMPLEMENTED.has(actionId) &&
+  (typeof window !== "undefined") &&
+  window.__BOTS_DEBUG__
+) {
   console.log("[OPS] unimplemented penalty:", actionId, facts);
 }
 
-    // implementation multiplier
-    let implMult = 1;
-    const facts = getActionFacts(actionId);
+let implMult = 1;
+if (facts?.engineImplemented === false && !RUNNER_IMPLEMENTED.has(actionId)) {
+  implMult = c.actionUnimplementedMult;
+}
+
     if (facts?.engineImplemented === false && !RUNNER_IMPLEMENTED.has(actionId)) implMult = c.actionUnimplementedMult;
 
     let u = implMult * ((afterU - baseU) + c.wTeam * teamDelta + c.wDeny * denyDelta);
