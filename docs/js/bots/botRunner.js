@@ -2739,32 +2739,31 @@ const playersForDecision = base.length
     const dashDecisionsSoFar = countDashDecisions(playersForDecision);
     const isLead = computeIsLeadForPlayer(g, p, playersForDecision);
 
- // ✅ CANON: alleen burrowUsedThisRaid
-const burrowUsed = (p?.burrowUsedThisRaid === true);
+// ✅ CANON: alleen burrowUsedThisRaid (1 bron van waarheid)
+const burrowUsedThisRaid = (p?.burrowUsedThisRaid === true);
+const burrowUsed = burrowUsedThisRaid; // alias voor bestaande code
 
 // ✅ strategy + heuristics verwachten me.burrowUsed (alias); ook burrowUsedThisRaid consistent maken
 const meForDecision = {
   ...p,
   burrowUsed,
-  burrowUsedThisRaid: burrowUsed,
+  burrowUsedThisRaid,
 };
 
-    // ✅ metrics altijd berekenen (voor logs + fallback)
-    const metricsNow = buildBotMetricsForLog({
-      game: g,
-      bot: meForDecision,
-      players: playersForDecision || [],
-      flagsRoundOverride: flags,
-    });
+// ✅ metrics altijd berekenen (voor logs + fallback)
+const metricsNow = buildBotMetricsForLog({
+  game: g,
+  bot: meForDecision,
+  players: playersForDecision || [],
+  flagsRoundOverride: flags,
+});
 
-    // ---- HYBRID DECISION ----
-    // peek/known -> strategy (dashPush werkt)
-    // noPeek zonder intel -> recommendDecision fallback
-    let decision = "LURK";
-    let rec = null;
-    let dec = null;
+// ---- HYBRID DECISION ----
+let decision = "LURK";
+let rec = null;
+let dec = null;
 
-  // simpele intel-check (optioneel): als bot knownUpcomingEvents heeft, strategy mag ook in noPeek
+// simpele intel-check (optioneel): als bot knownUpcomingEvents heeft, strategy mag ook in noPeek
 const known = Array.isArray(meForDecision?.knownUpcomingEvents)
   ? meForDecision.knownUpcomingEvents.filter(Boolean)
   : [];
@@ -2772,23 +2771,23 @@ const hasKnown = known.length > 0;
 
 const useStrategy = !noPeek || hasKnown;
 
-    // ✅ noPeek + eigen intel: geef strategy expliciet de knownUpcomingEvents mee
-    const peekIntel = (noPeek && hasKnown)
-      ? { events: known.map((x) => String(x)) }
-      : null;
+// ✅ noPeek + eigen intel: geef strategy expliciet de knownUpcomingEvents mee
+const peekIntel = (noPeek && hasKnown)
+  ? { events: known.map((x) => String(x)) }
+  : null;
 
-    if (useStrategy) {
-      dec = evaluateDecision({
-        game: g,
-        me: meForDecision,
-        players: playersForDecision || [],
-        flagsRound: flags, // ✅ gebruik filled flags (incl. denImmune/noPeek/etc)
-        cfg: getStrategyCfgForBot(meForDecision, g), // behoud: per-bot DISC overrides (+ optioneel game.botDiscProfiles)
-        peekIntel, // ✅ zorgt dat strategy ook werkt in noPeek als bot intel heeft
-      });
+if (useStrategy) {
+  dec = evaluateDecision({
+    game: g,
+    me: meForDecision,
+    players: playersForDecision || [],
+    flagsRound: flags,
+    cfg: getStrategyCfgForBot(meForDecision, g),
+    peekIntel,
+  });
 
-      decision = dec?.decision || "LURK";
-    } else {
+  decision = dec?.decision || "LURK";
+} else {
   rec = recommendDecision({
     presetKey,
     denColor,
@@ -2804,8 +2803,7 @@ const useStrategy = !noPeek || hasKnown;
         : countRevealedRoosters(g),
       postRooster2Window: countRevealedRoosters(g) >= 2,
 
-      carryValue: 0, // CANON: nooit cashout op carry
-
+      carryValue: 0,
       carryValueRec: 0,
 
       dangerVec: metricsNow?.dangerVec,
@@ -2828,12 +2826,14 @@ const nextEvent0 = (!noPeek)
   ? nextEventId(g, 0)
   : (hasKnown ? String(known[0] || "") : null);
 
-// BURROW “blokkeer” je in de keuze-logica (strategy / UI), niet hier in botRunner.
-const burrowAttemptWhileUsed =
-  (decision === "BURROW") && !!burrowUsedThisRaid; // of: !!burrowUsed (als je nog die alias gebruikt)
-// (optioneel) je kunt burrowAttemptWhileUsed later in logPayload zetten als debug.
+// (optioneel) debug vlag als bot BURROW wil maar al gebruikt is
+const burrowAttemptWhileUsed = (decision === "BURROW") && burrowUsedThisRaid;
 
-  // Als we het volgende event mogen weten: pak echte facts i.p.v. probabilistisch
+// Alleen als bot op LURK uitkomt: check of LURK (stay) veilig is op basis van nextEvent.
+// Onbekend => liever DASH dan dood.
+if (decision === "LURK") {
+  let dStay = Number.NaN;
+
   if (nextEvent0) {
     try {
       const f = getEventFacts(String(nextEvent0 || ""), {
@@ -2848,228 +2848,69 @@ const burrowAttemptWhileUsed =
     } catch (e) {}
   }
 
-  // Als het nog steeds onbekend is: liever te veilig dan dood
   if (!Number.isFinite(dStay)) dStay = 10;
-
-  decision = (dStay <= 3.0) ? "LURK" : "DASH";
+  if (dStay > 3.0) decision = "DASH";
 }
-/** ===== smarter DECISION (JAZZ) ===== */
-async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
-  const gRef = doc(db, "games", gameId);
-  const pRef = doc(db, "games", gameId, "players", botId);
 
-  let logPayload = null;
+  // ===== HARD RULE: eigen DEN_* (zonder Den Signal) => LURK is lethal (caught)
+// Alleen veilig: DASH of BURROW. Als BURROW al op is -> force DASH.
+// (En als bot al DASH kiest voor carry/Hidden Nest, laten we dat staan.)
+try {
+  const ne = String(nextEvent0 || "");
+  if (ne.startsWith("DEN_")) {
+    const evDen = ne.slice(4).toUpperCase();
+    const myDen = String(denColor || "").toUpperCase();
 
-  // ✅ lees players OUTSIDE de transaction (voorkomt failed-precondition)
-  let freshPlayersOuter = [];
-  try {
-    if (typeof fetchPlayersOutsideTx === "function") {
-      freshPlayersOuter = await fetchPlayersOutsideTx(db, gameId, latestPlayers);
-    } else {
-      freshPlayersOuter = Array.isArray(latestPlayers) ? latestPlayers : [];
+    const denImmune = (flags && typeof flags === "object" ? flags.denImmune : null) || null;
+    const immuneToDen = !!(denImmune && evDen && (denImmune[evDen] || denImmune[String(evDen).toLowerCase()]));
+
+    if (myDen && evDen && myDen === evDen && !immuneToDen) {
+      if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
     }
-  } catch (e) {
-    freshPlayersOuter = Array.isArray(latestPlayers) ? latestPlayers : [];
+  }
+} catch (e) {}
+
+  // ===== HARD RULE: DOG_CHARGE / SECOND_CHARGE / MAGPIE_SNITCH => LURK is lethal
+try {
+  const ne = String(nextEvent0 || "");
+
+  // Den Signal immunity (zelfde stijl als DEN_* rule)
+  const denImmune = (flags && typeof flags === "object" ? flags.denImmune : null) || null;
+  const myDen = String(denColor || "").toUpperCase();
+  const immuneToMyDen = !!(denImmune && myDen && (denImmune[myDen] || denImmune[String(myDen).toLowerCase()]));
+
+  // DOG charges: alleen veilig = DASH of (1x) BURROW
+  if ((ne === "DOG_CHARGE" || ne === "SECOND_CHARGE") && !immuneToMyDen) {
+    if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
   }
 
-  await runTransaction(db, async (tx) => {
-    const gSnap = await tx.get(gRef);
-    const pSnap = await tx.get(pRef);
-    if (!gSnap.exists() || !pSnap.exists()) return;
+  // Magpie Snitch: alleen relevant voor Lead (hier is Den Signal niet van toepassing)
+  if (ne === "MAGPIE_SNITCH" && isLead) {
+    if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
+  }
+} catch (e) {}
 
-    const g = gSnap.data();
-    const p = { id: pSnap.id, ...pSnap.data() };
-
-    if (!canBotDecide(g, p)) return;
-
-    // ✅ gebruik de outside snapshot, maar update "me" naar de tx-versie
-    const base =
-      Array.isArray(freshPlayersOuter) && freshPlayersOuter.length
-        ? freshPlayersOuter
-        : (Array.isArray(latestPlayers) ? latestPlayers : []);
-
-    const playersForDecision = base.length
-      ? base.map((x) => (String(x?.id) === String(botId) ? { ...x, ...p } : x))
-      : [{ ...p }];
-
-    const flags = fillFlags(g?.flagsRound);
-    const noPeek = flags?.noPeek === true;
-
-    const denColor = normColor(p?.color || p?.den || p?.denColor);
-    const presetKey = presetFromDenColor(denColor);
-    const dashDecisionsSoFar = countDashDecisions(playersForDecision);
-    const isLead = computeIsLeadForPlayer(g, p, playersForDecision);
-
-    // ✅ CANON: alleen burrowUsedThisRaid
-    const burrowUsed = (p?.burrowUsedThisRaid === true);
-
-    // ✅ strategy + heuristics verwachten me.burrowUsed (alias); ook burrowUsedThisRaid consistent maken
-    const meForDecision = {
-      ...p,
-      burrowUsed,
-      burrowUsedThisRaid: burrowUsed,
-    };
-
-    // ✅ metrics altijd berekenen (voor logs + fallback)
-    const metricsNow = buildBotMetricsForLog({
-      game: g,
-      bot: meForDecision,
-      players: playersForDecision || [],
-      flagsRoundOverride: flags,
-    });
-
-    // ---- HYBRID DECISION ----
-    let decision = "LURK";
-    let rec = null;
-    let dec = null;
-
-    // simpele intel-check: als bot knownUpcomingEvents heeft, strategy mag ook in noPeek
-    const known = Array.isArray(meForDecision?.knownUpcomingEvents)
-      ? meForDecision.knownUpcomingEvents.filter(Boolean)
-      : [];
-    const hasKnown = known.length > 0;
-
-    const useStrategy = !noPeek || hasKnown;
-
-    // ✅ noPeek + eigen intel: geef strategy expliciet knownUpcomingEvents mee
-    const peekIntel = (noPeek && hasKnown)
-      ? { events: known.map((x) => String(x)) }
-      : null;
-
-    if (useStrategy) {
-      dec = evaluateDecision({
-        game: g,
-        me: meForDecision,
-        players: playersForDecision || [],
-        flagsRound: flags, // ✅ filled flags (denImmune/noPeek/etc)
-        cfg: getStrategyCfgForBot(meForDecision, g),
-        peekIntel,
-      });
-
-      decision = dec?.decision || "LURK";
-    } else {
-      rec = recommendDecision({
-        presetKey,
-        denColor,
-        game: g,
-        me: meForDecision,
-        ctx: {
-          round: Number(g.round || 0),
-          isLead,
-          dashDecisionsSoFar,
-
-          roosterSeen: Number.isFinite(Number(g?.roosterSeen))
-            ? Number(g.roosterSeen)
-            : countRevealedRoosters(g),
-          postRooster2Window: countRevealedRoosters(g) >= 2,
-
-          carryValue: 0,     // CANON: nooit cashout op carry
-          carryValueRec: 0,  // CANON
-
-          dangerVec: metricsNow?.dangerVec,
-          dangerPeak: metricsNow?.dangerPeak,
-          dangerStay: metricsNow?.dangerStay,
-          dangerEffective: metricsNow?.dangerEffective,
-          nextEventIdUsed: metricsNow?.nextEventIdUsed,
-          pDanger: metricsNow?.pDanger,
-          confidence: metricsNow?.confidence,
-
-          flagsRound: flags || null,
-        },
-      });
-
-      decision = rec?.decision || "LURK";
-    }
-
-    // Next event id only when allowed (noPeek=false OR bot has known intel)
-    const nextEvent0 = (!noPeek)
-      ? nextEventId(g, 0)
-      : (hasKnown ? String(known[0] || "") : null);
-
-    // (optioneel) debug: bot probeert BURROW terwijl al gebruikt
-    const burrowAttemptWhileUsed = (decision === "BURROW") && !!burrowUsed;
-
-    // --- extra safety shaping met echte nextEvent facts (als toegestaan) ---
-    let dStay = Number(metricsNow?.dangerStay);
-
-    if (nextEvent0) {
-      try {
-        const f = getEventFacts(String(nextEvent0 || ""), {
-          game: g,
-          me: meForDecision,
-          denColor,
-          isLead,
-          flagsRound: flags,
-        });
-        const dl = Number(f?.dangerLurk);
-        if (Number.isFinite(dl)) dStay = dl;
-      } catch (e) {}
-    }
-
-    if (!Number.isFinite(dStay)) dStay = 10;
-
-    // Alleen LURK/DASH bijsturen; BURROW laten staan (die wordt hieronder door hard rules geforceerd indien nodig)
-    if (decision === "LURK" || decision === "DASH") {
-      decision = (dStay <= 3.0) ? "LURK" : "DASH";
-    }
-
-    // ===== HARD RULE: eigen DEN_* (zonder Den Signal) => LURK is lethal (caught)
-    // Alleen veilig: DASH of BURROW. Als BURROW al op is -> force DASH.
-    try {
-      const ne = String(nextEvent0 || "");
-      if (ne.startsWith("DEN_")) {
-        const evDen = ne.slice(4).toUpperCase();
-        const myDen = String(denColor || "").toUpperCase();
-
-        const denImmune = (flags && typeof flags === "object" ? flags.denImmune : null) || null;
-        const immuneToDen = !!(denImmune && evDen && (denImmune[evDen] || denImmune[String(evDen).toLowerCase()]));
-
-        if (myDen && evDen && myDen === evDen && !immuneToDen) {
-          if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
-        }
-      }
-    } catch (e) {}
-
-    // ===== HARD RULE: DOG_CHARGE / SECOND_CHARGE / MAGPIE_SNITCH => LURK is lethal
-    try {
-      const ne = String(nextEvent0 || "");
-
-      // Den Signal immunity
-      const denImmune = (flags && typeof flags === "object" ? flags.denImmune : null) || null;
-      const myDen = String(denColor || "").toUpperCase();
-      const immuneToMyDen = !!(denImmune && myDen && (denImmune[myDen] || denImmune[String(myDen).toLowerCase()]));
-
-      // DOG charges: alleen veilig = DASH of (1x) BURROW
-      if ((ne === "DOG_CHARGE" || ne === "SECOND_CHARGE") && !immuneToMyDen) {
-        if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
-      }
-
-      // Magpie Snitch: alleen relevant voor Lead
-      if (ne === "MAGPIE_SNITCH" && isLead) {
-        if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
-      }
-    } catch (e) {}
-
-    // ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
+// ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
       const picked = pickHiddenNestDashSet({ game: g, gameId, players: playersForDecision || [] });
       const dashSet = picked?.dashSet || null;
 
       if (dashSet && !dashSet.has(p.id)) {
-        // CANON: Hidden Nest / winst-DASH mag nooit BURROW triggeren.
+      // CANON (jouw regel): Hidden Nest / winst-DASH mag nooit BURROW triggeren.
         decision = "LURK";
       }
+
     }
 
     const dashPushNext = Number.isFinite(Number(dec?.meta?.dashPushNext))
       ? Number(dec.meta.dashPushNext)
       : (Number.isFinite(Number(p?.dashPush)) ? Number(p.dashPush) : 0);
 
-    const update = {
-      decision,
-      ...(Number.isFinite(Number(dashPushNext)) ? { dashPush: dashPushNext } : {}),
-      // 👇 NIET hier zetten. Engine consume't BURROW bij REVEAL.
-    };
+  const update = {
+  decision,
+  ...(Number.isFinite(Number(dashPushNext)) ? { dashPush: dashPushNext } : {}),
+  // 👇 NIET hier zetten. Engine consume't BURROW bij REVEAL.
+};
 
     tx.update(pRef, update);
 
@@ -3084,14 +2925,7 @@ async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
       message: `BOT kiest ${decision}`,
       kind: "BOT_DECISION",
       at: Date.now(),
-      metrics: buildBotMetricsForLog({
-        game: g,
-        bot: botAfter,
-        players: playersForDecision || [],
-        flagsRoundOverride: flags,
-      }),
-      // optioneel debug
-      // debug: { burrowAttemptWhileUsed },
+      metrics: buildBotMetricsForLog({ game: g, bot: botAfter, players: playersForDecision || [], flagsRoundOverride: flags }),
     };
   });
 
