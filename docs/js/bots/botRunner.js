@@ -2809,17 +2809,35 @@ const useStrategy = !noPeek || hasKnown;
   decision = rec?.decision || "LURK";
 }
 
-// (CANON) geen runner-level carry/panic cashout overrides
-if (decision === "BURROW" && burrowUsed) {
-  // CANON: BURROW kan niet meer. Als blijven onveilig is -> DASH (definitieve exit), anders LURK.
-  const dStay = Number(metricsNow?.dangerStay ?? metricsNow?.dangerEffective ?? 0);
-  decision = (Number.isFinite(dStay) && dStay <= 3.0) ? "LURK" : "DASH";
-}
-
 // Next event id only when allowed (noPeek=false OR bot has known intel)
 const nextEvent0 = (!noPeek)
   ? nextEventId(g, 0)
   : (hasKnown ? String(known[0] || "") : null);
+
+if (decision === "BURROW" && burrowUsed) {
+  // BURROW kan niet meer. Bepaal stay-danger zo betrouwbaar mogelijk.
+  let dStay = Number(metricsNow?.dangerStay ?? metricsNow?.dangerEffective ?? NaN);
+
+  // Als we het volgende event mogen weten: pak echte facts i.p.v. probabilistisch
+  if (nextEvent0) {
+    try {
+      const f = getEventFacts(String(nextEvent0 || ""), {
+        game: g,
+        me: meForDecision,
+        denColor,
+        isLead,
+        flagsRound: flags,
+      });
+      const dl = Number(f?.dangerLurk);
+      if (Number.isFinite(dl)) dStay = dl;
+    } catch (e) {}
+  }
+
+  // Als het nog steeds onbekend is: liever te veilig dan dood
+  if (!Number.isFinite(dStay)) dStay = 10;
+
+  decision = (dStay <= 3.0) ? "LURK" : "DASH";
+}
 
   // ===== HARD RULE: eigen DEN_* (zonder Den Signal) => LURK is lethal (caught)
 // Alleen veilig: DASH of BURROW. Als BURROW al op is -> force DASH.
