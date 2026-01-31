@@ -659,16 +659,34 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
         continue;
       }
 
-      if (p.decision === "BURROW") {
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: p.id,
-          message: `${p.name || "Vos"} schuilt opnieuw in zijn hol en ontwijkt de tweede charge.`,
-        });
-        continue;
-      }
+   if (p.decision === "BURROW") {
+  const pRef = doc(db, "games", gameId, "players", p.id);
+  const already = !!p.burrowUsedThisRaid;
+
+  if (already) {
+    await addLog(gameId, {
+      round,
+      phase: "REVEAL",
+      kind: "EVENT",
+      playerId: p.id,
+      message: `${p.name || "Vos"} probeert opnieuw te burrowen, maar dat mag maar 1× per raid.`,
+    });
+    // geen continue -> laat normale afhandeling doorgaan (dus kan gepakt worden)
+  } else {
+    await updateDoc(pRef, { burrowUsedThisRaid: true });
+    p.burrowUsedThisRaid = true;
+
+    await addLog(gameId, {
+      round,
+      phase: "REVEAL",
+      kind: "EVENT",
+      playerId: p.id,
+      message: `${p.name || "Vos"} zit veilig in zijn hol (BURROW) en ontwijkt de tweede charge.`,
+    });
+
+    continue;
+  }
+}
 
       if (p.decision === "DASH") continue;
 
