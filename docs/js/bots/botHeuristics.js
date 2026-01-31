@@ -1260,7 +1260,7 @@ export function recommendDecision(opts = {}) {
     else decision = "LURK";
   }
 
-  if (decision === "BURROW" && !canBurrow) decision = "LURK";
+  if (decision === "BURROW" && !canBurrow) decision = "DASH";
 
   // Keep carryValue purely for logging / compatibility (NOT used in the decision)
   const carryValue =
