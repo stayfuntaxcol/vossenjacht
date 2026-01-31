@@ -352,8 +352,39 @@ function getStrategyCfgForBot(botOrPlayer, game = null) {
     // extra safety: alle keys die met 'panic' of 'rooster' beginnen zijn legacy
     if (/^(panic|rooster)/i.test(k)) delete merged[k];
   }
+  // === OPS-aggressive tuning: bots moeten vaker Action Cards spelen ===
+  // (centrale clamp zodat je niet alle DISC_STRATEGY_OVERRIDES hoeft te herschrijven)
+  merged.actionReserveMinHand = Math.min(Number(merged.actionReserveMinHand ?? 2), 1);
 
-  return tuneOpsCfgForMoreActionCards(merged, game);
+  merged.actionPlayMinGain = Math.min(Number(merged.actionPlayMinGain ?? 0.9), 0.55);
+  merged.actionPlayMinGainEarlyBonus = Math.min(Number(merged.actionPlayMinGainEarlyBonus ?? 0.20), 0.08);
+  merged.comboMinGain = Math.min(Number(merged.comboMinGain ?? 1.4), 0.85);
+
+  merged.opsReserveHandEarly = Math.min(Number(merged.opsReserveHandEarly ?? 3), 1);
+  merged.opsReserveHandMid   = Math.min(Number(merged.opsReserveHandMid ?? 2), 1);
+  merged.opsReserveHandLate  = Math.min(Number(merged.opsReserveHandLate ?? 1), 0);
+
+  merged.opsPlayTaxBase = Math.min(Number(merged.opsPlayTaxBase ?? 0.90), 0.65);
+  merged.opsPlayTaxEarlyMult = Math.min(Number(merged.opsPlayTaxEarlyMult ?? 1.15), 1.00);
+  merged.opsPlayTaxLateMult  = Math.min(Number(merged.opsPlayTaxLateMult ?? 0.85), 0.80);
+
+  merged.opsSpendCostBase = Math.min(Number(merged.opsSpendCostBase ?? 0.40), 0.28);
+  merged.opsSpendCostEarlyMult = Math.min(Number(merged.opsSpendCostEarlyMult ?? 1.05), 0.95);
+  merged.opsSpendCostLateMult  = Math.min(Number(merged.opsSpendCostLateMult ?? 0.80), 0.75);
+
+  merged.opsMinAdvantage = Math.min(Number(merged.opsMinAdvantage ?? 1.0), 0.75);
+  merged.opsMinAdvantageEarlyBonus = Math.min(Number(merged.opsMinAdvantageEarlyBonus ?? 0.2), 0.06);
+
+  merged.opsThreatDangerTrigger = Math.min(Number(merged.opsThreatDangerTrigger ?? 5.0), 4.0);
+  merged.opsThreatPlayBoost = Math.max(Number(merged.opsThreatPlayBoost ?? 0.6), 1.10);
+  merged.opsLeadThreatExtraBoost = Math.max(Number(merged.opsLeadThreatExtraBoost ?? 0.4), 0.70);
+  merged.opsThreatPlayTaxMult = Math.min(Number(merged.opsThreatPlayTaxMult ?? 0.80), 0.65);
+
+  // Als rulesIndex “engineImplemented=false” teruggeeft, is de default penalty (0.15) bijna dodelijk.
+  // Dit maakt bots minder bang om zulke kaarten te spelen.
+  merged.actionUnimplementedMult = Math.max(Number(merged.actionUnimplementedMult ?? 0.15), 0.55);
+
+ return merged;
 
 }
 
