@@ -2839,6 +2839,26 @@ try {
   }
 } catch (e) {}
 
+  // ===== HARD RULE: DOG_CHARGE / SECOND_CHARGE / MAGPIE_SNITCH => LURK is lethal
+try {
+  const ne = String(nextEvent0 || "");
+
+  // Den Signal immunity (zelfde stijl als DEN_* rule)
+  const denImmune = (flags && typeof flags === "object" ? flags.denImmune : null) || null;
+  const myDen = String(denColor || "").toUpperCase();
+  const immuneToMyDen = !!(denImmune && myDen && (denImmune[myDen] || denImmune[String(myDen).toLowerCase()]));
+
+  // DOG charges: alleen veilig = DASH of (1x) BURROW
+  if ((ne === "DOG_CHARGE" || ne === "SECOND_CHARGE") && !immuneToMyDen) {
+    if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
+  }
+
+  // Magpie Snitch: alleen relevant voor Lead (hier is Den Signal niet van toepassing)
+  if (ne === "MAGPIE_SNITCH" && isLead) {
+    if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
+  }
+} catch (e) {}
+
 // ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
       const picked = pickHiddenNestDashSet({ game: g, gameId, players: playersForDecision || [] });
