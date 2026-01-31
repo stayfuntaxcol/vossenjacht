@@ -353,7 +353,63 @@ function getStrategyCfgForBot(botOrPlayer, game = null) {
     if (/^(panic|rooster)/i.test(k)) delete merged[k];
   }
 
-  return merged;
+  return tuneOpsCfgForMoreActionCards(merged, game);
+
+}
+
+function tuneOpsCfgForMoreActionCards(cfg, game) {
+  // Opt-out per raid (handig voor testen)
+  if (game && game.botOpsAggro === false) return cfg;
+
+  const out = { ...(cfg || {}) };
+
+  const num = (k, fb) => {
+    const v = Number(out[k]);
+    if (Number.isFinite(v)) return v;
+    const d = Number(BOT_UTILITY_CFG?.[k]);
+    return Number.isFinite(d) ? d : fb;
+  };
+
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const set = (k, v) => { out[k] = v; };
+
+  // ---- minder krampachtig sparen / sneller spelen ----
+  set("actionReserveMinHand", 1);                         // nooit 2/3 hier
+  set("actionPlayMinGain", Math.min(num("actionPlayMinGain", 0.9), 0.55));
+  set("actionPlayMinGainEarlyBonus", Math.min(num("actionPlayMinGainEarlyBonus", 0.2), 0.15));
+
+  set("opsMinAdvantage", Math.min(num("opsMinAdvantage", 1.0), 1.12));
+  set("opsMinAdvantageEarlyBonus", Math.min(num("opsMinAdvantageEarlyBonus", 0.2), 0.10));
+
+  // minder "spelen kost altijd veel"
+  set("opsPlayTaxBase", Math.min(num("opsPlayTaxBase", 0.85), 0.80));
+  set("opsPlayTaxEarlyMult", Math.min(num("opsPlayTaxEarlyMult", 1.15), 1.05));
+  set("opsPlayTaxLateMult", Math.min(num("opsPlayTaxLateMult", 0.85), 0.85));
+
+  // opportunity cost omlaag → durft kaarten te besteden
+  set("opsSpendCostBase", Math.min(num("opsSpendCostBase", 0.40), 0.40));
+  set("opsSpendCostEarlyMult", Math.min(num("opsSpendCostEarlyMult", 1.05), 1.00));
+  set("opsSpendCostLateMult", Math.min(num("opsSpendCostLateMult", 0.80), 0.85));
+
+  // minder reserve targets (spaar-kramp eruit)
+  set("opsReserveHandEarly", clamp(num("opsReserveHandEarly", 2), 1, 2));
+  set("opsReserveHandMid", clamp(num("opsReserveHandMid", 1), 0, 1));
+  set("opsReserveHandLate", 0);
+
+  // threat-mode eerder + sterker → meer plays als er gevaar aankomt
+  set("opsThreatDangerTrigger", Math.min(num("opsThreatDangerTrigger", 5.0), 4.5));
+  set("opsThreatPlayBoost", Math.max(num("opsThreatPlayBoost", 0.6), 0.85));
+  set("opsLeadThreatExtraBoost", Math.max(num("opsLeadThreatExtraBoost", 0.4), 0.65));
+  set("opsThreatPlayTaxMult", Math.min(num("opsThreatPlayTaxMult", 0.80), 0.75));
+
+  // minder vaak "highCombo" label → minder sparen om combo’s af te wachten
+  set("opsHighComboScore", Math.max(num("opsHighComboScore", 10), 12));
+  set("opsHighComboGainBonus", Math.min(num("opsHighComboGainBonus", 0.25), 0.15));
+
+  // combo drempel iets omlaag zodat 2-kaart plays vaker worden gekozen
+  set("comboMinGain", Math.min(num("comboMinGain", 1.4), 0.90));
+
+  return out;
 }
 
 function extractIntelForDenShare({ game, player }) {
