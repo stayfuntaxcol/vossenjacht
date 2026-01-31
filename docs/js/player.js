@@ -3071,10 +3071,30 @@ if (typeof logMoveAction !== "function") {
       } catch (e) {
         console.warn("[logMoveAction] actions write failed", e);
       }
+
+      // 2) log (optioneel)
+      try {
+        if (typeof addLog === "function") {
+          await addLog(gameId, {
+            round,
+            phase: base.phase,
+            kind: "PLAYER",
+            playerId: pid,
+            message: `${pname}: ${base.choice}`,
+            payload: base.payload,
+          });
+        }
+      } catch (e) {
+        console.warn("[logMoveAction] addLog failed", e);
+      }
+    } catch (e) {
+      console.warn("[logMoveAction] failed", e);
+    }
   };
 
   globalThis.logMoveAction = logMoveAction;
 }
+
 // --- 1) Next OPS index (prefers game.opsTurnOrder) ---
 globalThis.computeNextOpsIndex =
   globalThis.computeNextOpsIndex ||
