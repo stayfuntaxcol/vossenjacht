@@ -49,37 +49,47 @@ const OPS_DISCARD_VISIBLE_MS = 3100;
 const DISC_BY_DEN = { RED: "D", YELLOW: "I", GREEN: "S", BLUE: "C" };
 
 // Kleine, “stabiele” overrides (geen spikes)
-const DISC_UTILITY_OVERRIDES = {
+// =============================
+// JAZZ settings (utility layer)
+// =============================
+
+const JAZZ_UTILITY_OVERRIDES = {
   D: { // RED: agressiever, sneller spelen
     wRisk: 1.00,
     wDeny: 0.95,
-    opsPlayTaxBase: 0.80,
+    opsPlayTaxBase: 0.68,
+    opsMinAdvantage: 0.92,
+    opsReserveHandEarly: 2,
+    opsSpendCostBase: 0.32,
+  },
+  I: { // YELLOW: speelser, vaker tempo/control
+    wRisk: 1.08,
+    opsPlayTaxBase: 0.70,
+    opsMinAdvantage: 0.90,
+    opsReserveHandEarly: 2,
+    opsSpendCostBase: 0.34,
+    kickUpDustOptimism: 0.65,
+  },
+  S: { // GREEN: defensiever, maar niet “op slot”
+    wRisk: 1.20,
+    opsPlayTaxBase: 0.78,
     opsMinAdvantage: 1.05,
     opsReserveHandEarly: 2,
+    opsReserveHandMid: 2,
     opsSpendCostBase: 0.38,
   },
-  I: { // YELLOW: iets speelser, iets vaker control/tempo
-    wRisk: 1.10,
-    opsPlayTaxBase: 0.82,
-    opsMinAdvantage: 1.08,
-    opsReserveHandEarly: 3,
-    kickUpDustOptimism: 0.60,
-  },
-  S: { // GREEN: defensiever, iets meer sparen
+  C: { // BLUE: analytisch, iets hogere drempel maar wel spelend
     wRisk: 1.25,
-    opsPlayTaxBase: 0.90,
-    opsMinAdvantage: 1.15,
-    opsReserveHandEarly: 3,
-    opsReserveHandMid: 2,
-  },
-  C: { // BLUE: analytisch, minst random, iets hogere drempel
-    wRisk: 1.30,
-    opsPlayTaxBase: 0.92,
-    opsMinAdvantage: 1.12,
-    kickUpDustOptimism: 0.48,
-    opsHighComboScore: 11,
+    opsPlayTaxBase: 0.76,
+    opsMinAdvantage: 1.02,
+    opsSpendCostBase: 0.36,
+    kickUpDustOptimism: 0.52,
+    opsHighComboScore: 10,
   },
 };
+
+// behoud je bestaande naam, zodat rest van je code niet hoeft te wijzigen
+const DISC_UTILITY_OVERRIDES = JAZZ_UTILITY_OVERRIDES;
 
 function cfgForBot(botLike) {
   const den = String(botLike?.color || botLike?.denColor || botLike?.den || "").toUpperCase();
@@ -107,8 +117,11 @@ function normColor(c) {
 // Alleen overrides (strategy.js merged dit over BOT_UTILITY_CFG heen)
 // Alleen overrides (strategy.js merged dit over BOT_UTILITY_CFG heen)
 // CANON: geen carry/rooster/panic-cashout bias in config. DASH/BURROW/LURK worden bepaald in strategy.js.
-const DISC_STRATEGY_OVERRIDES = {
-  // D (RED) = direct/agressief: vaker kaarten spelen, iets minder sparen
+// =============================
+// JAZZ settings (strategy/OPS layer)
+// =============================
+
+const JAZZ_STRATEGY_OVERRIDES = {
   D: {
     wLoot: 6.2,
     wRisk: 0.95,
@@ -119,7 +132,7 @@ const DISC_STRATEGY_OVERRIDES = {
 
     lookaheadN: 4,
 
-    // SHIFT
+    // SHIFT (laat staan zoals jij het had; we buffen OPS i.p.v. SHIFT te nerfen)
     shiftMinGain: 3.2,
     shiftDangerTrigger: 7.8,
     shiftLookahead: 4,
@@ -128,38 +141,37 @@ const DISC_STRATEGY_OVERRIDES = {
     shiftCooldownRounds: 2,
     shiftOverrideBenefit: 3.6,
 
-    // OPS card play
+    // OPS card play (meer “jazz”: vaker iets durven spelen)
     actionDeckSampleN: 28,
-    actionReserveMinHand: 2,
-    actionPlayMinGain: 0.72,
-    comboMinGain: 0.95,
+    actionReserveMinHand: 1,
+    actionPlayMinGain: 0.62,
+    comboMinGain: 0.88,
     allowComboSearch: true,
-    comboMaxPairs: 24,
+    comboMaxPairs: 26,
 
     opsEarlyRounds: 2,
     opsReserveHandEarly: 2,
     opsReserveHandMid: 1,
     opsReserveHandLate: 0,
 
-    opsPlayTaxBase: 0.88,
-    opsPlayTaxEarlyMult: 1.05,
-    opsPlayTaxLateMult: 0.85,
+    opsPlayTaxBase: 0.68,
+    opsPlayTaxEarlyMult: 1.02,
+    opsPlayTaxLateMult: 0.82,
 
-    opsSpendCostBase: 0.50,
+    opsSpendCostBase: 0.34,
     opsSpendCostEarlyMult: 1.00,
-    opsSpendCostLateMult: 0.82,
+    opsSpendCostLateMult: 0.80,
 
-    opsMinAdvantage: 1.35,
-    opsMinAdvantageEarlyBonus: 0.12,
+    opsMinAdvantage: 0.92,
+    opsMinAdvantageEarlyBonus: 0.10,
 
-    // Threat-mode OPS
+    // Threat-mode OPS (als het gevaarlijk wordt: spelen!)
     opsThreatDangerTrigger: 5.2,
-    opsThreatPlayBoost: 0.65,
-    opsLeadThreatExtraBoost: 0.55,
-    opsThreatPlayTaxMult: 0.78,
+    opsThreatPlayBoost: 0.85,
+    opsLeadThreatExtraBoost: 0.65,
+    opsThreatPlayTaxMult: 0.72,
   },
 
-  // I (YELLOW) = opportunistisch: cards/combos, iets meer delen
   I: {
     wLoot: 6.6,
     wRisk: 1.05,
@@ -181,36 +193,35 @@ const DISC_STRATEGY_OVERRIDES = {
 
     // OPS card play
     actionDeckSampleN: 30,
-    actionReserveMinHand: 2,
-    actionPlayMinGain: 0.70,
-    comboMinGain: 0.92,
+    actionReserveMinHand: 1,
+    actionPlayMinGain: 0.60,
+    comboMinGain: 0.86,
     allowComboSearch: true,
-    comboMaxPairs: 28,
+    comboMaxPairs: 30,
 
     opsEarlyRounds: 2,
     opsReserveHandEarly: 2,
     opsReserveHandMid: 1,
     opsReserveHandLate: 0,
 
-    opsPlayTaxBase: 0.90,
+    opsPlayTaxBase: 0.70,
     opsPlayTaxEarlyMult: 1.02,
-    opsPlayTaxLateMult: 0.86,
+    opsPlayTaxLateMult: 0.84,
 
-    opsSpendCostBase: 0.52,
+    opsSpendCostBase: 0.36,
     opsSpendCostEarlyMult: 1.00,
-    opsSpendCostLateMult: 0.84,
+    opsSpendCostLateMult: 0.82,
 
-    opsMinAdvantage: 1.32,
-    opsMinAdvantageEarlyBonus: 0.12,
+    opsMinAdvantage: 0.90,
+    opsMinAdvantageEarlyBonus: 0.10,
 
     // Threat-mode OPS
     opsThreatDangerTrigger: 5.0,
-    opsThreatPlayBoost: 0.70,
-    opsLeadThreatExtraBoost: 0.50,
-    opsThreatPlayTaxMult: 0.80,
+    opsThreatPlayBoost: 0.90,
+    opsLeadThreatExtraBoost: 0.60,
+    opsThreatPlayTaxMult: 0.74,
   },
 
-  // S (GREEN) = veilig/team: iets meer sparen, team & share hoger
   S: {
     wLoot: 5.5,
     wRisk: 1.30,
@@ -232,36 +243,36 @@ const DISC_STRATEGY_OVERRIDES = {
 
     // OPS card play
     actionDeckSampleN: 26,
-    actionReserveMinHand: 3,
-    actionPlayMinGain: 0.78,
-    comboMinGain: 1.00,
+    actionReserveMinHand: 1,
+    actionPlayMinGain: 0.70,
+    comboMinGain: 0.95,
     allowComboSearch: true,
-    comboMaxPairs: 18,
+    comboMaxPairs: 22,
 
     opsEarlyRounds: 2,
-    opsReserveHandEarly: 3,
+    opsReserveHandEarly: 2,
     opsReserveHandMid: 2,
     opsReserveHandLate: 1,
 
-    opsPlayTaxBase: 0.92,
+    opsPlayTaxBase: 0.78,
     opsPlayTaxEarlyMult: 1.05,
     opsPlayTaxLateMult: 0.90,
 
-    opsSpendCostBase: 0.56,
+    opsSpendCostBase: 0.40,
     opsSpendCostEarlyMult: 1.02,
-    opsSpendCostLateMult: 0.92,
+    opsSpendCostLateMult: 0.90,
 
-    opsMinAdvantage: 1.45,
-    opsMinAdvantageEarlyBonus: 0.14,
+    // ✅ DIT was jouw “handrem”: 1.45 -> 1.05
+    opsMinAdvantage: 1.05,
+    opsMinAdvantageEarlyBonus: 0.10,
 
     // Threat-mode OPS
     opsThreatDangerTrigger: 4.8,
-    opsThreatPlayBoost: 0.75,
-    opsLeadThreatExtraBoost: 0.60,
-    opsThreatPlayTaxMult: 0.82,
+    opsThreatPlayBoost: 0.95,
+    opsLeadThreatExtraBoost: 0.70,
+    opsThreatPlayTaxMult: 0.78,
   },
 
-  // C (BLUE) = analytisch: iets meer lookahead & resource, strakker ops-filter
   C: {
     wLoot: 5.9,
     wRisk: 1.18,
@@ -283,36 +294,39 @@ const DISC_STRATEGY_OVERRIDES = {
 
     // OPS card play
     actionDeckSampleN: 30,
-    actionReserveMinHand: 2,
-    actionPlayMinGain: 0.74,
-    comboMinGain: 0.98,
+    actionReserveMinHand: 1,
+    actionPlayMinGain: 0.66,
+    comboMinGain: 0.92,
     allowComboSearch: true,
-    comboMaxPairs: 24,
+    comboMaxPairs: 26,
 
     opsEarlyRounds: 2,
     opsReserveHandEarly: 2,
     opsReserveHandMid: 1,
     opsReserveHandLate: 0,
 
-    opsPlayTaxBase: 0.90,
+    opsPlayTaxBase: 0.76,
     opsPlayTaxEarlyMult: 1.03,
     opsPlayTaxLateMult: 0.86,
 
-    opsSpendCostBase: 0.54,
+    opsSpendCostBase: 0.38,
     opsSpendCostEarlyMult: 1.00,
-    opsSpendCostLateMult: 0.86,
+    opsSpendCostLateMult: 0.84,
 
-    opsMinAdvantage: 1.38,
-    opsMinAdvantageEarlyBonus: 0.12,
+    // ✅ DIT was jouw “handrem”: 1.38 -> 1.02
+    opsMinAdvantage: 1.02,
+    opsMinAdvantageEarlyBonus: 0.10,
 
     // Threat-mode OPS
     opsThreatDangerTrigger: 5.1,
-    opsThreatPlayBoost: 0.68,
-    opsLeadThreatExtraBoost: 0.55,
-    opsThreatPlayTaxMult: 0.80,
+    opsThreatPlayBoost: 0.85,
+    opsLeadThreatExtraBoost: 0.65,
+    opsThreatPlayTaxMult: 0.76,
   },
 };
 
+// behoud je bestaande naam, zodat rest van je code niet hoeft te wijzigen
+const DISC_STRATEGY_OVERRIDES = JAZZ_STRATEGY_OVERRIDES;
 
 function getStrategyCfgForBot(botOrPlayer, game = null) {
   const den = normColor(botOrPlayer?.color || botOrPlayer?.den || botOrPlayer?.denColor);
