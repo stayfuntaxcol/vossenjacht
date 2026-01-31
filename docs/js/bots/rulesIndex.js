@@ -30,13 +30,20 @@ function isEngineEventImplemented(eventId) {
 
 // Action-effects die engine/hulpfuncties echt ondersteunen. :contentReference[oaicite:2]{index=2}
 const ENGINE_ACTION_IDS = new Set([
-  "DEN_SIGNAL",        // denImmune wordt gebruikt
-  "NOSE_FOR_TROUBLE",  // predictions worden beloond
-  "FOLLOW_THE_TAIL",   // followTail wordt toegepast
-  "PACK_TINKER",       // applyPackTinker export
-  "KICK_UP_DUST",      // applyKickUpDust export
-  "BURROW_BEACON",     // lockEvents blokkeert track-manip
-  // HOLD_STILL: jij wil dit als “ops lock”, niet als DECISION-effect (engine-blok ga je weghalen)
+  "DEN_SIGNAL",
+  "NOSE_FOR_TROUBLE",
+  "FOLLOW_THE_TAIL",
+  "PACK_TINKER",
+  "KICK_UP_DUST",
+  "BURROW_BEACON",
+
+  "SCATTER",
+  "SCENT_CHECK",
+  "NO_GO_ZONE",
+  "MOLTING_MASK",
+  "MASK_SWAP",
+  "HOLD_STILL",
+  "ALPHA_CALL",
 ]);
 
 function isEngineActionImplemented(actionId) {
@@ -54,7 +61,7 @@ const ACTION_AFFECTS = {
   KICK_UP_DUST:   { affectsFlags: [], affectsTrack: true },
   BURROW_BEACON:  { affectsFlags: ["lockEvents"], affectsTrack: false },
   MOLTING_MASK:   { affectsFlags: [], affectsTrack: false },
-  HOLD_STILL:     { affectsFlags: ["opsLocked"], affectsTrack: false }, // jouw bedoeling
+  HOLD_STILL:     { affectsFlags: ["holdstill"], affectsTrack: false }, // jouw bedoeling
   NOSE_FOR_TROUBLE:{ affectsFlags: ["predictions"], affectsTrack: false },
   SCENT_CHECK:    { affectsFlags: ["scentChecks"], affectsTrack: false },
   FOLLOW_THE_TAIL:{ affectsFlags: ["followTail"], affectsTrack: false },
