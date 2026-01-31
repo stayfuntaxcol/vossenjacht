@@ -55,19 +55,26 @@ function isEngineActionImplemented(actionId) {
 // =============================
 
 const ACTION_AFFECTS = {
-  SCATTER:        { affectsFlags: ["scatter"], affectsTrack: false },
-  DEN_SIGNAL:     { affectsFlags: ["denImmune"], affectsTrack: false },
-  NO_GO_ZONE:     { affectsFlags: ["noPeek"], affectsTrack: false },
-  KICK_UP_DUST:   { affectsFlags: [], affectsTrack: true },
-  BURROW_BEACON:  { affectsFlags: ["lockEvents"], affectsTrack: false },
-  MOLTING_MASK:   { affectsFlags: [], affectsTrack: false },
-  HOLD_STILL:     { affectsFlags: ["holdstill"], affectsTrack: false }, // jouw bedoeling
-  NOSE_FOR_TROUBLE:{ affectsFlags: ["predictions"], affectsTrack: false },
-  SCENT_CHECK:    { affectsFlags: ["scentChecks"], affectsTrack: false },
-  FOLLOW_THE_TAIL:{ affectsFlags: ["followTail"], affectsTrack: false },
-  ALPHA_CALL:     { affectsFlags: [], affectsTrack: false },
-  PACK_TINKER:    { affectsFlags: [], affectsTrack: true },
-  MASK_SWAP:      { affectsFlags: [], affectsTrack: false },
+  // multiplayer / interactie kaarten (worden waardeloos solo)
+  SCATTER:         { affectsFlags: ["scatter"],      affectsTrack: false, needsOthers: true },
+  NO_GO_ZONE:      { affectsFlags: ["noPeek"],       affectsTrack: false, needsOthers: true },
+  HOLD_STILL:      { affectsFlags: ["holdStill"],    affectsTrack: false, needsOthers: true }, // ✅ juiste flag
+  SCENT_CHECK:     { affectsFlags: ["scentChecks"],  affectsTrack: false, needsOthers: true },
+  FOLLOW_THE_TAIL: { affectsFlags: ["followTail"],   affectsTrack: false, needsOthers: true },
+
+  // info / planning kaarten (kunnen solo nog steeds zin hebben)
+  DEN_SIGNAL:      { affectsFlags: ["denImmune"],    affectsTrack: false, needsOthers: false },
+  BURROW_BEACON:   { affectsFlags: ["lockEvents"],   affectsTrack: false, needsOthers: false },
+  NOSE_FOR_TROUBLE:{ affectsFlags: ["predictions"],  affectsTrack: false, needsOthers: false },
+
+  // track manipulatie (solo ook relevant)
+  KICK_UP_DUST:    { affectsFlags: [],               affectsTrack: true,  needsOthers: false },
+  PACK_TINKER:     { affectsFlags: [],               affectsTrack: true,  needsOthers: false },
+
+  // “specials” (markeer als implemented via flags, ook als je engine elders werkt)
+  MOLTING_MASK:    { affectsFlags: ["moltingMask"],  affectsTrack: false, needsOthers: false },
+  MASK_SWAP:       { affectsFlags: ["maskSwap"],     affectsTrack: false, needsOthers: true },
+  ALPHA_CALL:      { affectsFlags: ["leadSwap"],     affectsTrack: false, needsOthers: true },
 };
 
 function getActionFactsById(actionId) {
@@ -107,6 +114,7 @@ function getActionFactsById(actionId) {
     engineImplemented,
     affectsFlags: Array.isArray(affects.affectsFlags) ? affects.affectsFlags : [],
     affectsTrack: !!affects.affectsTrack,
+    needsOthers: !!affects.needsOthers,
 
     // optioneel: handig als je later in strategy wil weten "solo waardeloos"
     needsOthers: !!affects.needsOthers,
