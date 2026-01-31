@@ -2814,9 +2814,10 @@ const nextEvent0 = (!noPeek)
   ? nextEventId(g, 0)
   : (hasKnown ? String(known[0] || "") : null);
 
-if (decision === "BURROW" && burrowUsed) {
-  // BURROW kan niet meer. Bepaal stay-danger zo betrouwbaar mogelijk.
-  let dStay = Number(metricsNow?.dangerStay ?? metricsNow?.dangerEffective ?? NaN);
+// BURROW “blokkeer” je in de keuze-logica (strategy / UI), niet hier in botRunner.
+const burrowAttemptWhileUsed =
+  (decision === "BURROW") && !!burrowUsedThisRaid; // of: !!burrowUsed (als je nog die alias gebruikt)
+// (optioneel) je kunt burrowAttemptWhileUsed later in logPayload zetten als debug.
 
   // Als we het volgende event mogen weten: pak echte facts i.p.v. probabilistisch
   if (nextEvent0) {
