@@ -74,7 +74,28 @@ function getActionFactsById(actionId) {
   const def = Object.values(ACTION_DEFS).find((a) => a?.id === actionId) || null;
   if (!def) return null;
 
-  const affects = ACTION_AFFECTS[actionId] || { affectsFlags: [], affectsTrack: false };
+  // Default shape
+  const affects = ACTION_AFFECTS[actionId] || {
+    affectsFlags: [],
+    affectsTrack: false,
+    needsOthers: false, // optioneel veld (mag ontbreken)
+  };
+
+  // 1) Handmatige override vanuit je card-def (als je die gebruikt)
+  //   -> zet in ACTION_DEFS[action].meta.engineImplemented = true/false om te forceren
+  const metaImpl = def?.meta?.engineImplemented;
+
+  // 2) "Implied implemented": als de kaart aantoonbaar flags of track beïnvloedt
+  const impliedImpl =
+    !!affects.affectsTrack ||
+    (Array.isArray(affects.affectsFlags) && affects.affectsFlags.length > 0);
+
+  // 3) Final: hard engine set OR implied OR meta override
+  const engineImplemented =
+    typeof metaImpl === "boolean"
+      ? metaImpl
+      : (isEngineActionImplemented(def.id) || impliedImpl);
+
   return {
     id: def.id,
     name: def.name,
@@ -83,9 +104,12 @@ function getActionFactsById(actionId) {
     timing: def.timing || null,
     tags: Array.isArray(def.tags) ? def.tags : [],
     role: def?.meta?.role || "unknown",
-    engineImplemented: isEngineActionImplemented(def.id),
-    affectsFlags: affects.affectsFlags,
-    affectsTrack: affects.affectsTrack,
+    engineImplemented,
+    affectsFlags: Array.isArray(affects.affectsFlags) ? affects.affectsFlags : [],
+    affectsTrack: !!affects.affectsTrack,
+
+    // optioneel: handig als je later in strategy wil weten "solo waardeloos"
+    needsOthers: !!affects.needsOthers,
   };
 }
 
