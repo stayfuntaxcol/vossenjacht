@@ -1214,31 +1214,46 @@ if (facts?.engineImplemented === false && !RUNNER_IMPLEMENTED.has(actionId)) {
 
   let utility = utilitySum / sims.length;
 
-// Multiplayer/tempo bonus: deze kaarten “doen” weinig in decision-simulatie,
-// maar zijn wél waardevol als er veel spelers te raken zijn (vooral early).
-if (MULTIPLAYER_VALUE_ACTIONS.has(actionId)) {
-  const stage0 = opsStageFromGame(game, c);
-  const n = opsParticipantCount(game, players);          // hoeveel spelers in de Yard/ops
-  const remaining = opsRemainingCount(game);             // hoeveel moeten nog handelen na jou
+// Multiplayer/tempo bonus (JAZZ):
+// Kaarten die "needsOthers" hebben zijn sterk als er targets zijn,
+// maar verlopen zodra de groep klein wordt. Dus: bonus + urgency, maar solo = dood.
+{
+  const factsNow = getActionFacts(actionId);
+  if (factsNow?.needsOthers) {
+    const stage0 = opsStageFromGame(game, c);
+    const n = opsParticipantCount(game, players);   // hoeveel spelers in Yard/OPS
+    const remaining = opsRemainingCount(game);      // hoeveel moeten nog handelen na jou
 
-  const presence = clamp((n - 1) / 3, 0, 1);             // 1=>0, 2=>0.33, 4=>1
-  const rem = clamp(remaining / 3, 0, 1);                // 0..1
+    // 1 speler -> 0, 2 -> 0.33, 3 -> 0.66, 4+ -> 1
+    const presence = clamp((n - 1) / 3, 0, 1);
+    const rem = clamp(remaining / 3, 0, 1);
 
-  const stageMult =
-    stage0.stage === "early" ? Number(c.opsMultiStageEarlyMult || 1.2) :
-    stage0.stage === "late" ? Number(c.opsMultiStageLateMult || 0.85) :
-    1.0;
+    const stageMult =
+      stage0.stage === "early" ? Number(c.opsMultiStageEarlyMult || 1.25) :
+      stage0.stage === "late"  ? Number(c.opsMultiStageLateMult  || 0.85) :
+      1.0;
 
-  const base = Number(c.opsMultiPlayerBaseBonus || 0.55);
-  const soloPenalty = (n <= 1) ? Number(c.opsMultiPlayerSoloPenalty || 0.75) : 0;
+    const base = Number(c.opsMultiPlayerBaseBonus || 0.60);
 
-  const bonus = base * presence * (0.5 + 0.5 * rem) * stageMult;
-  utility = utility + bonus - soloPenalty;
+    // Solo of bijna-solo: hard afwaarderen (anders verspillen bots deze kaarten)
+    // (bij n<=1 is presence 0, dus bonus valt al weg; dit maakt het extra duidelijk)
+    const soloPenalty = (n <= 1) ? Number(c.opsMultiPlayerSoloPenalty || 0.90) : 0;
+
+    // Urgency: hoe kleiner de groep wordt, hoe meer je "nu" moet spelen of het venster sluit.
+    // Als n groot is, is urgency klein; als n richting 2 gaat, urgency stijgt.
+    const urgency = clamp(1 - presence, 0, 1);
+
+    // bonus: targets aanwezig + nog spelers na jou (tempo) + stage
+    const bonus = base * presence * (0.45 + 0.55 * rem) * stageMult;
+
+    // urgency boost: alleen zinvol als er nog targets zijn (presence>0)
+    const urgencyBoost = Number(c.opsMultiPlayerUrgencyBoost || 0.35) * presence * urgency;
+
+    utility = utility + bonus + urgencyBoost - soloPenalty;
+  }
 }
 
 return { play, utility, baseU };
-
-}
 
 export function evaluateOpsActions({ game, me, players, flagsRound = null, cfg = null }) {
   const c = { ...DEFAULTS, ...(cfg || {}) };
