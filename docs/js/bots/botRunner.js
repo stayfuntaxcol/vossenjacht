@@ -2726,7 +2726,7 @@ const playersForDecision = base.length
     const isLead = computeIsLeadForPlayer(g, p, playersForDecision);
 
  // ✅ CANON: alleen burrowUsedThisRaid
-const burrowUsed = !!(p?.burrowUsedThisRaid ?? p?.burrowUsed);
+const burrowUsed = (p?.burrowUsedThisRaid === true);
 
 // ✅ strategy + heuristics verwachten me.burrowUsed (alias); ook burrowUsedThisRaid consistent maken
 const meForDecision = {
@@ -2893,11 +2893,11 @@ try {
       ? Number(dec.meta.dashPushNext)
       : (Number.isFinite(Number(p?.dashPush)) ? Number(p.dashPush) : 0);
 
-    const update = {
-      decision,
-      ...(Number.isFinite(Number(dashPushNext)) ? { dashPush: dashPushNext } : {}),
-      ...(decision === "BURROW" && !burrowUsed ? { burrowUsedThisRaid: true, burrowUsed: true } : {}),
-    };
+  const update = {
+  decision,
+  ...(Number.isFinite(Number(dashPushNext)) ? { dashPush: dashPushNext } : {}),
+  // 👇 NIET hier zetten. Engine consume't BURROW bij REVEAL.
+};
 
     tx.update(pRef, update);
 
