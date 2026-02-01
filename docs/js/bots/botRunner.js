@@ -1198,7 +1198,12 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
 
   try {
     const hand = Array.isArray(bot?.hand) ? bot.hand : [];
-    if (!hand.length) return null;
+    if (!hand.length) {
+      if (game?.debugBots) {
+        console.log("[OPS]", bot?.id, "hand", 0, "best", "PASS", "emptyHand");
+      }
+      return null;
+    }
    
     const handNames = hand
     .map((c) => String(c?.name || c || "").trim())
@@ -1454,24 +1459,34 @@ const res = evaluateOpsActions({
   flagsRound: flags,
   cfg: getStrategyCfgForBot(bot, game), // behoud: per-bot DISC overrides (+ optioneel game.botDiscProfiles)
 });
-    
-// ✅ Respecteer strategy: als best = PASS → echt PASS
-if (res?.best?.kind !== "PLAY") return null;
 
 const passU0 = Number(res?.baseline?.passUtility ?? 0);
 const req0 = Number(res?.meta?.requiredGain ?? 0);
 const minU0 = passU0 + req0;
-    
-    if (game?.debugBots) {
-      console.log(
-        "[OPS]",
-        bot.id,
-        "hand", (bot.hand || []).length,
-        "best", res?.best?.kind, res?.best?.reason,
-        "bestU", res?.best?.utility,
-        "topU", res?.ranked?.[0]?.utility
-      );
-    }
+
+if (game?.debugBots) {
+  const bestKind = String(res?.best?.kind || "PASS");
+  const bestReason = String(res?.best?.reason || "unknown");
+  const top = res?.ranked?.[0];
+  console.log(
+    "[OPS]",
+    bot.id,
+    "hand", (bot.hand || []).length,
+    "best", bestKind, bestReason,
+    "bestU", res?.best?.utility,
+    "passU", passU0,
+    "req", req0,
+    "minU", minU0,
+    "plays", (res?.best?.plays?.length ?? 0),
+    "ranked", (res?.ranked?.length ?? 0),
+    "top", top?.kind, top?.reason,
+    "topU", top?.utility
+  );
+}
+
+// ✅ Respecteer strategy: als best = PASS → echt PASS
+if (res?.best?.kind !== "PLAY") return null;
+
 
     const candidates = [];
 candidates.push(...(res.best.plays || []));
