@@ -18,7 +18,7 @@ import {
   evaluateMoveOptions,
   evaluateOpsActions,
   evaluateDecision,
-} from "./core/strategy.js";
+} from "./core/strategy_no_restrictions.js";
 
 import { computeDangerMetrics, computeCarryValue, computeCarryValueRec } from "./core/metrics.js";
 
