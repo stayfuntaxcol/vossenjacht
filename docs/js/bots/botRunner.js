@@ -1502,7 +1502,6 @@ const usedIds = (
 )
   ? game.discardThisRoundActionIds.map((x) => String(x))
   : (Array.isArray(discardThisRoundActionIds) ? discardThisRoundActionIds : []);
-
 // --- OPS cfg: clamped zodat bots vaker kaarten durven spelen ---
 const cfg0 = { ...(getStrategyCfgForBot(bot, game) || {}) };
 
@@ -1530,8 +1529,11 @@ const res = evaluateOpsActions({
   cfg: cfg0,
 });
 
-const req0 = Number(res?.meta?.requiredGain ?? 0);
+// baseline + drempel (1x, uniek)
+const passU_base = Number(res?.baseline?.passUtility ?? res?.meta?.passU ?? 0);
+const reqGain_base = Number(res?.meta?.requiredGain ?? 0);
 const reserveTarget = Number(res?.meta?.reserveTarget ?? 0);
+
 const handN = Array.isArray(bot?.hand) ? bot.hand.length : 0;
 const topU = Number(res?.ranked?.[0]?.utility ?? -1e9);
 
@@ -1542,8 +1544,8 @@ if (game?.debugBots) {
     bot.id,
     "hand", handN,
     "best", res?.best?.kind, res?.best?.reason,
-    "passU", passU0,
-    "req", req0,
+    "passU", passU_base,
+    "req", reqGain_base,
     "topU", topU,
     "reserveTarget", reserveTarget,
     "unimplMult", cfg0.actionUnimplementedMult
@@ -1553,7 +1555,7 @@ if (game?.debugBots) {
 // Soft-play: als strategy PASS zegt, maar je hebt > reserveTarget of er is veel danger → toch top candidate proberen
 const dangerNextNum = Number(dangerNext || 0);
 const allowSoft = (handN > reserveTarget) || (dangerNextNum >= 6);
-const softReq = Math.max(0.15, req0 * 0.35);
+const softReq = Math.max(0.15, reqGain_base * 0.35);
 
 // Bouw actionCandidates (PLAY of soft-top)
 const actionCandidates = [];
@@ -1563,15 +1565,14 @@ if (res?.best?.kind === "PLAY") actionCandidates.push(...(res.best.plays || []))
 
 // soft route
 if (allowSoft && Array.isArray(res?.ranked)) {
-  const minU = passU0 + softReq;
+  const minU_soft = passU_base + softReq;
   for (const r of res.ranked) {
-    if (r?.play && Number(r.utility) >= minU) actionCandidates.push(r.play);
+    if (r?.play && Number(r.utility) >= minU_soft) actionCandidates.push(r.play);
   }
 }
 
 // Als nog steeds niks → PASS
 if (!actionCandidates.length) return null;
-
 
 const passU_base = Number(res?.baseline?.passUtility ?? 0);
 const reqGain_base = Number(res?.meta?.requiredGain ?? 0);
@@ -1593,7 +1594,7 @@ candidates.push(...(res.best.plays || []));
 
 // ranked alleen als ze óók boven de drempel zitten (fallback als best play illegaal is)
 for (const r of (res?.ranked || [])) {
-  if (r?.play && Number(r.utility) >= minU0) candidates.push(r.play);
+  if (r?.play && Number(r.utility) >= minU0_base) candidates.push(r.play);
 }
     
     const botPlayedSet = new Set(botPlayedActionIdsThisRound);
