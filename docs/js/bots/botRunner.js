@@ -2848,8 +2848,14 @@ if (!useStrategy && decision === "LURK") {
     } catch (e) {}
   }
 
-  if (!Number.isFinite(dStay)) dStay = 10;
-  if (dStay > 3.0) decision = "DASH";
+  // Unknown nextEvent (noPeek + no intel): gebruik onze geschatte risk i.p.v. "altijd lethal"
+if (!Number.isFinite(dStay)) {
+  dStay = Number(metricsNow?.dangerStay ?? metricsNow?.dangerEffective ?? 0);
+}
+
+// Als staying risky lijkt: BURROW eerst, pas DASH als BURROW op is
+if (dStay > 3.0) decision = burrowUsedThisRaid ? "DASH" : "BURROW";
+
 }
 
   // ===== HARD RULE: eigen DEN_* (zonder Den Signal) => LURK is lethal (caught)
