@@ -3,7 +3,7 @@
 // CANON rules:
 // - No preset may push DASH/BURROW based on carry/loot.
 // - Presets may only tune "style" weights for action scoring (risk/info/control/tempo/loot),
-//   but final DECISION (LURK/BURROW/DASH) stays governed by strategy.js CANON.
+//   but final DECISION (LURK/BURROW/DASH) stays governed by strategy_no_restrictions.js CANON.
 
 const DEN = (x) => String(x || "").trim().toUpperCase();
 
