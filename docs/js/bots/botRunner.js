@@ -1253,6 +1253,11 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
   }
 
   try {
+
+    let passU_base = 0;
+    let reqGain_base = 0;
+    let reserveTarget = 0;
+
     const hand = Array.isArray(bot?.hand) ? bot.hand : [];
     if (!hand.length) return null;
    
@@ -1530,9 +1535,9 @@ const res = evaluateOpsActions({
 });
 
 // baseline + drempel (1x, uniek)
-const passU_base = Number(res?.baseline?.passUtility ?? res?.meta?.passU ?? 0);
-const reqGain_base = Number(res?.meta?.requiredGain ?? 0);
-const reserveTarget = Number(res?.meta?.reserveTarget ?? 0);
+passU_base = Number(res?.baseline?.passUtility ?? res?.meta?.passU ?? 0);
+reqGain_base = Number(res?.meta?.requiredGain ?? 0);
+reserveTarget = Number(res?.meta?.reserveTarget ?? 0);
 
 const handN = Array.isArray(bot?.hand) ? bot.hand.length : 0;
 const topU = Number(res?.ranked?.[0]?.utility ?? -1e9);
@@ -1573,24 +1578,6 @@ if (allowSoft && Array.isArray(res?.ranked)) {
 
 // Als nog steeds niks → PASS
 if (!actionCandidates.length) return null;
-
-const passU_base = Number(res?.baseline?.passUtility ?? 0);
-const reqGain_base = Number(res?.meta?.requiredGain ?? 0);
-const minU_base = passU_base + reqGain_base;
-    
-    if (game?.debugBots) {
-      console.log(
-        "[OPS]",
-        bot.id,
-        "hand", (bot.hand || []).length,
-        "best", res?.best?.kind, res?.best?.reason,
-        "bestU", res?.best?.utility,
-        "topU", res?.ranked?.[0]?.utility
-      );
-    }
-
-    const candidates = [];
-candidates.push(...(res.best.plays || []));
 
 // ranked alleen als ze óók boven de drempel zitten (fallback als best play illegaal is)
 for (const r of (res?.ranked || [])) {
