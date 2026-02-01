@@ -1503,16 +1503,76 @@ const usedIds = (
   ? game.discardThisRoundActionIds.map((x) => String(x))
   : (Array.isArray(discardThisRoundActionIds) ? discardThisRoundActionIds : []);
 
+// --- OPS cfg: clamped zodat bots vaker kaarten durven spelen ---
+const cfg0 = { ...(getStrategyCfgForBot(bot, game) || {}) };
+
+// Belangrijk: default in strategy.js is 0.15 → dat maakt bijna alles "te laag"
+cfg0.actionUnimplementedMult = Math.max(Number(cfg0.actionUnimplementedMult ?? 0.15), 0.75);
+
+// Drempels omlaag (zonder alles random te maken)
+cfg0.opsMinAdvantage = Math.min(Number(cfg0.opsMinAdvantage ?? 1.0), 0.85);
+cfg0.opsMinAdvantageEarlyBonus = Math.min(Number(cfg0.opsMinAdvantageEarlyBonus ?? 0.2), 0.06);
+cfg0.actionPlayMinGain = Math.min(Number(cfg0.actionPlayMinGain ?? 0.9), 0.55);
+cfg0.actionReserveMinHand = Math.min(Number(cfg0.actionReserveMinHand ?? 2), 1);
+cfg0.opsReserveHandEarly = Math.min(Number(cfg0.opsReserveHandEarly ?? 3), 1);
+cfg0.opsReserveHandMid = Math.min(Number(cfg0.opsReserveHandMid ?? 2), 1);
+cfg0.opsReserveHandLate = Math.min(Number(cfg0.opsReserveHandLate ?? 1), 0);
+cfg0.opsPlayTaxBase = Math.min(Number(cfg0.opsPlayTaxBase ?? 0.85), 0.70);
+cfg0.opsSpendCostBase = Math.min(Number(cfg0.opsSpendCostBase ?? 0.40), 0.28);
+cfg0.opsThreatPlayBoost = Math.max(Number(cfg0.opsThreatPlayBoost ?? 0.6), 1.0);
+cfg0.opsThreatPlayTaxMult = Math.min(Number(cfg0.opsThreatPlayTaxMult ?? 0.8), 0.65);
+
 const res = evaluateOpsActions({
   game,
   me: bot,
   players: list,
   flagsRound: flags,
-  cfg: getStrategyCfgForBot(bot, game), // behoud: per-bot DISC overrides (+ optioneel game.botDiscProfiles)
+  cfg: cfg0,
 });
-    
-// ✅ Respecteer strategy: als best = PASS → echt PASS
-if (res?.best?.kind !== "PLAY") return null;
+
+const passU0 = Number(res?.baseline?.passUtility ?? 0);
+const req0 = Number(res?.meta?.requiredGain ?? 0);
+const reserveTarget = Number(res?.meta?.reserveTarget ?? 0);
+const handN = Array.isArray(bot?.hand) ? bot.hand.length : 0;
+const topU = Number(res?.ranked?.[0]?.utility ?? -1e9);
+
+// Debug ook als het PASS is (anders zie je niks)
+if (game?.debugBots) {
+  console.log(
+    "[OPS]",
+    bot.id,
+    "hand", handN,
+    "best", res?.best?.kind, res?.best?.reason,
+    "passU", passU0,
+    "req", req0,
+    "topU", topU,
+    "reserveTarget", reserveTarget,
+    "unimplMult", cfg0.actionUnimplementedMult
+  );
+}
+
+// Soft-play: als strategy PASS zegt, maar je hebt > reserveTarget of er is veel danger → toch top candidate proberen
+const dangerNextNum = Number(dangerNext || 0);
+const allowSoft = (handN > reserveTarget) || (dangerNextNum >= 6);
+const softReq = Math.max(0.15, req0 * 0.35);
+
+// Bouw candidates (PLAY of soft-top)
+const candidates = [];
+
+// normal route
+if (res?.best?.kind === "PLAY") candidates.push(...(res.best.plays || []));
+
+// soft route
+if (allowSoft && Array.isArray(res?.ranked)) {
+  const minU = passU0 + softReq;
+  for (const r of res.ranked) {
+    if (r?.play && Number(r.utility) >= minU) candidates.push(r.play);
+  }
+}
+
+// Als nog steeds niks → PASS
+if (!candidates.length) return null;
+
 
 const passU0 = Number(res?.baseline?.passUtility ?? 0);
 const req0 = Number(res?.meta?.requiredGain ?? 0);
