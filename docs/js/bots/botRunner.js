@@ -1530,7 +1530,6 @@ const res = evaluateOpsActions({
   cfg: cfg0,
 });
 
-const passU0 = Number(res?.baseline?.passUtility ?? 0);
 const req0 = Number(res?.meta?.requiredGain ?? 0);
 const reserveTarget = Number(res?.meta?.reserveTarget ?? 0);
 const handN = Array.isArray(bot?.hand) ? bot.hand.length : 0;
@@ -1573,10 +1572,9 @@ if (allowSoft && Array.isArray(res?.ranked)) {
 // Als nog steeds niks → PASS
 if (!candidates.length) return null;
 
-
-const passU0 = Number(res?.baseline?.passUtility ?? 0);
-const req0 = Number(res?.meta?.requiredGain ?? 0);
-const minU0 = passU0 + req0;
+const passU_base = Number(res?.baseline?.passUtility ?? 0);
+const reqGain_base = Number(res?.meta?.requiredGain ?? 0);
+const minU_base = passU_base + reqGain_base;
     
     if (game?.debugBots) {
       console.log(
