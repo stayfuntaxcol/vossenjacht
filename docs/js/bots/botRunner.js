@@ -1556,7 +1556,8 @@ const allowSoft = (handN > reserveTarget) || (dangerNextNum >= 6);
 const softReq = Math.max(0.15, req0 * 0.35);
 
 // Bouw candidates (PLAY of soft-top)
-const candidates = [];
+// ✅ NIET opnieuw declareren; alleen resetten
+candidates.length = 0;
 
 // normal route
 if (res?.best?.kind === "PLAY") candidates.push(...(res.best.plays || []));
