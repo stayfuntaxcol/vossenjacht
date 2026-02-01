@@ -18,7 +18,7 @@ import {
   evaluateMoveOptions,
   evaluateOpsActions,
   evaluateDecision,
-} from "./core/strategy_no_restrictions.js";
+} from "./core/strategy.js";
 
 import { computeDangerMetrics, computeCarryValue, computeCarryValueRec } from "./core/metrics.js";
 
@@ -1198,12 +1198,7 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
 
   try {
     const hand = Array.isArray(bot?.hand) ? bot.hand : [];
-    if (!hand.length) {
-      if (game?.debugBots) {
-        console.log("[OPS]", bot?.id, "hand", 0, "best", "PASS", "emptyHand");
-      }
-      return null;
-    }
+    if (!hand.length) return null;
    
     const handNames = hand
     .map((c) => String(c?.name || c || "").trim())
@@ -1459,34 +1454,24 @@ const res = evaluateOpsActions({
   flagsRound: flags,
   cfg: getStrategyCfgForBot(bot, game), // behoud: per-bot DISC overrides (+ optioneel game.botDiscProfiles)
 });
+    
+// ✅ Respecteer strategy: als best = PASS → echt PASS
+if (res?.best?.kind !== "PLAY") return null;
 
 const passU0 = Number(res?.baseline?.passUtility ?? 0);
 const req0 = Number(res?.meta?.requiredGain ?? 0);
 const minU0 = passU0 + req0;
-
-if (game?.debugBots) {
-  const bestKind = String(res?.best?.kind || "PASS");
-  const bestReason = String(res?.best?.reason || "unknown");
-  const top = res?.ranked?.[0];
-  console.log(
-    "[OPS]",
-    bot.id,
-    "hand", (bot.hand || []).length,
-    "best", bestKind, bestReason,
-    "bestU", res?.best?.utility,
-    "passU", passU0,
-    "req", req0,
-    "minU", minU0,
-    "plays", (res?.best?.plays?.length ?? 0),
-    "ranked", (res?.ranked?.length ?? 0),
-    "top", top?.kind, top?.reason,
-    "topU", top?.utility
-  );
-}
-
-// ✅ Respecteer strategy: als best = PASS → echt PASS
-if (res?.best?.kind !== "PLAY") return null;
-
+    
+    if (game?.debugBots) {
+      console.log(
+        "[OPS]",
+        bot.id,
+        "hand", (bot.hand || []).length,
+        "best", res?.best?.kind, res?.best?.reason,
+        "bestU", res?.best?.utility,
+        "topU", res?.ranked?.[0]?.utility
+      );
+    }
 
     const candidates = [];
 candidates.push(...(res.best.plays || []));
@@ -2846,7 +2831,7 @@ const burrowAttemptWhileUsed = (decision === "BURROW") && burrowUsedThisRaid;
 
 // Alleen als bot op LURK uitkomt: check of LURK (stay) veilig is op basis van nextEvent.
 // Onbekend => liever DASH dan dood.
-if (decision === "LURK") {
+if (!useStrategy && decision === "LURK") {
   let dStay = Number.NaN;
 
   if (nextEvent0) {
@@ -2871,6 +2856,10 @@ if (decision === "LURK") {
 // Alleen veilig: DASH of BURROW. Als BURROW al op is -> force DASH.
 // (En als bot al DASH kiest voor carry/Hidden Nest, laten we dat staan.)
 try {
+  if (useStrategy) {
+    // strategy decides; no post-overrides
+  } else {
+
   const ne = String(nextEvent0 || "");
   if (ne.startsWith("DEN_")) {
     const evDen = ne.slice(4).toUpperCase();
@@ -2883,10 +2872,15 @@ try {
       if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
     }
   }
-} catch (e) {}
 
-  // ===== HARD RULE: DOG_CHARGE / SECOND_CHARGE / MAGPIE_SNITCH => LURK is lethal
+  }
+} catch (e) {}
+// ===== HARD RULE: DOG_CHARGE / SECOND_CHARGE / MAGPIE_SNITCH => LURK is lethal
 try {
+  if (useStrategy) {
+    // strategy decides; no post-overrides
+  } else {
+
   const ne = String(nextEvent0 || "");
 
   // Den Signal immunity (zelfde stijl als DEN_* rule)
@@ -2903,8 +2897,9 @@ try {
   if (ne === "MAGPIE_SNITCH" && isLead) {
     if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
   }
-} catch (e) {}
 
+  }
+} catch (e) {}
 // ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
     if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
       const picked = pickHiddenNestDashSet({ game: g, gameId, players: playersForDecision || [] });
