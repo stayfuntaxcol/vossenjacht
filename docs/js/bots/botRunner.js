@@ -1555,23 +1555,23 @@ const dangerNextNum = Number(dangerNext || 0);
 const allowSoft = (handN > reserveTarget) || (dangerNextNum >= 6);
 const softReq = Math.max(0.15, req0 * 0.35);
 
-// Bouw candidates (PLAY of soft-top)
-// ✅ NIET opnieuw declareren; alleen resetten
-candidates.length = 0;
+// Bouw actionCandidates (PLAY of soft-top)
+const actionCandidates = [];
 
 // normal route
-if (res?.best?.kind === "PLAY") candidates.push(...(res.best.plays || []));
+if (res?.best?.kind === "PLAY") actionCandidates.push(...(res.best.plays || []));
 
 // soft route
 if (allowSoft && Array.isArray(res?.ranked)) {
   const minU = passU0 + softReq;
   for (const r of res.ranked) {
-    if (r?.play && Number(r.utility) >= minU) candidates.push(r.play);
+    if (r?.play && Number(r.utility) >= minU) actionCandidates.push(r.play);
   }
 }
 
 // Als nog steeds niks → PASS
-if (!candidates.length) return null;
+if (!actionCandidates.length) return null;
+
 
 const passU_base = Number(res?.baseline?.passUtility ?? 0);
 const reqGain_base = Number(res?.meta?.requiredGain ?? 0);
@@ -1605,7 +1605,7 @@ for (const r of (res?.ranked || [])) {
       "SCATTER",
     ]);
 
-    for (const play of candidates) {
+    for (const play of actionCandidates) {
       const id = String(play?.actionId || "").trim();
       if (!id) continue;
 
