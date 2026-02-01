@@ -353,63 +353,7 @@ function getStrategyCfgForBot(botOrPlayer, game = null) {
     if (/^(panic|rooster)/i.test(k)) delete merged[k];
   }
 
-  return tuneOpsCfgForMoreActionCards(merged, game);
-
-}
-
-function tuneOpsCfgForMoreActionCards(cfg, game) {
-  // Opt-out per raid (handig voor testen)
-  if (game && game.botOpsAggro === false) return cfg;
-
-  const out = { ...(cfg || {}) };
-
-  const num = (k, fb) => {
-    const v = Number(out[k]);
-    if (Number.isFinite(v)) return v;
-    const d = Number(BOT_UTILITY_CFG?.[k]);
-    return Number.isFinite(d) ? d : fb;
-  };
-
-  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-  const set = (k, v) => { out[k] = v; };
-
-  // ---- minder krampachtig sparen / sneller spelen ----
-  set("actionReserveMinHand", 1);                         // nooit 2/3 hier
-  set("actionPlayMinGain", Math.min(num("actionPlayMinGain", 0.9), 0.55));
-  set("actionPlayMinGainEarlyBonus", Math.min(num("actionPlayMinGainEarlyBonus", 0.2), 0.15));
-
-  set("opsMinAdvantage", Math.min(num("opsMinAdvantage", 1.0), 1.12));
-  set("opsMinAdvantageEarlyBonus", Math.min(num("opsMinAdvantageEarlyBonus", 0.2), 0.10));
-
-  // minder "spelen kost altijd veel"
-  set("opsPlayTaxBase", Math.min(num("opsPlayTaxBase", 0.85), 0.80));
-  set("opsPlayTaxEarlyMult", Math.min(num("opsPlayTaxEarlyMult", 1.15), 1.05));
-  set("opsPlayTaxLateMult", Math.min(num("opsPlayTaxLateMult", 0.85), 0.85));
-
-  // opportunity cost omlaag → durft kaarten te besteden
-  set("opsSpendCostBase", Math.min(num("opsSpendCostBase", 0.40), 0.40));
-  set("opsSpendCostEarlyMult", Math.min(num("opsSpendCostEarlyMult", 1.05), 1.00));
-  set("opsSpendCostLateMult", Math.min(num("opsSpendCostLateMult", 0.80), 0.85));
-
-  // minder reserve targets (spaar-kramp eruit)
-  set("opsReserveHandEarly", clamp(num("opsReserveHandEarly", 2), 1, 2));
-  set("opsReserveHandMid", clamp(num("opsReserveHandMid", 1), 0, 1));
-  set("opsReserveHandLate", 0);
-
-  // threat-mode eerder + sterker → meer plays als er gevaar aankomt
-  set("opsThreatDangerTrigger", Math.min(num("opsThreatDangerTrigger", 5.0), 4.5));
-  set("opsThreatPlayBoost", Math.max(num("opsThreatPlayBoost", 0.6), 0.85));
-  set("opsLeadThreatExtraBoost", Math.max(num("opsLeadThreatExtraBoost", 0.4), 0.65));
-  set("opsThreatPlayTaxMult", Math.min(num("opsThreatPlayTaxMult", 0.80), 0.75));
-
-  // minder vaak "highCombo" label → minder sparen om combo’s af te wachten
-  set("opsHighComboScore", Math.max(num("opsHighComboScore", 10), 12));
-  set("opsHighComboGainBonus", Math.min(num("opsHighComboGainBonus", 0.25), 0.15));
-
-  // combo drempel iets omlaag zodat 2-kaart plays vaker worden gekozen
-  set("comboMinGain", Math.min(num("comboMinGain", 1.4), 0.90));
-
-  return out;
+  return merged;
 }
 
 function extractIntelForDenShare({ game, player }) {
@@ -1253,11 +1197,6 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
   }
 
   try {
-
-    let passU_base = 0;
-    let reqGain_base = 0;
-    let reserveTarget = 0;
-
     const hand = Array.isArray(bot?.hand) ? bot.hand : [];
     if (!hand.length) return null;
    
@@ -1507,81 +1446,39 @@ const usedIds = (
 )
   ? game.discardThisRoundActionIds.map((x) => String(x))
   : (Array.isArray(discardThisRoundActionIds) ? discardThisRoundActionIds : []);
-// --- OPS cfg: clamped zodat bots vaker kaarten durven spelen ---
-const cfg0 = { ...(getStrategyCfgForBot(bot, game) || {}) };
-
-// Belangrijk: default in strategy.js is 0.15 → dat maakt bijna alles "te laag"
-cfg0.actionUnimplementedMult = Math.max(Number(cfg0.actionUnimplementedMult ?? 0.15), 0.75);
-
-// Drempels omlaag (zonder alles random te maken)
-cfg0.opsMinAdvantage = Math.min(Number(cfg0.opsMinAdvantage ?? 1.0), 0.85);
-cfg0.opsMinAdvantageEarlyBonus = Math.min(Number(cfg0.opsMinAdvantageEarlyBonus ?? 0.2), 0.06);
-cfg0.actionPlayMinGain = Math.min(Number(cfg0.actionPlayMinGain ?? 0.9), 0.55);
-cfg0.actionReserveMinHand = Math.min(Number(cfg0.actionReserveMinHand ?? 2), 1);
-cfg0.opsReserveHandEarly = Math.min(Number(cfg0.opsReserveHandEarly ?? 3), 1);
-cfg0.opsReserveHandMid = Math.min(Number(cfg0.opsReserveHandMid ?? 2), 1);
-cfg0.opsReserveHandLate = Math.min(Number(cfg0.opsReserveHandLate ?? 1), 0);
-cfg0.opsPlayTaxBase = Math.min(Number(cfg0.opsPlayTaxBase ?? 0.85), 0.70);
-cfg0.opsSpendCostBase = Math.min(Number(cfg0.opsSpendCostBase ?? 0.40), 0.28);
-cfg0.opsThreatPlayBoost = Math.max(Number(cfg0.opsThreatPlayBoost ?? 0.6), 1.0);
-cfg0.opsThreatPlayTaxMult = Math.min(Number(cfg0.opsThreatPlayTaxMult ?? 0.8), 0.65);
 
 const res = evaluateOpsActions({
   game,
   me: bot,
   players: list,
   flagsRound: flags,
-  cfg: cfg0,
+  cfg: getStrategyCfgForBot(bot, game), // behoud: per-bot DISC overrides (+ optioneel game.botDiscProfiles)
 });
+    
+// ✅ Respecteer strategy: als best = PASS → echt PASS
+if (res?.best?.kind !== "PLAY") return null;
 
-// baseline + drempel (1x, uniek)
-passU_base = Number(res?.baseline?.passUtility ?? res?.meta?.passU ?? 0);
-reqGain_base = Number(res?.meta?.requiredGain ?? 0);
-reserveTarget = Number(res?.meta?.reserveTarget ?? 0);
+const passU0 = Number(res?.baseline?.passUtility ?? 0);
+const req0 = Number(res?.meta?.requiredGain ?? 0);
+const minU0 = passU0 + req0;
+    
+    if (game?.debugBots) {
+      console.log(
+        "[OPS]",
+        bot.id,
+        "hand", (bot.hand || []).length,
+        "best", res?.best?.kind, res?.best?.reason,
+        "bestU", res?.best?.utility,
+        "topU", res?.ranked?.[0]?.utility
+      );
+    }
 
-const handN = Array.isArray(bot?.hand) ? bot.hand.length : 0;
-const topU = Number(res?.ranked?.[0]?.utility ?? -1e9);
-
-// Debug ook als het PASS is (anders zie je niks)
-if (game?.debugBots) {
-  console.log(
-    "[OPS]",
-    bot.id,
-    "hand", handN,
-    "best", res?.best?.kind, res?.best?.reason,
-    "passU", passU_base,
-    "req", reqGain_base,
-    "topU", topU,
-    "reserveTarget", reserveTarget,
-    "unimplMult", cfg0.actionUnimplementedMult
-  );
-}
-
-// Soft-play: als strategy PASS zegt, maar je hebt > reserveTarget of er is veel danger → toch top candidate proberen
-const dangerNextNum = Number(dangerNext || 0);
-const allowSoft = (handN > reserveTarget) || (dangerNextNum >= 6);
-const softReq = Math.max(0.15, reqGain_base * 0.35);
-
-// Bouw actionCandidates (PLAY of soft-top)
-const actionCandidates = [];
-
-// normal route
-if (res?.best?.kind === "PLAY") actionCandidates.push(...(res.best.plays || []));
-
-// soft route
-if (allowSoft && Array.isArray(res?.ranked)) {
-  const minU_soft = passU_base + softReq;
-  for (const r of res.ranked) {
-    if (r?.play && Number(r.utility) >= minU_soft) actionCandidates.push(r.play);
-  }
-}
-
-// Als nog steeds niks → PASS
-if (!actionCandidates.length) return null;
+    const candidates = [];
+candidates.push(...(res.best.plays || []));
 
 // ranked alleen als ze óók boven de drempel zitten (fallback als best play illegaal is)
 for (const r of (res?.ranked || [])) {
-  if (r?.play && Number(r.utility) >= minU0_base) candidates.push(r.play);
+  if (r?.play && Number(r.utility) >= minU0) candidates.push(r.play);
 }
     
     const botPlayedSet = new Set(botPlayedActionIdsThisRound);
@@ -1593,7 +1490,7 @@ for (const r of (res?.ranked || [])) {
       "SCATTER",
     ]);
 
-    for (const play of actionCandidates) {
+    for (const play of candidates) {
       const id = String(play?.actionId || "").trim();
       if (!id) continue;
 
