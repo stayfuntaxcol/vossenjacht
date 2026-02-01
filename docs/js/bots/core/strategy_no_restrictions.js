@@ -476,97 +476,79 @@ function canonUpdateDashPush({ cfg, dashPushNow, safeNow, dangerStay, endPressur
   export function evaluateDecision({ game, me, players, flagsRound = null, cfg = null, peekIntel = null }) {
   const cfg0 = { ...DEFAULTS, ...(cfg || {}) };
   const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
-  const intel = peekIntel || getPeekIntel({ game, me, flagsRound: flags, lookaheadN: cfg0.lookaheadN });
 
+  // --- Intel selection ---
+  // noPeek=false: we can read the public eventTrack (normal mode).
+  // noPeek=true: we ONLY use bot-owned intel (knownUpcomingEvents) if provided.
+  const intel = peekIntel || (!flags.noPeek ? getPeekIntel({ game, me, flagsRound: flags, lookaheadN: cfg0.lookaheadN }) : null);
   const events = safeArr(intel?.events).filter(Boolean).map(String);
 
-  // noPeek safety: only use known upcoming events; never peek track here
-  const nextId = events[0] || (!flags.noPeek ? nextEventId(game, 0) : null);
-
-  // If we genuinely don't know the next event, default to LURK (caller should avoid strategy in this case).
-  if (!nextId) {
-    return {
-      decision: "LURK",
-      meta: { reason: "no_intel", dashPushNext: getDashPush(me, cfg0), intel },
-    };
-  }
+  const nextId = (!flags.noPeek)
+    ? (events[0] || nextEventId(game, 0))
+    : (events[0] || null);
 
   const den = normColor(me?.color || me?.den || me?.denColor);
   const isLead = computeIsLead(game, me, players);
+  const burrowReady = canonIsBurrowReady(me);
+
+  // ===== FALLBACK (noPeek=true + no intel) =====
+  if (!nextId) {
+    const dashers = canonCountDashers(players);
+    const dashPushNow = getDashPush(me, cfg0);
+    const dashPushThreshold = canonDashPushThreshold(cfg0, dashers);
+
+    // End-pressure heuristic when you don't know what's coming:
+    // - if dashPush is high, go defensive (BURROW if possible, else DASH).
+    // - otherwise stay (LURK).
+    const decision = (dashPushNow >= dashPushThreshold)
+      ? (burrowReady ? "BURROW" : "DASH")
+      : "LURK";
+
+    return {
+      decision,
+      meta: {
+        reason: "no_intel_fallback",
+        dashers,
+        dashPushNow,
+        dashPushThreshold,
+      },
+    };
+  }
 
   const nextFacts = getEventFacts(String(nextId), { game, me, denColor: den, isLead, flagsRound: flagsRound || game?.flagsRound });
 
-  // danger of staying in-yard for the REVEAL
+  // Danger if you stay in-yard and choose LURK.
   const dangerStay = eventDangerForChoice({ eventId: nextId, choice: "LURK", game, me, players, flagsRound });
 
-  // CANON: Den Signal (when relevant) makes you safe -> always LURK
+  // Den Signal (when relevant) can make you safe -> allow LURK.
   const denSignalSafe = canonDenSignalRelevant({ game, me, flags, nextId });
 
   const safeMax = Number(cfg0.canonSafeDangerMax ?? DEFAULTS.canonSafeDangerMax ?? 3.0);
-  const cautionMax = Number(cfg0.canonCautionDangerMax ?? DEFAULTS.canonCautionDangerMax ?? 5.0);
-  const highMin = Number(cfg0.canonHighDangerMin ?? DEFAULTS.canonHighDangerMin ?? 6.5);
-  const critMin = Number(cfg0.canonCritDangerMin ?? DEFAULTS.canonCritDangerMin ?? 8.5);
-
   const safeNow = denSignalSafe || Number(dangerStay) <= safeMax;
 
   const isRooster3 = canonIsRooster3({ game, nextId, nextFacts });
 
-  // end-pressure in noPeek: either we know rooster3, or we have probabilistic pressure
-  const pThird = Number(me?.pThirdRooster ?? me?.metrics?.pThirdRooster ?? 0);
-  const pThirdThr = Number(cfg0.canonPThirdRoosterThreshold ?? DEFAULTS.canonPThirdRoosterThreshold ?? 0.75);
-  const endPressure = isRooster3 || (flags.noPeek && pThird >= pThirdThr);
-
-  const dashers = canonCountDashers(players);
-  const dashPushNow = getDashPush(me, cfg0);
-  const dashPushNext = canonUpdateDashPush({ cfg: cfg0, dashPushNow, safeNow, dangerStay, endPressure });
-  const dashPushThreshold = canonDashPushThreshold(cfg0, dashers);
-
-  const burrowReady = canonIsBurrowReady(me);
-
-  // ===== RULE 1: Rooster3 -> DASH always (anyone still in yard gets caught)
+  // ===== RULE 0: Rooster3 -> DASH always (anyone still in yard gets caught)
   if (isRooster3) {
     return {
       decision: "DASH",
-      meta: { nextEventIdUsed: nextId, isRooster3, dangerStay, safeNow, dashers, dashPushNow, dashPushNext, dashPushThreshold, intel },
+      meta: { reason: "rooster3", nextEventIdUsed: nextId, isRooster3, dangerStay, safeNow },
     };
   }
 
-  // ===== RULE 3: safe -> LURK
+  // ===== SIMPLE POLICY (your spec)
+  // safe  -> LURK (unless later you add an explicit Hidden Nest DASH override)
+  // danger-> BURROW if available, else DASH
   if (safeNow) {
     return {
       decision: "LURK",
-      meta: { nextEventIdUsed: nextId, isRooster3: false, dangerStay, safeNow, dashers, dashPushNow, dashPushNext, dashPushThreshold, intel },
+      meta: { reason: "safe_lurk", nextEventIdUsed: nextId, isRooster3: false, dangerStay, safeNow },
     };
   }
 
-  // ===== Emergency / high danger -> BURROW else DASH
-  if (Number(dangerStay) >= critMin || Number(dangerStay) >= highMin) {
-    return {
-      decision: burrowReady ? "BURROW" : "DASH",
-      meta: { nextEventIdUsed: nextId, isRooster3: false, dangerStay, safeNow, dashers, dashPushNow, dashPushNext, dashPushThreshold, intel },
-    };
-  }
-
-  // ===== Caution zone: still LURK, but build dashPush
-  if (Number(dangerStay) <= cautionMax) {
-    return {
-      decision: "LURK",
-      meta: { nextEventIdUsed: nextId, isRooster3: false, dangerStay, safeNow, dashers, dashPushNow, dashPushNext, dashPushThreshold, intel },
-    };
-  }
-
-  // ===== dashPush trigger (only when not safe): BURROW is the anti-DASH brake
-  if (dashPushNext >= dashPushThreshold) {
-    return {
-      decision: burrowReady ? "BURROW" : "DASH",
-      meta: { nextEventIdUsed: nextId, isRooster3: false, dangerStay, safeNow, dashers, dashPushNow, dashPushNext, dashPushThreshold, intel },
-    };
-  }
-
-  // ===== default: unsafe -> BURROW else DASH
   return {
     decision: burrowReady ? "BURROW" : "DASH",
-    meta: { nextEventIdUsed: nextId, isRooster3: false, dangerStay, safeNow, dashers, dashPushNow, dashPushNext, dashPushThreshold, intel },
+    meta: { reason: "danger_prefer_burrow", nextEventIdUsed: nextId, isRooster3: false, dangerStay, safeNow, burrowReady },
   };
 }
 
@@ -1519,4 +1501,3 @@ if (typeof window !== "undefined") {
   window.evaluateOpsActions = evaluateOpsActions;
   window.evaluateDecision = evaluateDecision;
 }
-
