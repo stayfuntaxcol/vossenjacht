@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vossenjacht Bot Analytics Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <div class="dashboard">
+    <!-- Header -->
+    <header class="dashboard-header">
+      <div class="header-left">
+        <h1>🦊 Bot Analytics Dashboard</h1>
+        <span class="version">v1.0</span>
+      </div>
+      <div class="header-right">
+        <label class="file-input-label">
+          <input type="file" id="logFileInput" accept=".json" />
+          📂 Import Log File
+        </label>
+        <button id="exportJsonBtn" class="btn btn-secondary" disabled>
+          💾 Export JSON
+        </button>
+        <button id="exportCsvBtn" class="btn btn-secondary" disabled>
+          📊 Export CSV
+        </button>
+      </div>
+    </header>
+    <!-- No Data State -->
+    <div id="noDataState" class="no-data-state">
+      <div class="no-data-icon">📁</div>
+      <h2>Geen log data geladen</h2>
+      <p>Importeer een JSON log bestand om bot beslissingen te analyseren</p>
+      <label class="file-input-label large">
+        <input type="file" id="logFileInputLarge" accept=".json" />
+        📂 Selecteer Log Bestand
+      </label>
+    </div>
+    <!-- Main Content (hidden until data loaded) -->
+    <main id="mainContent" class="dashboard-content" style="display: none;">
+      <!-- Summary Cards -->
+      <section class="summary-section">
+        <div class="summary-card">
+          <div class="summary-icon">🎯</div>
+          <div class="summary-data">
+            <span class="summary-value" id="totalDecisions">0</span>
+            <span class="summary-label">Totaal Beslissingen</span>
+          </div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-icon">🃏</div>
+          <div class="summary-data">
+            <span class="summary-value" id="cardsPlayed">0</span>
+            <span class="summary-label">Kaarten Gespeeld</span>
+          </div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-icon">⏭️</div>
+          <div class="summary-data">
+            <span class="summary-value" id="passRate">0%</span>
+            <span class="summary-label">Pass Rate</span>
+          </div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-icon">🏆</div>
+          <div class="summary-data">
+            <span class="summary-value" id="mostPlayedCard">-</span>
+            <span class="summary-label">Meest Gespeelde Kaart</span>
+          </div>
+        </div>
+      </section>
+      <!-- Bot Tracker Section -->
+      <section class="bot-tracker-section">
+        <h2>🤖 Bot Overzicht</h2>
+        <div class="bot-grid" id="botGrid">
+          <!-- Bot cards will be injected here -->
+        </div>
+      </section>
+      <!-- Decision Timeline -->
+      <section class="timeline-section">
+        <div class="timeline-header">
+          <h2>📜 Beslissingen Timeline</h2>
+          <div class="timeline-filters">
+            <select id="botFilter">
+              <option value="all">Alle Bots</option>
+            </select>
+            <select id="phaseFilter">
+              <option value="all">Alle Fases</option>
+              <option value="OPS">OPS Fase</option>
+              <option value="DECISION">DECISION Fase</option>
+            </select>
+            <select id="actionFilter">
+              <option value="all">Alle Acties</option>
+              <option value="PLAY">Kaart Gespeeld</option>
+              <option value="PASS">Gepast</option>
+            </select>
+          </div>
+        </div>
+        <div class="timeline-container" id="timelineContainer">
+          <!-- Timeline entries will be injected here -->
+        </div>
+      </section>
+      <!-- Card Analysis Section -->
+      <section class="analysis-section">
+        <h2>📊 Kaart Analyse</h2>
+        <div class="analysis-grid">
+          <div class="analysis-card">
+            <h3>Kaart Speelfrequentie</h3>
+            <div class="chart-container" id="cardFrequencyChart"></div>
+          </div>
+          <div class="analysis-card">
+            <h3>Score Distributie per Kaart</h3>
+            <div class="chart-container" id="scoreDistributionChart"></div>
+          </div>
+        </div>
+      </section>
+      <!-- Hand Viewer Modal -->
+      <div id="handViewerModal" class="modal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>🃏 Bot Hand - <span id="modalBotName">-</span></h3>
+            <button class="modal-close" id="closeModal">&times;</button>
+          </div>
+          <div class="modal-body">
+            <div class="hand-display" id="handDisplay">
+              <!-- Cards will be rendered here -->
+            </div>
+            <div class="score-breakdown" id="scoreBreakdown">
+              <!-- Score details will be rendered here -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script src="dashboard_patched.js"></script>
+</body>
+</html>
