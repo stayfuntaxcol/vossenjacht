@@ -31,7 +31,6 @@ import {
 
 const AUTO_FLOW = true;
 const AUTO_PAUSE_MS = 5000; // jouw “adempauze”
-const app = initializeApp(firebaseConfig);
 const db  = getFirestore(app);
 
 
