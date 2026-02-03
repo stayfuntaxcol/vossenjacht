@@ -1,3 +1,4 @@
+
 // host.js — VOSSENJACHT (clean host + bots in botRunner.js)
 // + PhaseGate (NextPhase READY/NOT READY)
 // + Raid Pause/Resume + auto-advance after 5s when paused
@@ -30,7 +31,44 @@ import {
 
 const AUTO_FLOW = true;
 const AUTO_PAUSE_MS = 5000; // jouw “adempauze”
-const db = getFirestore();
+const app = initializeApp(firebaseConfig);
+const db  = getFirestore(app);
+
+
+(async () => {
+  const db = window.__DB__ || window.__VJ_DB__;
+  const fs = window.__FS__ || window.__VJ_FS__;
+  if (!db || !fs) return console.error("Missing __DB__/__FS__ (patch host.html met Firestore handles).");
+
+  // probeer gameId te vinden (pas dit aan als jij het anders opslaat)
+  const gameId =
+    window.__GAME_ID__ ||
+    new URLSearchParams(location.search).get("gameId") ||
+    (location.hash.match(/gameId=([^&]+)/)?.[1]) ||
+    null;
+
+  if (!gameId) return console.error("Geen gameId gevonden. Zet window.__GAME_ID__ of voeg ?gameId=... toe.");
+
+  const { collection, getDocs, query, orderBy } = fs;
+
+  const actionsSnap = await getDocs(query(collection(db, "games", gameId, "actions"), orderBy("at")));
+  const actions = actionsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  const playersSnap = await getDocs(collection(db, "games", gameId, "players"));
+  const players = playersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  const payload = { gameId, actions, players };
+
+  const stamp = new Date().toISOString().slice(0,19).replace(/[:T]/g, "-");
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `vj_export_${gameId}_${stamp}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+
+  console.log("Export klaar:", payload);
+})();
 
 // ===== DEV EXPORT HOOKS (voor JSON export in console) =====
 try {
