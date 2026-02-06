@@ -31,8 +31,6 @@ import {
 
 const AUTO_FLOW = true;
 const AUTO_PAUSE_MS = 5000; // jouw “adempauze”
-const db  = getFirestore(app);
-
 
 (async () => {
   const db = window.__DB__ || window.__VJ_DB__;
