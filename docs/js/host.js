@@ -283,6 +283,7 @@ let unsubActions = null;
 
 let latestPlayers = [];
 let latestGame = null;
+let __unsubLog = null;
 
 let currentLeadFoxId = null;
 let currentLeadFoxName = "";
@@ -2524,25 +2525,35 @@ onSnapshot(playersColRef, (snapshot) => {
       return `[R${round} – ${phase} – ${e.kind ?? "?"}] ${e.message ?? ""}`;
     }
 
-    onSnapshot(logQuery, (snap) => {
-      const entries = [];
-      snap.forEach((docSnap) => entries.push(docSnap.data()));
-      entries.reverse();
+ // LOG SNAPSHOT (zorgt dat er maar 1 listener actief is)
+if (__unsubLog) __unsubLog();
 
-      if (!logPanel) return;
-      logPanel.innerHTML = "";
+__unsubLog = onSnapshot(
+  logQuery,
+  (snap) => {
+    const entries = [];
+    snap.forEach((docSnap) => entries.push(docSnap.data()));
+    entries.reverse();
 
-      const inner = document.createElement("div");
-      inner.className = "log-lines";
+    if (!logPanel) return;
+    logPanel.innerHTML = "";
 
-      entries.forEach((e) => {
-        const div = document.createElement("div");
-        div.className = "log-line";
-        div.textContent = formatLogLine(e);
-        inner.appendChild(div);
-      });
+    const inner = document.createElement("div");
+    inner.className = "log-lines";
 
-      logPanel.appendChild(inner);
+    entries.forEach((e) => {
+      const div = document.createElement("div");
+      div.className = "log-line";
+      div.textContent = formatLogLine(e);
+      inner.appendChild(div);
     });
+
+    logPanel.appendChild(inner);
+  },
+  (err) => {
+    console.error("[LOG SNAPSHOT] onSnapshot error:", err?.code, err?.message, err);
+  }
+);
+
   }
 });
