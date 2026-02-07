@@ -2140,6 +2140,9 @@ if (share && denColor) {
       phase: "MOVE",
       playerId: botId,
       playerName: p.name || "BOT",
+      botColor: normColor(p.color || p.den || p.denColor),
+      discProfile: (DISC_BY_DEN[normColor(p.color || p.den || p.denColor)] || null),
+      hand,
       choice: `MOVE_${did.kind}`,
       message: `BOT deed ${did.kind} (${did.detail})`,
       kind: "BOT_MOVE",
@@ -2369,6 +2372,9 @@ if (!alreadyPlayedThisRound && !play) passReason = "LOW_VALUE_OR_HOLD_FOR_COMBO"
         phase: "ACTIONS",
         playerId: botId,
         playerName: p.name || "BOT",
+        botColor: normColor(p.color || p.den || p.denColor),
+        discProfile: (DISC_BY_DEN[normColor(p.color || p.den || p.denColor)] || null),
+        hand,
         choice: "ACTION_PASS",
         message: "BOT kiest PASS",
         kind: "BOT_OPS",
@@ -2675,6 +2681,9 @@ const extraGameUpdates = {
       phase: "ACTIONS",
       playerId: botId,
       playerName: p.name || "BOT",
+      botColor: normColor(p.color || p.den || p.denColor),
+      discProfile: (DISC_BY_DEN[normColor(p.color || p.den || p.denColor)] || null),
+      hand,
       choice: `ACTION_${cardName}`,
       message: msg,
       kind: "BOT_OPS",
@@ -2721,6 +2730,9 @@ await runTransaction(db, async (tx) => {
     const p = { id: pSnap.id, ...pSnap.data() };
 
     if (!canBotDecide(g, p)) return;
+
+    const hand = Array.isArray(p?.hand) ? [...p.hand] : [];
+
 
     // ✅ gebruik de outside snapshot, maar update "me" naar de tx-versie
 const base = Array.isArray(freshPlayersOuter) && freshPlayersOuter.length
@@ -2937,6 +2949,9 @@ try {
       phase: "DECISION",
       playerId: botId,
       playerName: p.name || "BOT",
+      botColor: normColor(p.color || p.den || p.denColor),
+      discProfile: (DISC_BY_DEN[normColor(p.color || p.den || p.denColor)] || null),
+      hand,
       choice: `DECISION_${decision}`,
       message: `BOT kiest ${decision}`,
       kind: "BOT_DECISION",
