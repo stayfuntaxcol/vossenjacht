@@ -779,23 +779,98 @@ export function scoreActionFacts(actionKey, opts = {}) {
 
   // E) Kick Up Dust rare
   const isKickUpDust = a.id === "KICK_UP_DUST";
-  if (isKickUpDust) {
-    const { isLast, scoreBehind } = getScoreRankHints(opts);
-    const hailMary = isLast || scoreBehind >= 6;
+  const isKickUpDust = a.id === "KICK_UP_DUST";
+if (isKickUpDust) {
+  // default: quite risky, so only valuable if it prevents a known threat OR denies someone's intel play
+  soft.risk += 1.25;
 
-    if (emergency && !ctx?._handMeta?.hasDefense) {
-      soft.tempo += 1.5;
-      soft.control += 1.0;
-      soft.risk -= 0.5;
-    } else if (hailMary) {
-      soft.tempo += 0.75;
-      soft.risk += 0.75;
-    } else {
-      soft.risk += 7.0;
-      soft.control -= 2.0;
-      soft.tempo -= 2.0;
-    }
+  const roundNow = Number(opts?.game?.round ?? 0);
+  const disc = Array.isArray(opts?.game?.actionDiscard) ? opts.game.actionDiscard : [];
+  const discThis = disc.filter((d) => Number(d?.round) === roundNow);
+  const names = discThis.map((d) => String(d?.name || "").toLowerCase());
+
+  const players = Array.isArray(opts?.players) ? opts.players : [];
+  const enemyScoutThisRound = players.some((p) =>
+    String(p?.id) !== String(opts?.me?.id) &&
+    Number(p?.lastMoveRound) === roundNow &&
+    String(p?.lastMoveKind || "").toUpperCase().includes("SCOUT")
+  );
+
+  const enemyNose = names.some((n) => n.includes("nose for trouble"));
+  const enemyDenSignal = names.some((n) => n.includes("den signal"));
+
+  const presetUp = String(presetKey || "").toUpperCase();
+  const canDeny = presetUp === "RED" || presetUp === "BLUE"; // D/C profielen
+
+  // deny bonuses (D/C only)
+  if (canDeny) {
+    if (enemyScoutThisRound) soft.control += 1.2;
+    if (enemyNose) soft.control += 0.9;
+    if (enemyDenSignal) soft.control += 0.7;
   }
+
+  // avoid spam: if already shuffled this round, punish
+  const kudAlready = names.some((n) => n.includes("kick up dust"));
+  if (kudAlready) soft.control -= 1.2;
+
+  // In general: KUD is last resort unless it flips an incoming lethal next event (handled elsewhere)
+}
+// --- Extra card IQ (Nose / Molting / Mask Swap) ---
+const isNoseForTrouble = a.id === "NOSE_FOR_TROUBLE";
+if (isNoseForTrouble) {
+  const next0 = String(ctx?.nextEventId || "");
+  const known0 =
+    (!!next0 && ctx?.nextKnown) ||
+    (Array.isArray(opts?.me?.knownUpcomingEvents) && String(opts.me.knownUpcomingEvents[0]) === next0);
+
+  // Big reward only if next card is really known (Scout / intel)
+  if (known0) {
+    soft.loot += 2.2;
+    soft.info += 1.0;
+    soft.tempo += 0.25;
+  } else {
+    soft.loot += 0.4;
+    soft.info += 0.15;
+    soft.risk += 0.6;
+  }
+
+  // If Kick Up Dust already happened this round, prediction is unreliable
+  const roundNow = Number(opts?.game?.round ?? 0);
+  const disc = Array.isArray(opts?.game?.actionDiscard) ? opts.game.actionDiscard : [];
+  const names = disc.filter((d) => Number(d?.round) === roundNow).map((d) => String(d?.name || "").toLowerCase());
+  if (names.some((n) => n.includes("kick up dust"))) soft.loot -= 0.7;
+}
+
+const isMoltingMask = a.id === "MOLTING_MASK";
+if (isMoltingMask) {
+  const next0 = String(ctx?.nextEventId || "");
+  const myCol = String(opts?.me?.color || opts?.me?.den || opts?.me?.denColor || "").toUpperCase();
+  const isMyDen = myCol && next0.startsWith("DEN_") && next0.toUpperCase().includes(myCol);
+
+  // Molting is only worth it when YOUR den event is coming and risky
+  if (isMyDen) {
+    soft.risk -= 0.6;
+    soft.control += 0.6;
+  } else {
+    soft.control -= 0.8;
+  }
+}
+
+const isMaskSwap = a.id === "MASK_SWAP";
+if (isMaskSwap) {
+  // Aggressive disruption tool: best in D/C profiles (RED/BLUE). Otherwise keep it rare.
+  const presetUp = String(presetKey || "").toUpperCase();
+  const canSwap = presetUp === "RED" || presetUp === "BLUE";
+  if (canSwap) {
+    soft.control += 0.9;
+    soft.risk += 0.4;
+  } else {
+    soft.control -= 0.8;
+    soft.risk += 0.6;
+  }
+}
+
+
 
   // F) defense more valuable at high danger
   if (dangerNext >= 7 && isDefenseAction(a)) {
@@ -1289,3 +1364,4 @@ export function recommendDecision(opts = {}) {
     safeBySignal,
   };
 }
+
