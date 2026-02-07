@@ -2477,8 +2477,10 @@ onSnapshot(playersColRef, (snapshot) => {
   // LOG PANEL (host-only)
   // ===============================
   if (!isBoardOnly) {
-    const logCol = collection(db, "games", gameId, "log");
-    const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
+   const logCol = collection(db, "games", gameId, "log");
+const logQuery = query(logCol, orderBy("createdAt", "desc"), limit(10));
+
+if (__unsubLog) { __unsubLog(); __unsubLog = null; }
 
     function formatChoiceForDisplay(phase, rawChoice, payload) {
       const choice = String(rawChoice || "");
@@ -2526,8 +2528,6 @@ onSnapshot(playersColRef, (snapshot) => {
     }
 
  // LOG SNAPSHOT (zorgt dat er maar 1 listener actief is)
-if (__unsubLog) __unsubLog();
-
 __unsubLog = onSnapshot(
   logQuery,
   (snap) => {
