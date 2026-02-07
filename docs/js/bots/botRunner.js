@@ -2727,13 +2727,6 @@ extraGameUpdates.opsVersion = Number(g.opsVersion || 0) + 1;
   }
 }
 
-flagsRound }),
-    };
-  });
-
-  if (logPayload) await logBotAction({ db, gameId, addLog: null, payload: logPayload });
-}
-
 async function fetchPlayersOutsideTx(db, gameId, latestPlayers = []) {
   const ids = (latestPlayers || []).map((x) => x?.id).filter(Boolean);
 
