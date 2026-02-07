@@ -1288,7 +1288,8 @@ if (facts?.engineImplemented === false && !RUNNER_IMPLEMENTED.has(actionId)) {
 
     // only pay off if you likely stay in the Yard for REVEAL
     const sim0 = simulateActionOnce({ play, game, me, players, flagsRound: flags, cfg: c, seedTag: "NOSE" });
-    const a0 = evaluateDecision({ game: sim0.game, me: sim0.me, players: sim0.players, flagsRound: sim0.flagsRound, cfg: c, peekIntel: ai });
+    const intelNose = getPeekIntel({ game: sim0.game, me: sim0.me, flagsRound: sim0.flagsRound, lookaheadN: c.lookaheadN });
+    const a0 = evaluateDecision({ game: sim0.game, me: sim0.me, players: sim0.players, flagsRound: sim0.flagsRound, cfg: c, peekIntel: intelNose });
     const willStay = String(a0?.decision || "").toUpperCase() === "LURK";
 
     utility += (willStay ? 1 : 0) * pCorrect * lootU;
