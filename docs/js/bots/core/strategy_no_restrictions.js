@@ -415,11 +415,18 @@ function canonCountDashers(players = []) {
 }
 
 function canonIsBurrowReady(me) {
-  const used = !!(me?.burrowUsedThisRaid ?? me?.burrowUsed);
+  // BURROW is 1× per RAID (burrowUsedThisRaid) and optionally also 1× per MATCH (burrowUsed).
+  // Use OR (NOT ??) so burrowUsed=true still blocks even if burrowUsedThisRaid is explicitly false.
+  const used = !!(me?.burrowUsedThisRaid || me?.burrowUsed);
   if (used) return false;
   if (me?.burrowCharges != null) return Number(me.burrowCharges) > 0;
   return true;
 }
+
+export function canUseBurrow(me) {
+  return canonIsBurrowReady(me);
+}
+
 
 function canonDenSignalRelevant({ game, me, flags, nextId }) {
   const den = normColor(me?.color || me?.den || me?.denColor);
@@ -1666,4 +1673,5 @@ if (typeof window !== "undefined") {
   window.evaluateOpsActions = evaluateOpsActions;
   window.evaluateDecision = evaluateDecision;
 }
+
 
