@@ -2287,8 +2287,15 @@ function shuffleFutureTrack(game) {
   const track = Array.isArray(game?.eventTrack) ? [...game.eventTrack] : [];
   const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : 0;
   if (track.length <= 1) return null;
+
   const locked = track.slice(0, idx);
-  coasync function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
+  const future = track.slice(idx);
+  const shuffled = shuffleArray(future);
+
+  return [...locked, ...shuffled];
+}
+
+  async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
   const gRef = doc(db, "games", gameId);
   const pRef = doc(db, "games", gameId, "players", botId);
 
