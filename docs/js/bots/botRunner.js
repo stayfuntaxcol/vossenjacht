@@ -45,6 +45,9 @@ const LOCK_MS = 1800;
 // UI pacing: played Action Cards must stay visible (face-up) on the Discard Pile
 const OPS_DISCARD_VISIBLE_MS = 3100;
 
+// After every played Action Card: log a full-bot "OPS snapshot" with fresh metrics
+const OPS_SNAPSHOT_ENABLED = true;
+
 // DISC mapping per Den kleur
 const DISC_BY_DEN = { RED: "D", YELLOW: "I", GREEN: "S", BLUE: "C" };
 
@@ -409,7 +412,7 @@ function isGameFinished(game) {
 }
 
 function isInYard(p) {
-  return p?.inYard !== false && !p?.dashed;
+  return p?.inYard !== false && !p?.dashed && !p?.caught;
 }
 
 function sumLootPoints(p) {
@@ -2285,14 +2288,17 @@ function shuffleFutureTrack(game) {
   const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : 0;
   if (track.length <= 1) return null;
   const locked = track.slice(0, idx);
-  const future = track.slice(idx);
-  if (future.length <= 1) return null;
-  return [...locked, ...shuffleArray(future)];
-}
-
-async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
+  coasync function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
   const gRef = doc(db, "games", gameId);
   const pRef = doc(db, "games", gameId, "players", botId);
+
+
+  // ✅ ALWAYS use fresh players snapshot outside the transaction
+  // so this bot reacts to OPS cards that were just played by others.
+  const freshPlayersOuter = await fetchPlayersOutsideTx(db, gameId, latestPlayers);
+  const playersForOps = Array.isArray(freshPlayersOuter) && freshPlayersOuter.length
+    ? freshPlayersOuter
+    : (Array.isArray(latestPlayers) ? latestPlayers : []);
 
   let logPayload = null;
 
@@ -2340,7 +2346,7 @@ let passReason = null;
 
 const play = alreadyPlayedThisRound
   ? (passReason = "ALREADY_PLAYED_THIS_ROUND", null)
-  : await pickBestActionFromHand({ db, gameId, game: g, bot: p, players: latestPlayers || [] });
+  : await pickBestActionFromHand({ db, gameId, game: g, bot: p, players: playersForOps });
 
 // als strategy PASS zegt (pickBestActionFromHand → null)
 if (!alreadyPlayedThisRound && !play) passReason = "LOW_VALUE_OR_HOLD_FOR_COMBO";
@@ -2379,7 +2385,7 @@ if (!alreadyPlayedThisRound && !play) passReason = "LOW_VALUE_OR_HOLD_FOR_COMBO"
         message: "BOT kiest PASS",
         kind: "BOT_OPS",
         at: Date.now(),
-        metrics: buildBotMetricsForLog({ game: g, bot: botAfter, players: latestPlayers || [], flagsRoundOverride: flagsRound }),
+        metrics: buildBotMetricsForLog({ game: g, bot: botAfter, players: playersForOps, flagsRoundOverride: flagsRound }),
       };
       return;
     }
@@ -2433,7 +2439,7 @@ if (!removed) {
     message: `BOT wilde spelen maar kaart niet gevonden → PASS (name="${String(play?.name||"")}", id="${String(play?.actionId||"")}")`,
     kind: "BOT_OPS",
     at: Date.now(),
-    metrics: buildBotMetricsForLog({ game: g, bot: botAfter, players: latestPlayers || [], flagsRoundOverride: flagsRound }),
+    metrics: buildBotMetricsForLog({ game: g, bot: botAfter, players: playersForOps, flagsRoundOverride: flagsRound }),
   };
   return;
 }
@@ -2459,9 +2465,13 @@ if (dIds.length > 30) dIds.splice(0, dIds.length - 30);
 
 const extraGameUpdates = {
   lastActionPlayed: { name: cardName, by: botId, round: Number(g.round || 0), at: nowMs },
-  opsHoldUntilMs: nowMs + 650,
+  opsHoldUntilMs: nowMs + OPS_DISCARD_VISIBLE_MS,
   discardThisRoundActionIds: dIds,
 };
+
+// ✅ step/version counters: makes per-action snapshots traceable
+extraGameUpdates.opsStep = Number(g.opsStep || 0) + 1;
+extraGameUpdates.opsVersion = Number(g.opsVersion || 0) + 1;
 
     // effects
     if (effName === "Den Signal") {
@@ -2490,7 +2500,10 @@ const extraGameUpdates = {
     if (effName === "Kick Up Dust") {
       if (!flagsRound.lockEvents) {
         const newTrack = shuffleFutureTrack(g);
-        if (newTrack) extraGameUpdates.eventTrack = newTrack;
+        if (newTrack) {
+          extraGameUpdates.eventTrack = newTrack;
+          extraGameUpdates.eventTrackVersion = Number(g.eventTrackVersion || 0) + 1;
+        }
       }
     }
 
@@ -2576,7 +2589,7 @@ const extraGameUpdates = {
     }
 
     if (cardName === "Follow the Tail") {
-      const targetId = pickRichestTarget(latestPlayers || [], botId);
+      const targetId = pickRichestTarget(playersForOps || [], botId);
       if (targetId) {
         const ft = { ...(flagsRound.followTail || {}) };
         ft[botId] = targetId;
@@ -2688,7 +2701,26 @@ const extraGameUpdates = {
       message: msg,
       kind: "BOT_OPS",
       at: Date.now(),
-      metrics: buildBotMetricsForLog({ game: gAfter, bot: botAfter, players: latestPlayers || [], flagsRoundOverride: flagsRound }),
+      metrics: buildBotMetricsForLog({ game: gAfter, bot: botAfter, players: playersForOps, flagsRoundOverride: flagsRound }),
+    };
+  });
+
+  if (logPayload) await logBotAction({ db, gameId, addLog: null, payload: logPayload });
+
+
+  // ✅ After EVERY played Action Card: recompute & log snapshots for ALL bots
+  if (
+    OPS_SNAPSHOT_ENABLED &&
+    logPayload &&
+    String(logPayload.choice || "").startsWith("ACTION_") &&
+    String(logPayload.choice || "") !== "ACTION_PASS"
+  ) {
+    const cardName = String(logPayload.choice || "").replace(/^ACTION_/, "");
+    await logOpsSnapshotAfterAction({ db, gameId, byId: botId, cardName });
+  }
+}
+
+flagsRound }),
     };
   });
 
@@ -2709,6 +2741,107 @@ async function fetchPlayersOutsideTx(db, gameId, latestPlayers = []) {
     .filter((s) => s.exists())
     .map((s) => ({ id: s.id, ...s.data() }));
 }
+
+
+// ============================
+// OPS Snapshot (after any played Action Card)
+// Recompute fresh metrics for ALL bots so we can audit "what changed" after each card.
+// Logged into actions collection as kind="OPS_SNAPSHOT".
+// ============================
+async function logOpsSnapshotAfterAction({ db, gameId, byId, cardName }) {
+  try {
+    const gRef = doc(db, "games", gameId);
+    const gSnap = await getDoc(gRef);
+    if (!gSnap.exists()) return;
+
+    const g = gSnap.data();
+    if (!isActiveRaidStatus(g.status)) return;
+
+    // Only useful during OPS (ACTIONS); but allow if you want after MOVE too.
+    // We'll keep it strict to prevent noise.
+    if (String(g.phase || "") !== "ACTIONS") return;
+
+    // Fetch all players fresh (yes, it's extra reads, but only when an Action Card is played).
+    const pSnap = await getDocs(collection(db, "games", gameId, "players"));
+    const players = pSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    const flags = fillFlags(g.flagsRound);
+
+    const bots = (players || []).filter((p) => p?.isBot);
+
+    const lite = (m) => {
+      if (!m || typeof m !== "object") return null;
+      return {
+        dangerEffective: m.dangerEffective,
+        dangerStay: m.dangerStay,
+        dangerPeak: m.dangerPeak,
+        dangerVec: m.dangerVec,
+        pDanger: m.pDanger,
+        confidence: m.confidence,
+        nextEventIdUsed: m.nextEventIdUsed,
+        carryValue: m.carryValue,
+        carryValueRec: m.carryValueRec,
+      };
+    };
+
+    const botsMetrics = {};
+    for (const b of bots) {
+      const denColor = normColor(b.color || b.den || b.denColor);
+      const discProfile = DISC_BY_DEN[denColor] || null;
+
+      const me = {
+        ...b,
+        // keep canonical aliasing (helps if some code reads burrowUsed)
+        burrowUsedThisRaid: b?.burrowUsedThisRaid === true,
+        burrowUsed: b?.burrowUsedThisRaid === true,
+      };
+
+      const m = buildBotMetricsForLog({
+        game: g,
+        bot: me,
+        players,
+        flagsRoundOverride: flags,
+      });
+
+      botsMetrics[String(b.id)] = {
+        id: b.id,
+        name: b.name || "BOT",
+        denColor,
+        discProfile,
+        decision: b.decision || null,
+        inYard: !!b.inYard,
+        dashed: !!b.dashed,
+        burrowUsedThisRaid: !!b.burrowUsedThisRaid,
+        ...(lite(m) || {}),
+      };
+    }
+
+    const byName = (players || []).find((x) => String(x.id) === String(byId))?.name || "BOT";
+
+    await logBotAction({
+      db,
+      gameId,
+      addLog: null,
+      payload: {
+        round: Number(g.round || 0),
+        phase: "ACTIONS",
+        playerId: byId,
+        playerName: byName,
+        choice: `OPS_SNAPSHOT_${String(cardName || "").trim()}`,
+        message: `OPS snapshot na Action Card: ${String(cardName || "").trim()}`,
+        kind: "OPS_SNAPSHOT",
+        at: Date.now(),
+        opsStep: Number(g.opsStep || 0),
+        opsVersion: Number(g.opsVersion || 0),
+        eventTrackVersion: Number(g.eventTrackVersion || 0),
+        bots: botsMetrics,
+      },
+    });
+  } catch (e) {
+    console.warn("[OPS_SNAPSHOT] failed", e);
+  }
+}
+
 
 /** ===== smarter DECISION ===== */
 async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
