@@ -43,7 +43,35 @@ function splitTrackByStatus(game) {
 }
 
 function isInYardForEvents(p) {
-  return p?.inYard !== false && !p?.dashed;
+  return p?.inYard !== false && !p?.dashed && !p?.caught;
+}
+
+function isActiveForTurn(p) {
+  return p?.inYard !== false && !p?.dashed && !p?.caught;
+}
+
+function markCaught(p) {
+  if (!p) return;
+  p.caught = true;
+  p.role = "VIEWER";     // viewer: mag meekijken, geen invloed
+  p.state = "CAUGHT";    // handig voor UI
+  p.inYard = false;
+  p.dashed = false;
+  p.loot = [];
+}
+
+function pickLeadFromBase(game, base) {
+  if (!Array.isArray(base) || !base.length) return null;
+
+  const leadId = String(game?.leadFoxId || "");
+  if (leadId) {
+    const found = base.find((p) => String(p?.id || "") === leadId);
+    if (found) return found;
+  }
+
+  const idxRaw = typeof game?.leadIndex === "number" ? game.leadIndex : 0;
+  const idx = ((idxRaw % base.length) + base.length) % base.length;
+  return base[idx] || base[0];
 }
 
 function normalizeColorKey(c) {
@@ -388,6 +416,8 @@ async function endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, 
 
     if (getsCaught) {
       p.caught = true;
+      p.role = "VIEWER";
+      p.state = "CAUGHT";
       p.inYard = false; // host kan CAUGHT tonen
       // wipe loot + all score-related fields so leaderboard becomes 0
       p.loot = [];
@@ -559,8 +589,8 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
 
         if (p.decision === "DASH") continue;
 
-        p.inYard = false;
-        p.loot = [];
+        markCaught(p);
+
         await addLog(gameId, {
           round,
           phase: "REVEAL",
@@ -618,8 +648,8 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
 
       if (p.decision === "DASH") continue;
 
-      p.inYard = false;
-      p.loot = [];
+      markCaught(p);
+
       await addLog(gameId, {
         round,
         phase: "REVEAL",
@@ -633,8 +663,7 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
       if (!isInYardForEvents(p)) continue;
       if (p.decision !== "DASH") continue;
 
-      p.inYard = false;
-      p.loot = [];
+      markCaught(p);
 
       await addLog(gameId, {
         round,
@@ -690,8 +719,8 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
 
       if (p.decision === "DASH") continue;
 
-      p.inYard = false;
-      p.loot = [];
+     markCaught(p);
+
       await addLog(gameId, {
         round,
         phase: "REVEAL",
@@ -738,7 +767,7 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
           message: `${p.name || "Vos"} betaalt Gate Toll en verliest 1 buit.`,
         });
       } else {
-        p.inYard = false;
+        markCaught(p);
         await addLog(gameId, {
           round,
           phase: "REVEAL",
@@ -756,15 +785,10 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
   });
 
   // leadIndex is gebaseerd op actieve yard-spelers (match host.js)
-  const orderedActive = orderedAll.filter((x) => x && x.inYard);
-  const base = orderedActive.length ? orderedActive : orderedAll;
+const orderedActive = orderedAll.filter(isActiveForTurn);
+const base = orderedActive.length ? orderedActive : orderedAll;
 
-  let lead = null;
-  if (base.length) {
-    const idxRaw = typeof game.leadIndex === "number" ? game.leadIndex : 0;
-    const idx = ((idxRaw % base.length) + base.length) % base.length;
-    lead = base[idx] || base[0];
-  }
+const lead = pickLeadFromBase(game, base);
 
   if (lead && isInYardForEvents(lead)) {
     if (lead.decision === "BURROW") {
@@ -781,8 +805,8 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
           message: `${lead.name || "Lead Fox"} probeert opnieuw te burrowen, maar dat mag maar 1× per raid.`,
         });
         // geen continue -> Magpie effect gaat door (dus kan gepakt worden)
-        lead.inYard = false;
-        lead.loot = [];
+        markCaught(lead);
+        
         await addLog(gameId, {
           round,
           phase: "REVEAL",
@@ -837,15 +861,11 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
     return ao - bo;
   });
 
-  const orderedActive = orderedAll.filter((x) => x && x.inYard);
-  const base = orderedActive.length ? orderedActive : orderedAll;
+ const orderedActive = orderedAll.filter(isActiveForTurn);
+ const base = orderedActive.length ? orderedActive : orderedAll;
 
-  let lead = null;
-  if (base.length) {
-    const idxRaw = typeof game.leadIndex === "number" ? game.leadIndex : 0;
-    const idx = ((idxRaw % base.length) + base.length) % base.length;
-    lead = base[idx] || base[0];
-  }
+ const lead = pickLeadFromBase(game, base);
+
 
   if (lead && isInYardForEvents(lead)) {
     if (lead.decision === "DASH") {
