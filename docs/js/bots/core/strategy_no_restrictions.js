@@ -960,9 +960,23 @@ function simulateActionOnce({ play, game, me, players, flagsRound, cfg, seedTag 
     }
   }
 
-  if (actionId === "MOLTING_MASK") {
-    flags.noPeek = true;
+if (actionId === "MOLTING_MASK") {
+  // Randomly change your den color (expected-value handled by sampling in scoreOpsPlay).
+  const colors = ["RED", "BLUE", "GREEN", "YELLOW"];
+  const cur = normColor(p.color || p.den || p.denColor);
+  const pool = cur ? colors.filter((c) => c !== cur) : colors.slice();
+  const rnd = mulberry32(hashSeed(`${seedTag}|MM|${String(g?.round || 0)}|${String(meId)}`));
+  const pick = pool[Math.floor(rnd() * pool.length)] || pool[0] || cur;
+  if (pick) {
+    p.color = pick;
+    p.den = pick;
+    p.denColor = pick;
   }
+  // debug marker (optional)
+  const mm = (flags.moltingMask || {});
+  mm[String(meId)] = pick;
+  flags.moltingMask = mm;
+}
 
   if (actionId === "NOSE_FOR_TROUBLE") {
     const ev = nextEventId(g, 0) || nextEventId(g, 1);
@@ -1037,10 +1051,48 @@ function actionCandidates({ actionId, actionName, game, me, players }) {
   // target pickers
   const richest = (arr) => arr.slice().sort((a, b) => sumLootPoints(b) - sumLootPoints(a))[0]?.id || null;
 
-  if (actionId === "MASK_SWAP" || actionId === "HOLD_STILL") {
-    const t = richest(enemies);
-    return t ? [{ actionId, name: actionName, targetId: t }] : [];
-  }
+if (actionId === "HOLD_STILL") {
+  const t = richest(enemies);
+  return t ? [{ actionId, name: actionName, targetId: t }] : [];
+}
+
+if (actionId === "MASK_SWAP") {
+  // Prefer targets where the swap likely improves your survival OR meaningfully hurts them.
+  const next0 = String(nextEventId(game, 0) || "");
+  const myCol = normColor(me?.color || me?.den || me?.denColor);
+
+  const roundNow = Number(game?.round ?? game?.roundIndex ?? 0);
+  const discards = safeArr(game?.actionDiscard).filter((d) => Number(d?.round) === roundNow);
+  const denSignalBy = new Set(
+    discards
+      .filter((d) => String(d?.name || "").toLowerCase().includes("den signal"))
+      .map((d) => String(d?.by))
+  );
+
+  const scored = enemies.map((p) => {
+    const tCol = normColor(p?.color || p?.den || p?.denColor);
+    let s = 0;
+
+    // if next is your DEN event, swapping away is valuable
+    if (myCol && next0.startsWith("DEN_") && next0.toUpperCase().includes(myCol)) {
+      if (tCol && tCol !== myCol) s += 2.0;
+    }
+
+    // if target already spent Den Signal this round, swapping after it can "waste" it
+    if (denSignalBy.has(String(p?.id))) s += 1.0;
+
+    // prefer high-carry targets (deny)
+    s += 0.25 * sumLootPoints(p);
+
+    return { id: p.id, score: s };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+
+  // Offer multiple targets; scoreOpsPlay will choose the best.
+  return scored.slice(0, 4).map((t) => ({ actionId, name: actionName, targetId: t.id }));
+}
+
 
   if (actionId === "SCENT_CHECK") {
     // mimic runner: target with most knownUpcomingEvents else richest
@@ -1126,13 +1178,26 @@ function scoreOpsPlay({ play, game, me, players, flagsRound, cfg }) {
 
   const actionId = String(play?.actionId || "");
 
-  // Kick Up Dust: average over samples (because real is random)
-  const sims =
-    actionId === "KICK_UP_DUST" && !flags.lockEvents
-      ? Array.from({ length: Math.max(2, Number(c.kickUpDustSamples || 6)) }, (_, i) =>
-          simulateActionOnce({ play, game, me, players, flagsRound: flags, cfg: c, seedTag: `KUD#${i}` })
-        )
-      : [simulateActionOnce({ play, game, me, players, flagsRound: flags, cfg: c, seedTag: "ONE" })];
+// Random actions: take expected value over samples.
+let sims = null;
+
+// Kick Up Dust: random shuffle of the track
+if (actionId === "KICK_UP_DUST" && !flags.lockEvents) {
+  sims = Array.from({ length: Math.max(2, Number(c.kickUpDustSamples || 6)) }, (_, i) =>
+    simulateActionOnce({ play, game, me, players, flagsRound: flags, cfg: c, seedTag: `KUD#${i}` })
+  );
+}
+
+// Molting Mask: random new den color
+if (!sims && actionId === "MOLTING_MASK") {
+  sims = Array.from({ length: Math.max(3, Number(c.moltingMaskSamples || 7)) }, (_, i) =>
+    simulateActionOnce({ play, game, me, players, flagsRound: flags, cfg: c, seedTag: `MM#${i}` })
+  );
+}
+
+if (!sims) {
+  sims = [simulateActionOnce({ play, game, me, players, flagsRound: flags, cfg: c, seedTag: "ONE" })];
+}
 
   // aggregate deltas
   let utilitySum = 0;
@@ -1204,6 +1269,105 @@ if (facts?.engineImplemented === false && !RUNNER_IMPLEMENTED.has(actionId)) {
   }
 
     let utility = utilitySum / sims.length;
+// --- Card-specific heuristics (small but high-impact) ---
+{
+  const roundNow = Number(game?.round ?? game?.roundIndex ?? 0);
+  const discards = safeArr(game?.actionDiscard);
+  const discThis = discards.filter((d) => Number(d?.round) === roundNow);
+  const discNames = discThis.map((d) => String(d?.name || "").toLowerCase());
+  const discByMe = discThis.filter((d) => String(d?.by) === String(me?.id || ""));
+
+  // A) Nose for Trouble: extra loot only matters if you can really predict the next event
+  if (actionId === "NOSE_FOR_TROUBLE") {
+    const next0 = nextEventId(game, 0);
+    const known0 =
+      (!flags.noPeek && !!next0) ||
+      (Array.isArray(me?.knownUpcomingEvents) && String(me.knownUpcomingEvents[0]) === String(next0));
+    const pCorrect = known0 ? Number(c.noseKnownCorrectP || 0.95) : Number(c.noseBaseCorrectP || 0.25);
+    const lootU = Number(c.noseLootValue || 2.0);
+
+    // only pay off if you likely stay in the Yard for REVEAL
+    const sim0 = simulateActionOnce({ play, game, me, players, flagsRound: flags, cfg: c, seedTag: "NOSE" });
+    const a0 = evaluateDecision({ game: sim0.game, me: sim0.me, players: sim0.players, flagsRound: sim0.flagsRound, cfg: c, peekIntel: ai });
+    const willStay = String(a0?.decision || "").toUpperCase() === "LURK";
+
+    utility += (willStay ? 1 : 0) * pCorrect * lootU;
+
+    // if someone already shuffled this round, your prediction is less reliable
+    const kudAlready = discNames.some((n) => n.includes("kick up dust"));
+    if (kudAlready) utility -= Number(c.noseVsKudPenalty || 0.6);
+  }
+
+  // B) Kick Up Dust: defensive reroll OR denial vs Scout/Nose/Den Signal (profile-tuned)
+  if (actionId === "KICK_UP_DUST") {
+    const kudAlready = discNames.some((n) => n.includes("kick up dust"));
+    const selfPlayedKudRecently =
+      discards.some((d) => String(d?.by) === String(me?.id || "") &&
+        String(d?.name || "").toLowerCase().includes("kick up dust") &&
+        Number.isFinite(Number(d?.round)) &&
+        (roundNow - Number(d.round)) <= Number(c.kudSelfCooldownRounds || 2)
+      );
+
+    // hard anti-spam: if KUD already happened this round, punish (unless you explicitly allow stacking)
+    if (kudAlready && !c.kudAllowStack) {
+      utility -= Number(c.kudAlreadyThisRoundPenalty || 2.8);
+    }
+    if (selfPlayedKudRecently) {
+      utility -= Number(c.kudSelfCooldownPenalty || 1.8);
+    }
+
+    const enemyScoutThisRound = players.some((p) =>
+      isInYard(p, game) &&
+      String(p?.id) !== String(me?.id) &&
+      Number(p?.lastMoveRound) === roundNow &&
+      String(p?.lastMoveKind || "").toUpperCase().includes("SCOUT")
+    );
+
+    const enemyNosePlayed = discNames.some((n) => n.includes("nose for trouble"));
+    const enemyDenSignalPlayed = discNames.some((n) => n.includes("den signal"));
+
+    const selfNosePlayed = discByMe.some((d) => String(d?.name || "").toLowerCase().includes("nose for trouble"));
+
+    let denyBonus = 0;
+    if (enemyScoutThisRound) denyBonus += Number(c.kudDenyScoutBonus || 0);
+    if (enemyNosePlayed) denyBonus += Number(c.kudDenyNoseBonus || 0);
+    if (enemyDenSignalPlayed) denyBonus += Number(c.kudDenyDenSignalBonus || 0);
+
+    // don't self-sabotage your own Nose prediction
+    if (selfNosePlayed) denyBonus -= Number(c.kudSelfNosePenalty || 1.5);
+
+    utility += denyBonus;
+  }
+
+  // C) Molting Mask: avoid wasting it when not under DEN-danger
+  if (actionId === "MOLTING_MASK") {
+    const next0 = String(nextEventId(game, 0) || "");
+    const myCol = normColor(me?.color || me?.den || me?.denColor);
+    const isMyDen = myCol && next0.startsWith("DEN_") && next0.toUpperCase().includes(myCol);
+    const minDanger = Number(c.moltingMinDangerSelf || 7.0);
+
+    // if not a DEN threat, keep it for later (small penalty)
+    if (!isMyDen) {
+      utility -= Number(c.moltingOffDenPenalty || 0.8);
+    }
+
+    // if danger is low, strongly discourage
+    const factsNow = next0 ? getEventFacts(next0, { game, me, denColor: myCol, isLead: computeIsLead(game, me, players) }) : null;
+    const dStay = Number(factsNow?.dangerLurk ?? factsNow?.dangerStay ?? 0);
+    if (dStay < minDanger) {
+      utility -= Number(c.moltingWhenSafePenalty || 1.2);
+    }
+  }
+
+  // D) Mask Swap: discourage suicidal swaps (gain must be clear)
+  if (actionId === "MASK_SWAP") {
+    const minGain = Number(c.maskSwapMinGain || 0.9);
+    if (utility < minGain) {
+      utility -= Number(c.maskSwapLowGainPenalty || 0.6);
+    }
+  }
+}
+
 
   // Multiplayer/tempo bonus (JAZZ):
   // Deze kaarten “doen” weinig in de decision-simulatie, maar zijn wél waardevol
@@ -1501,3 +1665,4 @@ if (typeof window !== "undefined") {
   window.evaluateOpsActions = evaluateOpsActions;
   window.evaluateDecision = evaluateDecision;
 }
+
