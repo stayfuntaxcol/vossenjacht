@@ -779,7 +779,6 @@ export function scoreActionFacts(actionKey, opts = {}) {
 
   // E) Kick Up Dust rare
   const isKickUpDust = a.id === "KICK_UP_DUST";
-  const isKickUpDust = a.id === "KICK_UP_DUST";
 if (isKickUpDust) {
   // default: quite risky, so only valuable if it prevents a known threat OR denies someone's intel play
   soft.risk += 1.25;
