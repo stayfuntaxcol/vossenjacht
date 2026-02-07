@@ -64,7 +64,34 @@ const JAZZ_UTILITY_OVERRIDES = {
     opsMinAdvantage: 0.92,
     opsReserveHandEarly: 2,
     opsSpendCostBase: 0.32,
-  },
+  // --- Card IQ tuning ---
+// Kick Up Dust: D mag pesten (Scout/Nose/Den Signal) maar niet spammen
+kudDenyScoutBonus: 1.10,
+kudDenyNoseBonus: 0.95,
+kudDenyDenSignalBonus: 0.85,
+kudAllowStack: false,
+kudAlreadyThisRoundPenalty: 3.0,
+kudSelfCooldownRounds: 2,
+kudSelfCooldownPenalty: 2.0,
+kudSelfNosePenalty: 1.8,
+
+// Nose for Trouble: alleen echt goed als nextKnown waar is
+noseKnownCorrectP: 0.97,
+noseBaseCorrectP: 0.22,
+noseLootValue: 2.10,
+noseVsKudPenalty: 0.55,
+
+// Molting Mask: alleen bij echte DEN-dreiging
+moltingMaskSamples: 7,
+moltingMinDangerSelf: 7.5,
+moltingOffDenPenalty: 0.95,
+moltingWhenSafePenalty: 1.40,
+
+// Mask Swap: agressief, maar geen suicides
+maskSwapTargetTopN: 4,
+maskSwapMinGain: 1.00,
+maskSwapLowGainPenalty: 0.70,
+},
   I: { // YELLOW: speelser, vaker tempo/control
     wRisk: 1.08,
     opsPlayTaxBase: 0.70,
@@ -72,7 +99,34 @@ const JAZZ_UTILITY_OVERRIDES = {
     opsReserveHandEarly: 2,
     opsSpendCostBase: 0.34,
     kickUpDustOptimism: 0.65,
-  },
+  // --- Card IQ tuning ---
+// Kick Up Dust: I speelt dit liever defensief, niet als pestkaart
+kudDenyScoutBonus: 0.20,
+kudDenyNoseBonus: 0.20,
+kudDenyDenSignalBonus: 0.15,
+kudAllowStack: false,
+kudAlreadyThisRoundPenalty: 3.2,
+kudSelfCooldownRounds: 3,
+kudSelfCooldownPenalty: 2.2,
+kudSelfNosePenalty: 2.0,
+
+// Nose for Trouble: I houdt van loot, maar alleen als het zeker is
+noseKnownCorrectP: 0.97,
+noseBaseCorrectP: 0.20,
+noseLootValue: 2.30,
+noseVsKudPenalty: 0.65,
+
+// Molting Mask: spaarzaam
+moltingMaskSamples: 7,
+moltingMinDangerSelf: 7.8,
+moltingOffDenPenalty: 1.05,
+moltingWhenSafePenalty: 1.55,
+
+// Mask Swap: zelden
+maskSwapTargetTopN: 3,
+maskSwapMinGain: 1.20,
+maskSwapLowGainPenalty: 0.85,
+},
   S: { // GREEN: defensiever, maar niet “op slot”
     wRisk: 1.20,
     opsPlayTaxBase: 0.78,
@@ -80,7 +134,34 @@ const JAZZ_UTILITY_OVERRIDES = {
     opsReserveHandEarly: 2,
     opsReserveHandMid: 2,
     opsSpendCostBase: 0.38,
-  },
+  // --- Card IQ tuning ---
+// Kick Up Dust: S vrijwel nooit als pestkaart
+kudDenyScoutBonus: 0.05,
+kudDenyNoseBonus: 0.05,
+kudDenyDenSignalBonus: 0.05,
+kudAllowStack: false,
+kudAlreadyThisRoundPenalty: 3.5,
+kudSelfCooldownRounds: 3,
+kudSelfCooldownPenalty: 2.4,
+kudSelfNosePenalty: 2.2,
+
+// Nose for Trouble: alleen met zekerheid
+noseKnownCorrectP: 0.98,
+noseBaseCorrectP: 0.18,
+noseLootValue: 2.00,
+noseVsKudPenalty: 0.70,
+
+// Molting Mask: juist defensief inzetbaar bij DEN-dreiging
+moltingMaskSamples: 7,
+moltingMinDangerSelf: 6.8,
+moltingOffDenPenalty: 1.10,
+moltingWhenSafePenalty: 1.60,
+
+// Mask Swap: bijna nooit
+maskSwapTargetTopN: 3,
+maskSwapMinGain: 1.35,
+maskSwapLowGainPenalty: 0.95,
+},
   C: { // BLUE: analytisch, iets hogere drempel maar wel spelend
     wRisk: 1.25,
     opsPlayTaxBase: 0.76,
@@ -88,7 +169,34 @@ const JAZZ_UTILITY_OVERRIDES = {
     opsSpendCostBase: 0.36,
     kickUpDustOptimism: 0.52,
     opsHighComboScore: 10,
-  },
+  // --- Card IQ tuning ---
+// Kick Up Dust: C gebruikt het vaakst “slim” als deny/defense, maar niet spammen
+kudDenyScoutBonus: 0.90,
+kudDenyNoseBonus: 0.80,
+kudDenyDenSignalBonus: 0.70,
+kudAllowStack: false,
+kudAlreadyThisRoundPenalty: 2.9,
+kudSelfCooldownRounds: 2,
+kudSelfCooldownPenalty: 1.9,
+kudSelfNosePenalty: 1.7,
+
+// Nose for Trouble: C speelt dit alleen met intel
+noseKnownCorrectP: 0.98,
+noseBaseCorrectP: 0.16,
+noseLootValue: 2.05,
+noseVsKudPenalty: 0.55,
+
+// Molting Mask: analytisch, maar niet verspillen
+moltingMaskSamples: 7,
+moltingMinDangerSelf: 7.2,
+moltingOffDenPenalty: 1.00,
+moltingWhenSafePenalty: 1.45,
+
+// Mask Swap: C doet dit als het echt winst geeft
+maskSwapTargetTopN: 4,
+maskSwapMinGain: 1.05,
+maskSwapLowGainPenalty: 0.75,
+},
 };
 
 // behoud je bestaande naam, zodat rest van je code niet hoeft te wijzigen
@@ -3306,3 +3414,4 @@ export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLU
 
   await updateDoc(gRef, { botsEnabled: true, actionDeck });
 }
+
