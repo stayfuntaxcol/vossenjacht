@@ -8,6 +8,7 @@ import {
   collection,
   getDocs,
   addDoc,
+  increment,
   serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
@@ -259,6 +260,8 @@ export async function applyKickUpDust(gameId) {
   const phase = game.phase || "ACTIONS";
 
   const flags = game.flagsRound || {};
+
+  // Volledige lock (bv. Burrow Beacon): niets mag de Event Track wijzigen.
   if (flags.lockEvents) {
     await addLog(gameId, {
       round,
@@ -266,7 +269,7 @@ export async function applyKickUpDust(gameId) {
       kind: "ACTION_CARD",
       choice: "EFFECT_KICK_UP_DUST_BLOCKED",
       payload: { reason: "lockEvents" },
-      message: "Kick Up Dust had geen effect – Burrow Beacon is actief (Event Track gelocked).",
+      message: "Kick Up Dust had geen effect – Event Track is gelocked (lockEvents).",
     });
     return;
   }
@@ -285,9 +288,40 @@ export async function applyKickUpDust(gameId) {
     return;
   }
 
+  // HEAD-lock (bv. No-Go Zone): de eerstvolgende kaart blijft staan, alleen de rest shuffle't.
+  const lockHead = !!flags.lockHead;
+
+  let newTrack;
+  if (lockHead) {
+    const head = future[0];
+    const rest = future.slice(1);
+    const shuffledRest = rest.length > 1 ? shuffleArray(rest) : rest;
+    newTrack = [...locked, head, ...shuffledRest];
+
+    await updateDoc(gameRef, {
+      eventTrack: newTrack,
+      eventTrackVersion: increment(1),
+    });
+
+    await addLog(gameId, {
+      round,
+      phase,
+      kind: "ACTION_CARD",
+      choice: "EFFECT_KICK_UP_DUST_LOCKHEAD",
+      payload: { lockedCount: locked.length, futureCount: future.length },
+      message: "Kick Up Dust: future Events geschud, maar de eerstvolgende kaart bleef vast staan (No-Go Zone).",
+    });
+    return;
+  }
+
+  // Normaal: hele future shuffle't
   const shuffledFuture = shuffleArray(future);
-  const newTrack = [...locked, ...shuffledFuture];
-  await updateDoc(gameRef, { eventTrack: newTrack });
+  newTrack = [...locked, ...shuffledFuture];
+
+  await updateDoc(gameRef, {
+    eventTrack: newTrack,
+    eventTrackVersion: increment(1),
+  });
 
   await addLog(gameId, {
     round,
@@ -298,7 +332,6 @@ export async function applyKickUpDust(gameId) {
     message: "Kick Up Dust: toekomstige Event kaarten geschud (onthulde kaarten blijven staan).",
   });
 }
-
 // =======================================
 // Scoring & einde raid
 // =======================================
@@ -477,6 +510,7 @@ export async function resolveAfterReveal(gameId) {
   
   let flagsRound = {
     lockEvents: false,
+    lockHead: false,
     scatter: false,
     denImmune: {},
     noPeekAll: false,
@@ -950,6 +984,7 @@ const lead = pickLeadFromBase(game, base);
   // Flags van deze ronde resetten (types blijven correct)
   flagsRound = {
     lockEvents: false,
+    lockHead: false,
     scatter: false,
     denImmune: {},
     noPeekAll: false,
@@ -1031,6 +1066,8 @@ let newLeadIndex = typeof game.leadIndex === "number" ? game.leadIndex : 0;
     flagsRound,
     movedPlayerIds: [],
     leadIndex: newLeadIndex,
+    // Scatter is een one-round effect: na REVEAL altijd disarmen
+    scatterArmed: false,
   });
 }
 
@@ -1116,4 +1153,5 @@ if (!Number.isFinite(s) || s <= 0) continue;
     console.error("saveLeaderboardForGame failed", err);
   }
 }
+
 
