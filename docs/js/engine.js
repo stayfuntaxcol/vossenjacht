@@ -479,7 +479,8 @@ export async function resolveAfterReveal(gameId) {
     lockEvents: false,
     scatter: false,
     denImmune: {},
-    noPeek:false,
+    noPeekAll: false,
+    noPeek: [],
     predictions: [],
     opsLocked: false,
     followTail: {},
@@ -951,7 +952,8 @@ const lead = pickLeadFromBase(game, base);
     lockEvents: false,
     scatter: false,
     denImmune: {},
-    noPeek: false,
+    noPeekAll: false,
+    noPeek: [],
     predictions: [],
     opsLocked: false,
     followTail: {},
@@ -1114,3 +1116,4 @@ if (!Number.isFinite(s) || s <= 0) continue;
     console.error("saveLeaderboardForGame failed", err);
   }
 }
+
