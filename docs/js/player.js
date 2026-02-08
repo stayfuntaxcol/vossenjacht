@@ -1,448 +1,1821 @@
-// VOSSENJACHT player.js – nieuwe UI: fase-panels + loot-meter + Host/Coach
+// js/bots/botRunner.js
+// Autonomous bots for VOSSENJACHT (smart OPS flow + threat-aware decisions)
 
-// ===== IMPORTS (eerst alles) =====
-
-// BOTS HINTS
-import { getAdvisorHint } from "./bots/advisor/advisorBot.js";
-import { showHint } from "./ui/hintOverlay.js";
-
-// Engine hooks
-import { applyKickUpDust, applyPackTinker } from "./engine.js";
-
-// App helpers
-import { initAuth } from "./firebase.js";
-import { renderPlayerSlotCard, renderActionCard } from "./cardRenderer.js";
-import { addLog } from "./log.js";
-import { getEventById, getActionDefByName, getActionInfoByName } from "./cards.js";
-
-// Firestore (alles in 1 import, nergens dubbel)
+import { getEventFacts, getActionFacts } from "./aiKit.js";
+import { getActionDefByName } from "../cards.js";
+import { comboScore } from "./actionComboMatrix.js";
 import {
-  getFirestore,
+  rankActions,
+  scoreActionFacts,
+  presetFromDenColor,
+  BOT_PRESETS,
+  pickActionOrPass, // ✅ toevoegen
+  recommendDecision,
+} from "./botHeuristics.js";
+
+import {
+  BOT_UTILITY_CFG,
+  evaluateMoveOptions,
+  evaluateOpsActions,
+  evaluateDecision,
+} from "./core/strategy_no_restrictions.js";
+
+import { computeDangerMetrics, computeCarryValue, computeCarryValueRec } from "./core/metrics.js";
+
+import {
   doc,
   getDoc,
-  onSnapshot,
-  updateDoc,
+  getDocs,
   collection,
   addDoc,
-  serverTimestamp,
-  arrayUnion,
-  getDocs,
-  setDoc,
+  onSnapshot,
+  updateDoc,
   query,
-  where,
   orderBy,
   limit,
+  serverTimestamp,
   runTransaction,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 
-// ===== INIT (dan pas db/params/refs) =====
-const db = getFirestore();
+/** Tuning */
+const BOT_TICK_MS = 700;
+const BOT_DEBOUNCE_MS = 150;
+const LOCK_MS = 1800;
 
-const params = new URLSearchParams(window.location.search);
-const gameId = params.get("game");
-const playerId = params.get("player");
+// UI pacing: played Action Cards must stay visible (face-up) on the Discard Pile
+const OPS_DISCARD_VISIBLE_MS = 3100;
 
-// ===== BOT STATE CACHES =====
-let lastGame = null;
-let lastMe = null;
-let lastPlayers = [];
-let lastActions = [];
+// After every played Action Card: log a full-bot "OPS snapshot" with fresh metrics
+const OPS_SNAPSHOT_ENABLED = true;
 
-// ===== EARLY STATE (avoid TDZ when listeners fire before full init) =====
-let gameRef = null;
-let playerRef = null;
+// DISC mapping per Den kleur
+const DISC_BY_DEN = { RED: "D", YELLOW: "I", GREEN: "S", BLUE: "C" };
 
-let currentGame = null;
-let currentPlayer = null;
+// Kleine, “stabiele” overrides (geen spikes)
+// =============================
+// JAZZ settings (utility layer)
+// =============================
 
-// btnHint is read by updateHintButtonFromState() from early listeners:
-let btnHint = null;
+const JAZZ_UTILITY_OVERRIDES = {
+  D: { // RED: agressiever, sneller spelen
+    wRisk: 1.00,
+    wDeny: 0.95,
+    opsPlayTaxBase: 0.68,
+    opsMinAdvantage: 0.92,
+    opsReserveHandEarly: 2,
+    opsSpendCostBase: 0.32,
+  // --- Card IQ tuning ---
+// Kick Up Dust: D mag pesten (Scout/Nose/Den Signal) maar niet spammen
+kudDenyScoutBonus: 1.10,
+kudDenyNoseBonus: 0.95,
+kudDenyDenSignalBonus: 0.85,
+kudAllowStack: false,
+kudAlreadyThisRoundPenalty: 3.0,
+kudSelfCooldownRounds: 2,
+kudSelfCooldownPenalty: 2.0,
+kudSelfNosePenalty: 1.8,
 
-// ===== UI PULSE MEMORY (LOOT/HINT) =====
-const _uiKey = (k) => `VJ_${k}_${gameId || "?"}_${playerId || "?"}`;
+// Nose for Trouble: alleen echt goed als nextKnown waar is
+noseKnownCorrectP: 0.97,
+noseBaseCorrectP: 0.22,
+noseLootValue: 2.10,
+noseVsKudPenalty: 0.55,
 
-let _lootSeenHash = null;
-let _lootCurrentHash = null;
+// Molting Mask: alleen bij echte DEN-dreiging
+moltingMaskSamples: 7,
+moltingMinDangerSelf: 7.5,
+moltingOffDenPenalty: 0.95,
+moltingWhenSafePenalty: 1.40,
 
-let _hintSeenOpsHash = null;
-let _hintSeenOpsRound = null;
-let _hintCurrentHash = null;
+// Mask Swap: agressief, maar geen suicides
+maskSwapTargetTopN: 4,
+maskSwapMinGain: 1.00,
+maskSwapLowGainPenalty: 0.70,
+},
+  I: { // YELLOW: speelser, vaker tempo/control
+    wRisk: 1.08,
+    opsPlayTaxBase: 0.70,
+    opsMinAdvantage: 0.90,
+    opsReserveHandEarly: 2,
+    opsSpendCostBase: 0.34,
+    kickUpDustOptimism: 0.65,
+  // --- Card IQ tuning ---
+// Kick Up Dust: I speelt dit liever defensief, niet als pestkaart
+kudDenyScoutBonus: 0.20,
+kudDenyNoseBonus: 0.20,
+kudDenyDenSignalBonus: 0.15,
+kudAllowStack: false,
+kudAlreadyThisRoundPenalty: 3.2,
+kudSelfCooldownRounds: 3,
+kudSelfCooldownPenalty: 2.2,
+kudSelfNosePenalty: 2.0,
 
-function _safeLSGet(key) {
-  try { return localStorage.getItem(key); } catch { return null; }
+// Nose for Trouble: I houdt van loot, maar alleen als het zeker is
+noseKnownCorrectP: 0.97,
+noseBaseCorrectP: 0.20,
+noseLootValue: 2.30,
+noseVsKudPenalty: 0.65,
+
+// Molting Mask: spaarzaam
+moltingMaskSamples: 7,
+moltingMinDangerSelf: 7.8,
+moltingOffDenPenalty: 1.05,
+moltingWhenSafePenalty: 1.55,
+
+// Mask Swap: zelden
+maskSwapTargetTopN: 3,
+maskSwapMinGain: 1.20,
+maskSwapLowGainPenalty: 0.85,
+},
+  S: { // GREEN: defensiever, maar niet “op slot”
+    wRisk: 1.20,
+    opsPlayTaxBase: 0.78,
+    opsMinAdvantage: 1.05,
+    opsReserveHandEarly: 2,
+    opsReserveHandMid: 2,
+    opsSpendCostBase: 0.38,
+  // --- Card IQ tuning ---
+// Kick Up Dust: S vrijwel nooit als pestkaart
+kudDenyScoutBonus: 0.05,
+kudDenyNoseBonus: 0.05,
+kudDenyDenSignalBonus: 0.05,
+kudAllowStack: false,
+kudAlreadyThisRoundPenalty: 3.5,
+kudSelfCooldownRounds: 3,
+kudSelfCooldownPenalty: 2.4,
+kudSelfNosePenalty: 2.2,
+
+// Nose for Trouble: alleen met zekerheid
+noseKnownCorrectP: 0.98,
+noseBaseCorrectP: 0.18,
+noseLootValue: 2.00,
+noseVsKudPenalty: 0.70,
+
+// Molting Mask: juist defensief inzetbaar bij DEN-dreiging
+moltingMaskSamples: 7,
+moltingMinDangerSelf: 6.8,
+moltingOffDenPenalty: 1.10,
+moltingWhenSafePenalty: 1.60,
+
+// Mask Swap: bijna nooit
+maskSwapTargetTopN: 3,
+maskSwapMinGain: 1.35,
+maskSwapLowGainPenalty: 0.95,
+},
+  C: { // BLUE: analytisch, iets hogere drempel maar wel spelend
+    wRisk: 1.25,
+    opsPlayTaxBase: 0.76,
+    opsMinAdvantage: 1.02,
+    opsSpendCostBase: 0.36,
+    kickUpDustOptimism: 0.52,
+    opsHighComboScore: 10,
+  // --- Card IQ tuning ---
+// Kick Up Dust: C gebruikt het vaakst “slim” als deny/defense, maar niet spammen
+kudDenyScoutBonus: 0.90,
+kudDenyNoseBonus: 0.80,
+kudDenyDenSignalBonus: 0.70,
+kudAllowStack: false,
+kudAlreadyThisRoundPenalty: 2.9,
+kudSelfCooldownRounds: 2,
+kudSelfCooldownPenalty: 1.9,
+kudSelfNosePenalty: 1.7,
+
+// Nose for Trouble: C speelt dit alleen met intel
+noseKnownCorrectP: 0.98,
+noseBaseCorrectP: 0.16,
+noseLootValue: 2.05,
+noseVsKudPenalty: 0.55,
+
+// Molting Mask: analytisch, maar niet verspillen
+moltingMaskSamples: 7,
+moltingMinDangerSelf: 7.2,
+moltingOffDenPenalty: 1.00,
+moltingWhenSafePenalty: 1.45,
+
+// Mask Swap: C doet dit als het echt winst geeft
+maskSwapTargetTopN: 4,
+maskSwapMinGain: 1.05,
+maskSwapLowGainPenalty: 0.75,
+},
+};
+
+// behoud je bestaande naam, zodat rest van je code niet hoeft te wijzigen
+const DISC_UTILITY_OVERRIDES = JAZZ_UTILITY_OVERRIDES;
+
+function cfgForBot(botLike) {
+  const den = String(botLike?.color || botLike?.denColor || botLike?.den || "").toUpperCase();
+  const disc = DISC_BY_DEN[den] || "S";
+  return { ...BOT_UTILITY_CFG, ...(DISC_UTILITY_OVERRIDES[disc] || {}) };
 }
-function _safeLSSet(key, val) {
-  try { localStorage.setItem(key, String(val ?? "")); } catch {}
+
+/** Bot name pool (player cards exist for these) */
+const BOT_NAME_POOL = [
+  "Astronaut",
+  "Starwalker",
+  "Prowler",
+  "Empress",
+  "Kiss",
+  "Max",
+  "Prince",
+  "Monroe",
+];
+
+/** ===== small helpers ===== */
+function normColor(c) {
+  return String(c || "").trim().toUpperCase();
 }
 
-function _fnv1aHex(str) {
-  const s = String(str ?? "");
-  let h = 0x811c9dc5; // 2166136261
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = (h * 0x01000193) >>> 0; // 16777619
+// Alleen overrides (strategy.js merged dit over BOT_UTILITY_CFG heen)
+// Alleen overrides (strategy.js merged dit over BOT_UTILITY_CFG heen)
+// CANON: geen carry/rooster/panic-cashout bias in config. DASH/BURROW/LURK worden bepaald in strategy.js.
+// =============================
+// JAZZ settings (strategy/OPS layer)
+// =============================
+
+const JAZZ_STRATEGY_OVERRIDES = {
+  D: {
+    wLoot: 6.2,
+    wRisk: 0.95,
+    wTeam: 0.45,
+    wShare: 0.55,
+    wDeny: 0.75,
+    wResource: 0.35,
+
+    lookaheadN: 4,
+
+    // SHIFT (laat staan zoals jij het had; we buffen OPS i.p.v. SHIFT te nerfen)
+    shiftMinGain: 3.2,
+    shiftDangerTrigger: 7.8,
+    shiftLookahead: 4,
+    shiftDistancePenalty: 0.28,
+    shiftBenefitMin: 2.0,
+    shiftCooldownRounds: 2,
+    shiftOverrideBenefit: 3.6,
+
+    // OPS card play (meer “jazz”: vaker iets durven spelen)
+    actionDeckSampleN: 28,
+    actionReserveMinHand: 1,
+    actionPlayMinGain: 0.62,
+    comboMinGain: 0.88,
+    allowComboSearch: true,
+    comboMaxPairs: 26,
+
+    opsEarlyRounds: 2,
+    opsReserveHandEarly: 2,
+    opsReserveHandMid: 1,
+    opsReserveHandLate: 0,
+
+    opsPlayTaxBase: 0.68,
+    opsPlayTaxEarlyMult: 1.02,
+    opsPlayTaxLateMult: 0.82,
+
+    opsSpendCostBase: 0.34,
+    opsSpendCostEarlyMult: 1.00,
+    opsSpendCostLateMult: 0.80,
+
+    opsMinAdvantage: 0.92,
+    opsMinAdvantageEarlyBonus: 0.10,
+
+    // Threat-mode OPS (als het gevaarlijk wordt: spelen!)
+    opsThreatDangerTrigger: 5.2,
+    opsThreatPlayBoost: 0.85,
+    opsLeadThreatExtraBoost: 0.65,
+    opsThreatPlayTaxMult: 0.72,
+  },
+
+  I: {
+    wLoot: 6.6,
+    wRisk: 1.05,
+    wTeam: 0.60,
+    wShare: 0.95,
+    wDeny: 0.95,
+    wResource: 0.45,
+
+    lookaheadN: 4,
+
+    // SHIFT
+    shiftMinGain: 3.0,
+    shiftDangerTrigger: 7.4,
+    shiftLookahead: 4,
+    shiftDistancePenalty: 0.26,
+    shiftBenefitMin: 1.8,
+    shiftCooldownRounds: 2,
+    shiftOverrideBenefit: 3.2,
+
+    // OPS card play
+    actionDeckSampleN: 30,
+    actionReserveMinHand: 1,
+    actionPlayMinGain: 0.60,
+    comboMinGain: 0.86,
+    allowComboSearch: true,
+    comboMaxPairs: 30,
+
+    opsEarlyRounds: 2,
+    opsReserveHandEarly: 2,
+    opsReserveHandMid: 1,
+    opsReserveHandLate: 0,
+
+    opsPlayTaxBase: 0.70,
+    opsPlayTaxEarlyMult: 1.02,
+    opsPlayTaxLateMult: 0.84,
+
+    opsSpendCostBase: 0.36,
+    opsSpendCostEarlyMult: 1.00,
+    opsSpendCostLateMult: 0.82,
+
+    opsMinAdvantage: 0.90,
+    opsMinAdvantageEarlyBonus: 0.10,
+
+    // Threat-mode OPS
+    opsThreatDangerTrigger: 5.0,
+    opsThreatPlayBoost: 0.90,
+    opsLeadThreatExtraBoost: 0.60,
+    opsThreatPlayTaxMult: 0.74,
+  },
+
+  S: {
+    wLoot: 5.5,
+    wRisk: 1.30,
+    wTeam: 0.85,
+    wShare: 1.20,
+    wDeny: 0.65,
+    wResource: 0.55,
+
+    lookaheadN: 4,
+
+    // SHIFT
+    shiftMinGain: 3.4,
+    shiftDangerTrigger: 7.0,
+    shiftLookahead: 4,
+    shiftDistancePenalty: 0.30,
+    shiftBenefitMin: 2.2,
+    shiftCooldownRounds: 3,
+    shiftOverrideBenefit: 3.4,
+
+    // OPS card play
+    actionDeckSampleN: 26,
+    actionReserveMinHand: 1,
+    actionPlayMinGain: 0.70,
+    comboMinGain: 0.95,
+    allowComboSearch: true,
+    comboMaxPairs: 22,
+
+    opsEarlyRounds: 2,
+    opsReserveHandEarly: 2,
+    opsReserveHandMid: 2,
+    opsReserveHandLate: 1,
+
+    opsPlayTaxBase: 0.78,
+    opsPlayTaxEarlyMult: 1.05,
+    opsPlayTaxLateMult: 0.90,
+
+    opsSpendCostBase: 0.40,
+    opsSpendCostEarlyMult: 1.02,
+    opsSpendCostLateMult: 0.90,
+
+    // ✅ DIT was jouw “handrem”: 1.45 -> 1.05
+    opsMinAdvantage: 1.05,
+    opsMinAdvantageEarlyBonus: 0.10,
+
+    // Threat-mode OPS
+    opsThreatDangerTrigger: 4.8,
+    opsThreatPlayBoost: 0.95,
+    opsLeadThreatExtraBoost: 0.70,
+    opsThreatPlayTaxMult: 0.78,
+  },
+
+  C: {
+    wLoot: 5.9,
+    wRisk: 1.18,
+    wTeam: 0.60,
+    wShare: 0.95,
+    wDeny: 0.80,
+    wResource: 0.85,
+
+    lookaheadN: 5,
+
+    // SHIFT
+    shiftMinGain: 3.0,
+    shiftDangerTrigger: 7.6,
+    shiftLookahead: 5,
+    shiftDistancePenalty: 0.26,
+    shiftBenefitMin: 1.9,
+    shiftCooldownRounds: 2,
+    shiftOverrideBenefit: 3.2,
+
+    // OPS card play
+    actionDeckSampleN: 30,
+    actionReserveMinHand: 1,
+    actionPlayMinGain: 0.66,
+    comboMinGain: 0.92,
+    allowComboSearch: true,
+    comboMaxPairs: 26,
+
+    opsEarlyRounds: 2,
+    opsReserveHandEarly: 2,
+    opsReserveHandMid: 1,
+    opsReserveHandLate: 0,
+
+    opsPlayTaxBase: 0.76,
+    opsPlayTaxEarlyMult: 1.03,
+    opsPlayTaxLateMult: 0.86,
+
+    opsSpendCostBase: 0.38,
+    opsSpendCostEarlyMult: 1.00,
+    opsSpendCostLateMult: 0.84,
+
+    // ✅ DIT was jouw “handrem”: 1.38 -> 1.02
+    opsMinAdvantage: 1.02,
+    opsMinAdvantageEarlyBonus: 0.10,
+
+    // Threat-mode OPS
+    opsThreatDangerTrigger: 5.1,
+    opsThreatPlayBoost: 0.85,
+    opsLeadThreatExtraBoost: 0.65,
+    opsThreatPlayTaxMult: 0.76,
+  },
+};
+
+// behoud je bestaande naam, zodat rest van je code niet hoeft te wijzigen
+const DISC_STRATEGY_OVERRIDES = JAZZ_STRATEGY_OVERRIDES;
+
+function getStrategyCfgForBot(botOrPlayer, game = null) {
+  const den = normColor(botOrPlayer?.color || botOrPlayer?.den || botOrPlayer?.denColor);
+  const disc = DISC_BY_DEN[den] || null;
+
+  const base = (disc && DISC_STRATEGY_OVERRIDES[disc]) ? DISC_STRATEGY_OVERRIDES[disc] : null;
+
+  // Optional per-RAID overrides via Firestore game document:
+  // game.botDiscProfiles = { D:{...}, I:{...}, S:{...}, C:{...} }
+  const fromGame =
+    (disc && game && game.botDiscProfiles && typeof game.botDiscProfiles === "object")
+      ? (game.botDiscProfiles[disc] || game.botDiscProfiles[String(disc).toUpperCase()] || null)
+      : null;
+
+  if (!base && !fromGame) return null;
+
+  const merged = { ...(base || {}), ...(fromGame || {}) };
+
+  // CANON guard: blokkeer legacy keys die DASH/BURROW/LURK zouden kunnen vervuilen
+  const FORBIDDEN = new Set(["dashPushScale", "dashPushThreshold", "panicStayRisk", "panicDashStayRisk", "panicDashSafeDashRisk", "panicDashCarryMin", "suicideMargin", "burrowMinSafetyGain", "burrowMaxExtraCost", "burrowAlreadyUsedPenalty", "roosterEarlyDashPenalty", "roosterEarlyBurrowPenalty", "roosterEarlyLurkBonus", "roosterLateDashBonus", "roosterLateStayPenalty", "dashBeforeBurrowPenalty", "panicLurkPenalty", "panicBurrowBonus"]);
+  for (const k of Object.keys(merged)) {
+    if (FORBIDDEN.has(k)) delete merged[k];
+    // extra safety: alle keys die met 'panic' of 'rooster' beginnen zijn legacy
+    if (/^(panic|rooster)/i.test(k)) delete merged[k];
   }
-  return h.toString(16).padStart(8, "0");
+
+  return merged;
 }
 
-(function initUiPulseMemoryOnce() {
-  // run vroeg, maar veilig (localStorage kan geblokkeerd zijn)
-  _lootSeenHash = _safeLSGet(_uiKey("lootSeenHash")) || null;
-  _hintSeenOpsHash = _safeLSGet(_uiKey("hintSeenOpsHash")) || null;
+function extractIntelForDenShare({ game, player }) {
+  const idx = Number.isFinite(Number(game?.eventIndex)) ? Number(game.eventIndex) : null;
+  if (idx === null) return null;
 
-  const r = _safeLSGet(_uiKey("hintSeenOpsRound"));
-  const n = r != null ? Number(r) : NaN;
-  _hintSeenOpsRound = Number.isFinite(n) ? n : null;
-})();
+  const known = Array.isArray(player?.knownUpcomingEvents)
+    ? player.knownUpcomingEvents.filter(Boolean).map((x) => String(x))
+    : [];
 
-async function ensureBurrowFlagForAllPlayers(gameId) {
-  if (!gameId) return;
+  if (!known.length) return null;
 
-  const playersCol = collection(db, "games", gameId, "players");
-  const qs = await getDocs(playersCol);
+  const events = known.slice(0, 2);
+  const confidence = events.length >= 2 ? 0.75 : 0.6;
 
-  const fixes = [];
-  qs.forEach((d) => {
-    const data = d.data() || {};
-    if (data.burrowUsedThisRaid == null) {
-      fixes.push(updateDoc(d.ref, { burrowUsedThisRaid: false }));
-    }
+  return { events, atEventIndex: idx, confidence };
+}
+
+function mergeDenIntel(prev, next) {
+  if (!next) return prev || null;
+  if (!prev) return next;
+
+  // andere eventIndex -> vervang
+  if (Number(prev.atEventIndex) !== Number(next.atEventIndex)) return next;
+
+  // zelfde index: hou “beste”
+  const prevC = Number(prev.confidence || 0);
+  const nextC = Number(next.confidence || 0);
+
+  const prevKey = Array.isArray(prev.events) ? prev.events.join("|") : "";
+  const nextKey = Array.isArray(next.events) ? next.events.join("|") : "";
+
+  if (nextKey && nextKey !== prevKey) return { ...prev, ...next };
+  if (nextC >= prevC) return { ...prev, ...next };
+  return prev;
+}
+
+function shuffleArray(arr) {
+  const a = Array.isArray(arr) ? [...arr] : [];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function isActiveRaidStatus(status) {
+  return status === "raid" || status === "round";
+}
+
+function isGameFinished(game) {
+  return !game || game.status === "finished" || game.phase === "END";
+}
+
+function isInYard(p) {
+  return p?.inYard !== false && !p?.dashed && !p?.caught;
+}
+
+function sumLootPoints(p) {
+  const loot = Array.isArray(p?.loot) ? p.loot : [];
+  return loot.reduce((s, c) => s + (Number(c?.v) || 0), 0);
+}
+
+function computeIsLeadForPlayer(game, me, players) {
+  const myId = String(me?.id || "");
+
+  const leadId = String(game?.leadFoxId || "");
+  if (leadId && myId && leadId === myId) return true;
+
+  const leadName = String(game?.leadFox || "");
+  if (leadName && String(me?.name || "") && leadName === String(me.name)) return true;
+
+  const idxRaw = Number.isFinite(Number(game?.leadIndex)) ? Number(game.leadIndex) : null;
+  if (idxRaw === null) return false;
+
+  const orderedAll = Array.isArray(players)
+    ? [...players].sort((a, b) => (a?.joinOrder ?? 9999) - (b?.joinOrder ?? 9999))
+    : [];
+
+  // ✅ match host.js: leadIndex is op “actieve yard spelers”
+  const orderedActive = orderedAll.filter(isInYard);
+  const base = orderedActive.length ? orderedActive : orderedAll;
+  if (!base.length) return false;
+
+  const idx = ((idxRaw % base.length) + base.length) % base.length;
+  return String(base[idx]?.id || "") === myId;
+}
+
+async function logBotDecision(db, gameId, payload) {
+  try {
+    if (!db || !gameId) return;
+    await addDoc(collection(db, "games", gameId, "actions"), {
+      kind: "BOT_DECISION",
+      at: Date.now(),
+      createdAt: serverTimestamp(),
+      ...payload,
+    });
+  } catch (e) {
+    console.warn("[BOT_LOG] failed", e);
+  }
+}
+
+async function countBotActionsThisRoundFallback({ db, gameId, botId, roundNum }) {
+  // Alleen gebruiken als je later game.actionDiscard niet meer bijhoudt
+  if (!db || !gameId || !botId) return 0;
+
+  try {
+    const { collection, getDocs, query, where } = await import(
+      "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js"
+    );
+
+    const q = query(
+      collection(db, "games", gameId, "actions"),
+      where("by", "==", botId),
+      where("round", "==", roundNum)
+    );
+    const snap = await getDocs(q);
+    return snap.size || 0;
+  } catch (e) {
+    console.warn("[BOTS] actions fallback failed:", e);
+    return 0;
+  }
+}
+
+function handToActionIds(hand) {
+  const arr = Array.isArray(hand) ? hand : [];
+  const ids = [];
+
+  for (const c of arr) {
+    const handKey = String(c?.name || c || "").trim();
+    const rawId = String(c?.id || c?.actionId || "").trim();
+    const key = rawId || handKey;
+    if (!key) continue;
+
+    if (/^[A-Z0-9_]+$/.test(key) && key.includes("_")) { ids.push(key); continue; }
+
+    const def = handKey ? getActionDefByName(handKey) : null;
+    const id = String(def?.id || "").trim();
+    if (id) ids.push(id);
+  }
+  return ids;
+}
+
+// ================================
+// Metrics (centralized + loggable)
+// ================================
+function buildBotMetricsForLog({ game, bot, players, flagsRoundOverride = null, extraIntel = {} }) {
+  const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
+  const presetKey = presetFromDenColor(denColor);
+  const riskWeight = Number(BOT_PRESETS?.[presetKey]?.weights?.risk ?? 1);
+
+  const isLead = computeIsLeadForPlayer(game, bot, players || []);
+
+  const flags = flagsRoundOverride || fillFlags(game?.flagsRound);
+
+  // carryValue blijft 1 source of truth: deze helper
+  const carryValue = computeCarryValue(bot);
+  const carryRecObj = computeCarryValueRec({ game, player: bot, players: players || [], mode: "publicSafe" });
+  const carryValueRec = Number(carryRecObj?.carryValueRec || 0);
+
+  const danger = computeDangerMetrics({
+    game,
+    player: bot,
+    players: players || [],
+    flagsRound: flags,
+    intel: {
+      denColor,
+      presetKey,
+      riskWeight,
+      isLead,
+
+      // CANON: danger/caught-risk is not scaled by carry/loot
+      carryValue: 0,
+      carryValueExact: 0,
+      carryValueRec: 0,
+
+      ...(extraIntel || {}),
+    },
   });
 
-  if (fixes.length) await Promise.all(fixes);
+   const dvIn = (danger?.dangerVec && typeof danger.dangerVec === "object") ? danger.dangerVec : null;
+
+  // CANON: BURROW heeft geen dangerVec (altijd veilig)
+  const dv = dvIn ? { ...dvIn, burrow: 0, BURROW: 0, dangerBurrow: 0, burrowRisk: 0 } : null;
+
+  const lurkRisk = Number(dv?.lurk ?? dv?.LURK ?? NaN);
+  const dashRisk = Number(dv?.dash ?? dv?.DASH ?? NaN);
+
+  const dangerStayFix = Number.isFinite(lurkRisk) ? lurkRisk : (danger?.dangerStay ?? 0);
+  const dangerEffectiveFix = Number.isFinite(lurkRisk) ? lurkRisk : (danger?.dangerEffective ?? 0);
+
+  const dangerPeakFix =
+    (Number.isFinite(dashRisk) || Number.isFinite(lurkRisk))
+      ? Math.max(Number.isFinite(dashRisk) ? dashRisk : 0, Number.isFinite(lurkRisk) ? lurkRisk : 0)
+      : (danger?.dangerPeak ?? 0);
+
+  return {
+    carryValue,
+    carryValueRec,
+    carryRecDebug: carryRecObj?.debug ?? null,
+    lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
+    lootSample: Array.isArray(bot?.loot) ? bot.loot.slice(0, 3) : [],
+    dangerScore: danger?.dangerScore ?? 0,
+    dangerVec: dv,
+    dangerPeak: dangerPeakFix,
+    dangerStay: dangerStayFix,
+    dangerEffective: dangerEffectiveFix,
+    nextEventIdUsed: danger?.nextEventIdUsed ?? null,
+    pDanger: danger?.pDanger ?? 0,
+    confidence: danger?.confidence ?? 0,
+    intel: danger?.intel ?? null,
+    debug: danger?.debug ?? null,
+  };
+
 }
 
-// ===== BOOT =====
-async function boot() {
-  if (!gameId) {
-    console.warn("[INIT] gameId ontbreekt in URL (?game=...)");
-    return;
+
+// ================================
+// Heuristics/Strategies ctx builder
+// ================================
+function peakDanger(f) {
+  if (!f) return 0;
+  return Math.max(Number(f.dangerDash || 0), Number(f.dangerLurk || 0), Number(f.dangerBurrow || 0));
+}
+
+function buildRevealedDenMap(game) {
+  const out = {};
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
+  const n = Math.min(track.length, rev.length);
+
+  for (let i = 0; i < n; i++) {
+    if (rev[i] !== true) continue;
+    const id = String(track[i] || "");
+    if (id.startsWith("DEN_")) out[id.slice(4).toUpperCase()] = true;
   }
+  return out;
+}
 
-  // ===== ACTIONS LISTENER (bots + humans schrijven hier) =====
-  const actionsRef = collection(db, "games", gameId, "actions");
-  const actionsQ = query(actionsRef, orderBy("createdAt", "desc"), limit(400));
+// Belangrijk: Rooster-gevaar pas opvoeren NA de 2e rooster die echt REVEALED is.
+// We baseren dit op eventRevealed (en vallen terug op game.roosterSeen als dat ontbreekt).
+function countRevealedRoosters(game) {
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
+  const n = Math.min(track.length, rev.length);
 
-  onSnapshot(
-    actionsQ,
-    (qs) => {
-      const rows = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
+  let c = 0;
+  for (let i = 0; i < n; i++) {
+    if (rev[i] === true && String(track[i]) === "ROOSTER_CROW") c++;
+  }
+  if (c === 0 && Number.isFinite(Number(game?.roosterSeen))) c = Number(game.roosterSeen);
+  return c;
+}
+function buildBotCtxForHeuristics({
+  game,
+  bot,
+  players,
+  handNames,
+  handIds,
+  actionsPlayedThisRoundOverride, // optioneel
+}) {
+  const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
+  const round = Number.isFinite(Number(game?.round)) ? Number(game.round) : 0;
 
-      lastActions = rows
-        .filter((e) => String(e.phase || "").toUpperCase() === "ACTIONS")
-        .map((e) => {
-          const msg = typeof e.message === "string" ? e.message.trim() : "";
-          const after = msg && msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
-          const choiceFallback = /^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(after) ? after : "";
-          return {
-            id: e.id,
-            createdAt: e.createdAt,
-            round: e.round ?? e.turn ?? e.roundNo ?? e.roundIndex ?? null,
-            phase: e.phase,
-            kind: e.kind || e.type || null,
-            playerId: e.playerId || e.actorId || e.by || e.uid || null,
-            playerName: e.playerName || e.name || null,
-            choice: e.choice || e.action || e.actionKey || choiceFallback,
-            payload: e.payload || null,
-            message: e.message || "",
-          };
-        })
-        .filter((e) => !!e.choice && !!e.playerId);
+  // --- discard (zichtbaar) ---
+  const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
+  const discThisRound = disc.filter((x) => Number(x?.round || 0) === round);
 
-      if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
-    },
-    (err) => console.warn("[actions listener] failed", err)
+  const botPlayedThisRound = discThisRound.filter((x) => x?.by === bot?.id);
+  const actionsPlayedThisRound =
+    Number.isFinite(Number(actionsPlayedThisRoundOverride))
+      ? Number(actionsPlayedThisRoundOverride)
+      : botPlayedThisRound.length;
+
+  // map discard item -> actionId (id als het al lijkt op ACTION_ID, anders via naam)
+  const toActionId = (x) => {
+    const rawId = String(x?.id || x?.actionId || x?.key || "").trim();
+    if (rawId && /^[A-Z0-9_]+$/.test(rawId) && rawId.includes("_")) return rawId;
+
+    const nm = String(x?.name || "").trim();
+    if (!nm) return null;
+    const def = getActionDefByName(nm);
+    return def?.id || null;
+  };
+
+  const discardThisRoundActionIds = discThisRound.map(toActionId).filter(Boolean);
+
+  const discardRecentActionIds = [...disc]
+    .sort((a, b) => Number(a?.at || 0) - Number(b?.at || 0))
+    .slice(-10)
+    .map(toActionId)
+    .filter(Boolean);
+
+  const discardActionIds = [
+    ...(Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : []),
+    ...disc.map((x) => x?.name),
+  ]
+    .map((x) => (typeof x === "string" ? (getActionDefByName(x)?.id || x) : x))
+    .map((x) => String(x || "").trim())
+    .filter(Boolean);
+  // --- scout knowledge ---
+  const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
+    ? bot.knownUpcomingEvents.filter(Boolean)
+    : [];
+  const knownUpcomingCount = knownUpcomingEvents.length;
+
+  const scoutTier =
+    knownUpcomingCount >= 2
+      ? "HARD_SCOUT"
+      : knownUpcomingCount === 1
+      ? "SOFT_SCOUT"
+      : "NO_SCOUT";
+
+
+  // --- next event facts (respect noPeek) ---
+  const flags = fillFlags(game?.flagsRound);
+  const noPeek = !!flags.noPeek;
+  const nextKnown = !noPeek || knownUpcomingCount > 0;
+  const nextId = nextKnown ? (noPeek ? (knownUpcomingEvents[0] || null) : getNextEventId(game)) : null;
+  const isLead = computeIsLeadForPlayer(game, bot, players || []);
+const revealedRoosters = countRevealedRoosters(game);
+
+const nextFacts = nextId ? getEventFacts(nextId, {
+  game,
+  me: bot,
+  denColor,
+  isLead,
+  flagsRound: game?.flagsRound || null,
+  lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
+  carryExact: computeCarryValue(bot),
+  roosterSeen: Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : revealedRoosters,
+}) : null;
+
+  const dangerNext = peakDanger(nextFacts);
+
+  // --- follow-tail hints (v1 simple) ---
+  const ps = Array.isArray(players) ? players : [];
+  const candidates = ps.filter((pl) => pl?.id && pl.id !== bot?.id && isInYard(pl));
+  const sameDenCandidates = candidates.filter(
+    (pl) => normColor(pl?.color || pl?.den || pl?.denColor) === denColor
   );
 
-  // ===== ensure burrow flag (1x per raid) =====
-  try {
-    await ensureBurrowFlagForAllPlayers(gameId);
-  } catch (e) {
-    console.warn("[ensureBurrowFlagForAllPlayers] failed", e);
-  }
+  const bestFollowTarget = sameDenCandidates[0] || candidates[0] || null;
+  const bestFollowTargetDen = bestFollowTarget
+    ? normColor(bestFollowTarget?.color || bestFollowTarget?.den || bestFollowTarget?.denColor)
+    : null;
 
-  // ===== players cache live (advisor + UI) =====
-  const playersCol = collection(db, "games", gameId, "players");
-  onSnapshot(playersCol, (qs) => {
-    lastPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
-    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
+  const revealedDenEventsByColor = buildRevealedDenMap(game);
+
+  const ctx = {
+    round,
+    phase: String(game?.phase || ""),
+    botId: bot?.id || null,
+    denColor,
+
+    handActionNames: Array.isArray(handNames) ? handNames : [],
+    handActionIds: Array.isArray(handIds) ? handIds : [],
+    handSize: Array.isArray(handIds) ? handIds.length : 0,
+
+    actionsPlayedThisRound,
+    discardActionIds,
+    discardThisRoundActionIds,
+    discardRecentActionIds,
+
+    nextEventId: nextId,
+    nextEventFacts: nextFacts,
+    dangerNext,
+
+    scoutTier,
+
+    nextKnown,
+
+    roosterSeen: Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : revealedRoosters,
+    postRooster2Window: revealedRoosters >= 2,
+
+    revealedDenEventsByColor,
+
+    hasEligibleFollowTarget: !!bestFollowTarget,
+    bestFollowTargetIsSameDen: !!bestFollowTargetDen && bestFollowTargetDen === denColor,
+    bestFollowTargetDenRevealed: !!bestFollowTargetDen && revealedDenEventsByColor[bestFollowTargetDen] === true,
+  };
+
+  // handHas_* flags voor strategies
+  const idsSet = new Set(Array.isArray(handIds) ? handIds : []);
+  for (const id of idsSet) ctx["handHas_" + id] = true;
+
+  return ctx;
+}
+
+// 0..100 (grof, maar werkt goed)
+function computeHandStrength({ game, bot }) {
+  const ids = handToActionIds(bot?.hand);
+  const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
+  const presetKey = presetFromDenColor(denColor);
+  if (!ids.length) return { score: 0, ids: [], top: null };
+
+  const handNames = (Array.isArray(bot?.hand) ? bot.hand : [])
+    .map((c) => String(c?.name || c || "").trim())
+    .filter(Boolean);
+
+  const ctx = buildBotCtxForHeuristics({
+    game,
+    bot,
+    players: [], // strength score heeft geen targets nodig
+    handNames,
+    handIds: ids,
   });
-}
 
-boot().catch((e) => console.error("[boot] fatal", e));
+  // ranked (CORE + strategies modifiers zitten nu in rankActions)
+  const ranked = rankActions(ids, { presetKey, denColor, game, me: bot, ctx });
+  const topIds = ranked.slice(0, 2).map((x) => x.id);
 
-// ===== DOM ELEMENTS – nieuwe player.html =====
-
-// Header / host board
-const gameStatusDiv = document.getElementById("gameStatus");
-const hostStatusLine = document.getElementById("hostStatusLine");
-const hostFeedbackLine = document.getElementById("hostFeedbackLine");
-
-// ===== LEAD FOX COMMAND CENTER (LIVE, SINGLE SOURCE: /log) =====
-
-let leadCCUnsubs = [];
-let leadCCPlayers = [];
-let leadCCLogs = [];
-
-function stopLeadCommandCenterLive() {
-  for (const fn of leadCCUnsubs) {
-    try { if (typeof fn === "function") fn(); } catch {}
+  // basis raw score op top-2
+  let raw = 0;
+  for (const id of topIds) {
+    const s = scoreActionFacts(id, { presetKey, denColor, game, me: bot, ctx });
+    if (!s) continue;
+    raw +=
+      (s.controlScore || 0) +
+      (s.infoScore || 0) +
+      (s.lootScore || 0) +
+      (s.tempoScore || 0) -
+      (s.riskScore || 0);
   }
-  leadCCUnsubs = [];
-  leadCCPlayers = [];
-  leadCCLogs = [];
+  // context: als next event gevaarlijk is, wil je liever een sterke hand
+  const flags0 = fillFlags(game?.flagsRound);
+  const noPeek0 = !!flags0.noPeek;
+  const known0 = Array.isArray(bot?.knownUpcomingEvents) ? bot.knownUpcomingEvents.filter(Boolean) : [];
+  const nextEvent0 = noPeek0 ? (known0[0] || null) : getNextEventId(game);
+  const isLead0 = String(game?.leadFoxId || game?.leadFox || "") === String(bot?.id || "");
+  const f = nextEvent0 ? getEventFacts(nextEvent0, { game, me: bot, denColor, isLead: isLead0 }) : null;
+  const dangerPeak = peakDanger(f);
+
+  // schaal en clamp
+  let score = Math.round(Math.max(0, Math.min(100, raw * 5)));
+
+  // bij hoog danger: iets strenger
+  if (dangerPeak >= 7) score = Math.max(0, score - 10);
+
+  return { score, ids, top: topIds[0] || null };
 }
 
-function tsToMs(t) {
+function avgLootValueFromDeck(lootDeck) {
+  const arr = Array.isArray(lootDeck) ? lootDeck : [];
+  if (!arr.length) return 1.2; // fallback
+  const sum = arr.reduce((s, c) => s + (Number(c?.v) || 0), 0);
+  return Math.max(0.8, sum / arr.length);
+}
+
+function countFutureRoosters(game) {
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : 0;
+  const future = track.slice(Math.max(0, idx));
+  return future.filter((id) => id === "ROOSTER_CROW").length;
+}
+
+function estimateRoundsLeft(game) {
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : 0;
+  const remainingEvents = Math.max(0, track.length - idx);
+
+  // rooster eindigt bij 3e crow; we schatten “druk” op basis van roosterSeen + future roosters
+  const roosterSeen = Number(game?.roosterSeen || 0);
+  const futureRoosters = countFutureRoosters(game);
+  const roostersLeft = Math.max(0, 3 - roosterSeen);
+
+  // simpele schatting: als er nog roosters zijn, raid stopt grofweg binnen remainingEvents,
+  // maar de “deadline” wordt sneller naarmate roosterSeen hoger is.
+  const pressure = 1 + roosterSeen * 0.35; // later = meer druk
+  return Math.max(1, Math.round(Math.min(remainingEvents, 6) / pressure));
+}
+
+function survivalProbNextEvent({ eventId, decision, myColor, immune, isLead, lootPts }) {
+  const id = String(eventId || "");
+
+  // default: veilig
+  let survive = 1;
+
+  if (id.startsWith("DEN_")) {
+    const color = id.slice(4).toUpperCase();
+    if (color === myColor && !immune) {
+      // DEN pakt jouw kleur, behalve BURROW of DASH
+      survive = (decision === "BURROW" || decision === "DASH") ? 1 : 0;
+    }
+    return survive;
+  }
+
+  if (id === "DOG_CHARGE" || id === "SECOND_CHARGE") {
+    if (immune) return 1;
+    // DOG pakt iedereen behalve BURROW (en DASH is ook “safe” in engine)
+    return (decision === "BURROW" || decision === "DASH") ? 1 : 0;
+  }
+
+  if (id === "SHEEPDOG_PATROL") {
+    // PATROL pakt DASHERS
+    return decision === "DASH" ? 0 : 1;
+  }
+
+  if (id === "GATE_TOLL") {
+    // DASH wordt geskipt; anders moet je 1 loot hebben
+    if (decision === "DASH") return 1;
+    return lootPts > 0 ? 1 : 0;
+  }
+
+  if (id === "MAGPIE_SNITCH") {
+    if (!isLead) return 1;
+    // lead wordt gepakt tenzij BURROW of DASH
+    return (decision === "BURROW" || decision === "DASH") ? 1 : 0;
+  }
+
+  if (id === "SILENT_ALARM") {
+    // engine doet nu niks, maar strategisch is dit “lead-penalty”.
+    // We modelleren risico als “scoreverlies”, niet survival.
+    return 1;
+  }
+
+  return survive;
+}
+
+function silentAlarmPenalty({ eventId, decision, isLead, lootPts }) {
+  if (String(eventId || "") !== "SILENT_ALARM") return 0;
+  if (!isLead) return 0;
+
+  // jouw kaarttekst: lead moet 2 loot afleggen of verliest lead
+  // model: als je blijft (LURK/BURROW) betaal je gemiddeld 1.6 punten “penalty”.
+  // DASH ontwijkt penalty (want je bent weg).
+  if (decision === "DASH") return 0;
+  if (lootPts >= 2) return 2.0;
+  return 1.2; // als je weinig hebt, penalty “lead loss” ≈ minder erg dan 2 loot
+}
+
+function expectedSackShareNow({ game, players }) {
+  const sack = Array.isArray(game?.sack) ? game.sack : [];
+  const sackValue = sack.reduce((s, c) => s + (Number(c?.v) || 0), 0);
+  if (!sack.length) return 0;
+
+  // grof: deel door (dashersAlready + 1). (Later: betere voorspelling)
+  const dashersAlready = (players || []).filter((pl) => pl?.dashed && pl?.inYard !== false).length;
+  const divisor = Math.max(1, dashersAlready + 1);
+  return sackValue / divisor;
+}
+
+function countDashDecisions(players) {
+  return (players || []).filter((x) => isInYard(x) && x?.decision === "DASH").length;
+}
+
+function hiddenNestBonusCards(totalDashers) {
+  if (totalDashers <= 1) return 3;
+  if (totalDashers === 2) return 2;
+  if (totalDashers === 3) return 1;
+  return 0; // 4+ => niets
+}
+
+function trackProgress01(game) {
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : 0;
+  const denom = Math.max(1, track.length - 1);
+  return Math.max(0, Math.min(1, idx / denom)); // 0..1
+}
+
+// --- deterministic selection helpers (prevents bot herding on congestion events) ---
+function stableHash32(str) {
+  // FNV-1a 32-bit
+  let h = 2166136261;
+  const s = String(str || "");
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function hiddenNestDashTargetTotal(game, eligibleCount) {
+  const prog = trackProgress01(game); // 0..1
+  if (eligibleCount <= 2) return 1;
+  // early track: usually better to keep tempo; later: 2 dashers is sweet spot
+  return prog < 0.45 ? 1 : 2;
+}
+
+function pickHiddenNestDashSet({ game, gameId, players }) {
+  const list = Array.isArray(players) ? players : [];
+
+  const eligibleAll = list.filter((x) => isInYard(x));
+  const eligibleUndecided = eligibleAll.filter((x) => !x?.decision);
+
+  const alreadyDash = eligibleAll.filter((x) => x?.decision === "DASH");
+  const dashSet = new Set(alreadyDash.map((x) => x.id));
+
+  const targetTotal = hiddenNestDashTargetTotal(game, eligibleAll.length);
+
+  // if already overcrowded (humans/bots), no more slots
+  const remainingSlots = Math.max(0, targetTotal - dashSet.size);
+  if (remainingSlots <= 0) {
+    return { dashSet, targetTotal, remainingSlots };
+  }
+
+  // Color bias: determines *who* gets the limited dash slots (not how many).
+  // Negative bias => more likely to be selected as dasher.
+  const biasByPreset = {
+    RED: -0.15,
+    YELLOW: -0.08,
+    BLUE: -0.05,
+    GREEN: 0.05,
+  };
+
+  const seedBase = `${String(gameId || "")}|${Number(game?.round || 0)}|${Number(game?.eventIndex || 0)}|HIDDEN_NEST`;
+
+  const ranked = eligibleUndecided
+    .map((pl) => {
+      const den = normColor(pl?.color || pl?.den || pl?.denColor);
+      const preset = presetFromDenColor(den);
+      const u = stableHash32(`${seedBase}|${pl.id}`) / 4294967296; // 0..1
+      const bias = biasByPreset[preset] ?? 0;
+      return { id: pl.id, key: u + bias, preset, den };
+    })
+    .sort((a, b) => a.key - b.key);
+
+  for (let i = 0; i < Math.min(remainingSlots, ranked.length); i++) {
+    dashSet.add(ranked[i].id);
+  }
+
+  return { dashSet, targetTotal, remainingSlots };
+}
+
+function nextEventId(game, offset = 0) {
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : 0;
+  return track[idx + offset] || null;
+}
+
+function classifyEvent(eventId) {
+  const id = String(eventId || "");
+  if (!id) return { type: "NONE" };
+  if (id === "DOG_CHARGE" || id === "SECOND_CHARGE") return { type: "DOG" };
+  if (id === "GATE_TOLL") return { type: "TOLL" };
+  if (id === "SHEEPDOG_PATROL") return { type: "NO_DASH" };
+  if (id === "ROOSTER_CROW") return { type: "ROOSTER" };
+  if (id.startsWith("DEN_")) return { type: "DEN", color: id.split("_")[1] || "" };
+  return { type: "OTHER", id };
+}
+
+function fillFlags(flagsRound) {
+  const fr = flagsRound || {};
+
+  // No-Go Zone: blocked scout positions (1-based)
+  const noGoPositions =
+    Array.isArray(fr.noPeek)
+      ? fr.noPeek
+      : Array.isArray(fr.noGoZones)
+        ? fr.noGoZones
+        : (fr.noPeek && typeof fr.noPeek === "object" && !Array.isArray(fr.noPeek) && Array.isArray(fr.noPeek.zones))
+          ? fr.noPeek.zones
+          : [];
+
+  // Global blind play (no free track knowledge)
+  // Canonical only: ignore legacy flagsRound.noPeek booleans/objects so bots aren't blind by accident.
+  const noPeekAll = fr?.noPeekAll === true;
+  return {
+    lockEvents: false,
+    scatter: false,
+    denImmune: {},
+    noPeek: false,       // global blind play (boolean for bot logic)
+    noPeekAll: false,    // canonical boolean (UI + bots)
+    noGoPositions: [],   // No-Go Zone list (array)
+    predictions: [],
+    opsLocked: false,
+    followTail: {},
+    scentChecks: [],
+    holdStill: {},
+    denIntel: {},
+    ...(fr || {}),
+    noGoPositions: (noGoPositions || []).map((x) => Number(x)).filter((x) => Number.isFinite(x)),
+    noPeekAll: !!noPeekAll,
+    noPeek: !!noPeekAll,
+  };
+}
+
+
+function getNextEventId(game) {
+  if (Array.isArray(game.eventTrack) && typeof game.eventIndex === "number") {
+    return game.eventTrack[game.eventIndex] || null;
+  }
+  return game.currentEventId || null;
+}
+
+
+function toActionId(nameOrId) {
+  const n = String(nameOrId || "").trim();
+  if (!n) return null;
+  const def = getActionDefByName(n);
+  return def?.id || null;
+}
+
+function buildBotCtx({ game, bot, players, handActionIds, handActionKeys, nextEventFacts, isLast, scoreBehind }) {
+  const round = Number.isFinite(game?.round) ? game.round : 0;
+  const phase = String(game?.phase || "");
+  const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
+
+  // --- discard arrays (visible to all bots) ---
+  const actionDiscard = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
+  const discardThisRound = actionDiscard.filter((x) => Number(x?.round) === round);
+  const discardThisRoundActionIds = discardThisRound
+    .map((x) => toActionId(x?.name))
+    .filter(Boolean);
+
+  const discardRecentActionIds = [...actionDiscard]
+    .sort((a, b) => Number(a?.at || 0) - Number(b?.at || 0))
+    .slice(-10)
+    .map((x) => toActionId(x?.name))
+    .filter(Boolean);
+
+  const discardActionIds = [
+    ...actionDiscard.map((x) => toActionId(x?.name)),
+    ...(Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile.map((x) => toActionId(x)) : []),
+  ].filter(Boolean);
+
+  // --- den events revealed knowledge ---
+  const revealedDenEventsByColor = { RED: false, GREEN: false, BLUE: false, YELLOW: false };
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
+  for (let i = 0; i < Math.min(track.length, rev.length); i++) {
+    if (!rev[i]) continue;
+    const eid = String(track[i] || "");
+    if (eid.startsWith("DEN_")) {
+      const c = normColor(eid.slice(4));
+      if (c && c in revealedDenEventsByColor) revealedDenEventsByColor[c] = true;
+    }
+  }
+
+  // --- scout (v1: meestal leeg; later vullen vanuit intel) ---
+  const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents) ? bot.knownUpcomingEvents : [];
+  const knownUpcomingCount = knownUpcomingEvents.length;
+  const scoutTier = knownUpcomingCount >= 2 ? "HARD_SCOUT" : knownUpcomingCount >= 1 ? "SOFT_SCOUT" : "NO_SCOUT";
+  const nextKnown = knownUpcomingCount >= 1;
+
+  // --- dangerNext (0..10) ---
+  const dangerNext = nextEventFacts
+    ? Math.max(
+        Number(nextEventFacts.dangerDash || 0),
+        Number(nextEventFacts.dangerLurk || 0),
+        Number(nextEventFacts.dangerBurrow || 0)
+      )
+    : 0;
+
+  // --- rooster timing (v1) ---
+  const roosterSeen = Number.isFinite(game?.roosterSeen) ? game.roosterSeen : 0;
+  const postRooster2Window = roosterSeen >= 2;
+  const rooster2JustRevealed = false; // later netjes als je reveal-moment flagt
+
+  // --- flags ---
+  const lockEventsActive = !!game?.flagsRound?.lockEvents;
+  const opsLockedActive = !!game?.flagsRound?.opsLocked;
+
+  // --- carry (exact + relative) ---
+  const carryValueExact = computeCarryValue(bot);
+  const carryRecObj = computeCarryValueRec({ game, player: bot, players: players || [], mode: "publicSafe" });
+  const carryValueRec = Number(carryRecObj?.carryValueRec || 0);
+  const carryValue = carryValueRec;// cashout core uses this
+
+
+  // --- follow target hints (simple v1) ---
+  const list = Array.isArray(players) ? players : [];
+  const candidates = list.filter((p) => p?.id && p.id !== bot?.id && !p?.caught);
+  const sameDenTargets = candidates.filter((p) => normColor(p?.den || p?.denColor || p?.color) === denColor);
+  const denRevealedTargets = candidates.filter((p) => {
+    const c = normColor(p?.den || p?.denColor || p?.color);
+    return !!revealedDenEventsByColor[c];
+  });
+
+  const eligible = [...new Map([...sameDenTargets, ...denRevealedTargets].map((p) => [p.id, p])).values()];
+  const hasEligibleFollowTarget = eligible.length > 0;
+
+  // pick best eligible target by carry/score
+  const best = eligible
+    .map((p) => ({
+      p,
+      v: Number.isFinite(Number(p?.score)) ? Number(p.score) : computeCarryValue(p),
+    }))
+    .sort((a, b) => b.v - a.v)[0]?.p;
+
+  const bestFollowTargetIsSameDen = best ? normColor(best?.den || best?.denColor || best?.color) === denColor : false;
+  const bestFollowTargetDenRevealed = best
+    ? !!revealedDenEventsByColor[normColor(best?.den || best?.denColor || best?.color)]
+    : false;
+
+  // --- ctx base ---
+  const ctx = {
+    phase,
+    round,
+    botId: bot?.id,
+    denColor,
+    carryValue,
+    carryValueExact,
+    carryValueRec,
+    carryRecDebug: carryRecObj?.debug ?? null,
+    lootLen: Array.isArray(bot?.loot) ? bot.loot.length : 0,
+    lootSample: Array.isArray(bot?.loot) ? bot.loot.slice(0, 3) : [],
+    isLast: !!isLast,
+    scoreBehind: Number(scoreBehind || 0),
+
+    handActionKeys: handActionKeys || [],
+    handActionIds: handActionIds || [],
+    handSize: Array.isArray(handActionIds) ? handActionIds.length : 0,
+
+    actionsPlayedThisRound: Number(bot?.actionsPlayedThisRound || 0), // als je dit al bijhoudt; anders later uit discard per bot
+    discardActionIds,
+    discardThisRoundActionIds,
+    discardRecentActionIds,
+
+    nextKnown,
+    knownUpcomingEvents,
+    knownUpcomingCount,
+    scoutTier,
+    nextEventFacts: nextEventFacts || null,
+    dangerNext,
+
+    roosterSeen,
+    rooster2JustRevealed,
+    postRooster2Window,
+
+    lockEventsActive,
+    opsLockedActive,
+
+    revealedDenEventsByColor,
+
+    sameDenTargetsCount: sameDenTargets.length,
+    hasEligibleFollowTarget,
+    bestFollowTargetIsSameDen,
+    bestFollowTargetDenRevealed,
+  };
+
+  // dynamic handHas_* flags
+  const set = new Set(handActionIds || []);
+  for (const id of set) ctx["handHas_" + id] = true;
+
+  return ctx;
+}
+// =====================================================
+// Pick best Action Card for BOT (OPS phase)
+// - builds rich ctx for botHeuristics (CORE + strategies)
+// - chooses targets for cards that need it
+// - anti-duplicate (self + global singleton per round)
+// - logs ranked choices to games/{gameId}/actions (BOT_DECISION)
+// =====================================================
+
+async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
+  // helper: convert discard item -> actionId (hoisted)
+  function toActionId(x) {
+    const rawId = String(x?.id || x?.actionId || x?.key || "").trim();
+    if (rawId && /^[A-Z0-9_]+$/.test(rawId) && rawId.includes("_")) return rawId;
+
+    const nm = String(x?.name || "").trim();
+    if (!nm) return null;
+
+    const def = getActionDefByName(nm);
+    return def?.id ? String(def.id) : null;
+  }
+
   try {
-    if (!t) return 0;
-    if (typeof t.toMillis === "function") return t.toMillis();
-    if (typeof t.seconds === "number") return t.seconds * 1000;
-    return 0;
-  } catch {
-    return 0;
-  }
-}
+    const hand = Array.isArray(bot?.hand) ? bot.hand : [];
+    if (!hand.length) return null;
+   
+    const handNames = hand
+    .map((c) => String(c?.name || c || "").trim())
+    .filter(Boolean);
 
-function formatChoiceForDisplay(phaseKey, rawChoice, payload) {
-  const c0 = String(rawChoice || "").trim();
-  if (!c0) return "";
+    // map hand -> entries with BOTH:
+    // - actionId (canonical)
+    // - handToken (the actual thing that exists in hand for removal)
+    const entries = hand
+      .map((c) => {
+        const rawId = String(c?.id || c?.actionId || c?.key || "").trim();
+        const nm = String(c?.name || (typeof c === "string" ? c : "") || "").trim();
+        const key = rawId || nm;
+        if (!key) return null;
 
-  // normalize prefixes
-  const upper = c0.toUpperCase();
-  const p = String(phaseKey || "").toUpperCase();
+        // if already an ID
+        if (/^[A-Z0-9_]+$/.test(key) && key.includes("_")) {
+          return {
+            actionId: key,
+            displayName: nm || key,
+            handToken: nm || key, // keep removable token
+          };
+        }
 
-  function niceWords(s) {
-    return String(s || "")
-      .replace(/_/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  }
+        // resolve name -> id via cards.js defs
+        const def = getActionDefByName(key);
+        if (!def?.id) return null;
 
-  // MOVE_*
-  if (upper.startsWith("MOVE_")) {
-    const kind = niceWords(c0.slice(5));
-    // Scout positie in payload
-    const pos =
-      payload?.pos ??
-      payload?.position ??
-      payload?.slot ??
-      payload?.index ??
-      payload?.eventPos ??
-      null;
-    if (pos != null && String(kind).toUpperCase().startsWith("SCOUT")) {
-      return `SCOUT #${pos}`;
+        return {
+          actionId: String(def.id).trim(),
+          displayName: String(def.name || key).trim(),
+          handToken: nm || String(def.name || key).trim(),
+        };
+      })
+      .filter(Boolean);
+
+    const ids = entries.map((e) => e.actionId).filter(Boolean);
+    if (!ids.length) return null;
+
+    const denColor = normColor(bot?.color || bot?.den || bot?.denColor);
+    const presetKey = presetFromDenColor(denColor);
+
+    // ---------- round + discard ----------
+    const roundNum = Number.isFinite(Number(game?.round)) ? Number(game.round) : 0;
+    const disc = Array.isArray(game?.actionDiscard) ? game.actionDiscard : [];
+    const discThisRound = disc.filter((x) => Number(x?.round || 0) === roundNum);
+
+    const botPlayedThisRound = discThisRound.filter((x) => x?.by === bot.id);
+    const botPlayedActionIdsThisRound = botPlayedThisRound.map(toActionId).filter(Boolean);
+    const actionsPlayedThisRound = botPlayedThisRound.length;
+
+    const discardThisRoundActionIds = discThisRound.map(toActionId).filter(Boolean);
+
+    const discardRecentActionIds = [...disc]
+      .sort((a, b) => Number(a?.at || 0) - Number(b?.at || 0))
+      .slice(-10)
+      .map(toActionId)
+      .filter(Boolean);
+
+    const discardActionIds = [
+      ...(Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : []),
+      ...disc.map((x) => x?.name),
+    ]
+      .map((v) => {
+        if (typeof v === "string") {
+          const def = getActionDefByName(v);
+          return def?.id ? String(def.id) : String(v);
+        }
+        return null;
+      })
+      .filter(Boolean);
+
+    // ---------- flags / next event / knowledge ----------
+    const flags = fillFlags(game?.flagsRound);
+    const noPeek = !!flags.noPeek;
+
+    const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
+      ? bot.knownUpcomingEvents.filter(Boolean)
+      : [];
+    const knownUpcomingCount = knownUpcomingEvents.length;
+
+    const nextKnown = !noPeek || knownUpcomingCount >= 1;
+    const nextId = nextKnown ? String(noPeek ? knownUpcomingEvents[0] : nextEventId(game, 0) || "") : null;
+
+    const isLead = String(game?.leadFoxId || game?.leadFox || "") === String(bot?.id || "");
+
+    // ---------- rooster timing: count revealed roosters ----------
+    const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+    const rev = Array.isArray(game?.eventRevealed) ? game.eventRevealed : [];
+
+    let revealedRoosters = 0;
+    for (let i = 0; i < Math.min(track.length, rev.length); i++) {
+      if (rev[i] === true && String(track[i]) === "ROOSTER_CROW") revealedRoosters++;
     }
-    return kind || "MOVE";
-  }
+    const roosterSeen =
+      revealedRoosters ||
+      (Number.isFinite(Number(game?.roosterSeen)) ? Number(game.roosterSeen) : 0);
 
-  // ACTION_*
-  if (upper.startsWith("ACTION_") || upper.startsWith("ACTIONS_") || upper.startsWith("OPS_")) {
-    const name = c0.replace(/^(ACTIONS_|ACTION_|OPS_)/i, "");
-    if (/^PASS$/i.test(name)) return "PASS";
-    return niceWords(name) || "ACTION";
-  }
+    const postRooster2Window = revealedRoosters >= 2;
 
-  // DECISION_*
-  if (upper.startsWith("DECISION_")) {
-    const name = c0.slice(9);
-    return niceWords(name) || "DECISION";
-  }
+    // carryExact alvast, zodat eventFacts context klopt
+    const carryExact = computeCarryValue(bot);
+    const lootLen = Array.isArray(bot?.loot) ? bot.loot.length : 0;
 
-  // fallback: show raw (pretty)
-  return niceWords(c0);
-}
+    // IMPORTANT: pass the ctx shape your rulesIndex expects
+    const nextEventFacts = nextId
+      ? getEventFacts(nextId, {
+          denColor,
+          isLead,
+          flagsRound: flags,
+          lootLen,
+          carryExact,
+          roosterSeen,
+        })
+      : null;
 
-function renderLeadCommandCenterUI(round, players, logs) {
-  if (!leadCommandContent) return;
+    const dangerNext = nextEventFacts
+      ? Math.max(
+          Number(nextEventFacts.dangerDash || 0),
+          Number(nextEventFacts.dangerLurk || 0),
+          Number(nextEventFacts.dangerBurrow || 0)
+        )
+      : 0;
 
-  leadCommandContent.innerHTML = "";
+    const scoutTier =
+      knownUpcomingCount >= 2 ? "HARD_SCOUT" :
+      knownUpcomingCount >= 1 ? "SOFT_SCOUT" :
+      "NO_SCOUT";
 
-  const perPlayer = new Map();
-  const targetRound = Number(round ?? 0);
-  
-  for (const d of (logs || [])) {
-    const rr = Number(d?.round ?? d?.turn ?? d?.roundNo ?? d?.roundIndex ?? 0);
-    if (rr !== targetRound) continue;
+    // ---------- score meta (last / behind) ----------
+    const list = Array.isArray(players) ? players.filter((x) => x?.id) : [];
+    const getVal = (pl) => {
+      const s = Number(pl?.score);
+      if (Number.isFinite(s)) return s;
+      return sumLootPoints(pl);
+    };
+    const sorted = [...list].sort((a, b) => getVal(b) - getVal(a));
+    const leaderVal = sorted.length ? getVal(sorted[0]) : 0;
+    const myVal = getVal(bot);
 
-    const pid = d?.playerId || d?.actorId || d?.by || d?.uid || d?.player || null;
-    if (!pid) continue;
+    const carryRecObj3 = computeCarryValueRec({ game, player: bot, players: list, mode: "publicSafe" });
+    const carryRec = Number(carryRecObj3?.carryValueRec || 0);
 
-    // choice: nieuw (choice/action/actionKey) of legacy message parsing
-    const rawChoice =
-      (typeof d?.choice === "string" && d.choice.trim()) ||
-      (typeof d?.action === "string" && d.action.trim()) ||
-      (typeof d?.actionKey === "string" && d.actionKey.trim()) ||
-      (() => {
-        const msg = typeof d?.message === "string" ? d.message.trim() : "";
-        if (!msg) return "";
-        const after = msg.includes(":") ? msg.split(":").slice(1).join(":").trim() : msg;
-        return /^(MOVE|OPS|ACTION|ACTIONS|DECISION)_/i.test(after) ? after : "";
-      })();
+    const myRank = sorted.findIndex((x) => x.id === bot.id);
+    const isLast = myRank >= 0 ? myRank === sorted.length - 1 : false;
+    const scoreBehind = Math.max(0, leaderVal - myVal);
 
-    if (!rawChoice) continue;
+    const lockEventsActive = !!flags?.lockEvents;
+    const opsLockedActive = !!flags?.opsLocked;
 
-    // phase: direct, of infer uit choice
-    let phase = String(d?.phase || d?.step || d?.stage || "").toUpperCase().trim();
-    if (!phase) {
-      if (/^MOVE_/i.test(rawChoice)) phase = "MOVE";
-      else if (/^(OPS|ACTION|ACTIONS)_/i.test(rawChoice)) phase = "ACTIONS";
-      else if (/^DECISION_/i.test(rawChoice)) phase = "DECISION";
+    // ---------- revealed den events by color ----------
+    const revealedDenEventsByColor = {};
+    for (let i = 0; i < Math.min(track.length, rev.length); i++) {
+      if (rev[i] !== true) continue;
+      const id = String(track[i] || "");
+      if (id.startsWith("DEN_")) {
+        const c = normColor(id.split("_")[1] || "");
+        if (c) revealedDenEventsByColor[c] = true;
+      }
     }
-    if (phase === "OPS" || phase === "ACTION") phase = "ACTIONS";
 
-    const row = { ...d, playerId: pid, choice: rawChoice, phase };
+    // ---------- Follow target selection (basis) ----------
+    function pickBestFollowTarget() {
+      const candidates = (players || []).filter((x) => x?.id && x.id !== bot.id && isInYard(x));
+      if (!candidates.length) return { targetId: null, sameDen: false, denRevealed: false, eligible: false };
 
-    let bucket = perPlayer.get(pid);
-    if (!bucket) {
-      bucket = { moves: [], actions: [], decisions: [] };
-      perPlayer.set(pid, bucket);
-    }
+      let best = null;
+      for (const pl of candidates) {
+        const cDen = normColor(pl?.color || pl?.den || pl?.denColor);
 
-    if (phase === "MOVE") bucket.moves.push(row);
-    else if (phase === "ACTIONS") bucket.actions.push(row);
-    else if (phase === "DECISION") bucket.decisions.push(row);
-  }
+        const sameDen = cDen && cDen === denColor;
+        const denRevealed = !!revealedDenEventsByColor[cDen];
+        const eligible = !nextKnown && (sameDen || denRevealed);
 
-  // sort binnen buckets (oud->nieuw)
-  for (const bucket of perPlayer.values()) {
-    bucket.moves.sort((a, b) => (a.clientAt || a.at || tsToMs(a.createdAt)) - (b.clientAt || b.at || tsToMs(b.createdAt)));
-    bucket.actions.sort((a, b) => (a.clientAt || a.at || tsToMs(a.createdAt)) - (b.clientAt || b.at || tsToMs(b.createdAt)));
-    bucket.decisions.sort((a, b) => (a.clientAt || a.at || tsToMs(a.createdAt)) - (b.clientAt || b.at || tsToMs(b.createdAt)));
-  }
+        let score = 0;
+        if (sameDen) score += 10;
+        if (denRevealed) score += 6;
+        if (eligible) score += 4;
 
-  const header = document.createElement("p");
-  header.className = "lead-command-subtitle";
-  header.textContent = `Ronde ${targetRound} – overzicht van alle keuzes per speler.`;
-  leadCommandContent.appendChild(header);
+        const k = Array.isArray(pl?.knownUpcomingEvents) ? pl.knownUpcomingEvents.length : 0;
+        score += Math.min(3, k);
 
-  const orderedPlayers = sortPlayersByJoinOrder(players || []);
+        score += Math.min(5, sumLootPoints(pl) * 0.4);
 
-  if (!orderedPlayers.length) {
-    const msg = document.createElement("p");
-    msg.textContent = "Er zijn nog geen spelers gevonden.";
-    msg.style.fontSize = "0.9rem";
-    msg.style.opacity = "0.8";
-    leadCommandContent.appendChild(msg);
-    return;
-  }
-
-  orderedPlayers.forEach((p) => {
-    const group = perPlayer.get(p.id) || { moves: [], actions: [], decisions: [] };
-
-    const block = document.createElement("div");
-    block.className = "lead-player-block";
-
-    const color = (p.color || p.denColor || p.den || "").toUpperCase();
-    if (color === "RED") block.classList.add("den-red");
-    else if (color === "BLUE") block.classList.add("den-blue");
-    else if (color === "GREEN") block.classList.add("den-green");
-    else if (color === "YELLOW") block.classList.add("den-yellow");
-
-    if (currentPlayer && p.id === currentPlayer.id) block.classList.add("is-self-lead");
-
-    const headerRow = document.createElement("div");
-    headerRow.className = "lead-player-header";
-
-    const nameEl = document.createElement("div");
-    nameEl.className = "lead-player-name";
-    nameEl.textContent = p.name || "Vos";
-
-    const denEl = document.createElement("div");
-    denEl.className = "lead-player-denpill";
-    denEl.textContent = color ? `Den ${color}` : "Den onbekend";
-
-    headerRow.appendChild(nameEl);
-    headerRow.appendChild(denEl);
-
-    const phaseGrid = document.createElement("div");
-    phaseGrid.className = "lead-phase-grid";
-
-    function buildPhaseCol(title, phaseKey, items) {
-      const col = document.createElement("div");
-      col.className = "lead-phase-col";
-
-      const tEl = document.createElement("div");
-      tEl.className = "lead-phase-title";
-      tEl.textContent = title;
-      col.appendChild(tEl);
-
-      if (!items.length) {
-        const empty = document.createElement("div");
-        empty.className = "lead-phase-line lead-phase-empty";
-        empty.textContent = "Nog geen keuze.";
-        col.appendChild(empty);
-      } else {
-        items.forEach((a) => {
-          const line = document.createElement("div");
-          line.className = "lead-phase-line";
-          line.textContent = formatChoiceForDisplay(phaseKey, a.choice, a.payload || null);
-          col.appendChild(line);
-        });
+        if (!best || score > best.score) best = { id: pl.id, score, sameDen, denRevealed, eligible };
       }
 
-      return col;
+      return {
+        targetId: best?.id || null,
+        sameDen: !!best?.sameDen,
+        denRevealed: !!best?.denRevealed,
+        eligible: !!best?.eligible,
+      };
     }
 
-    phaseGrid.appendChild(buildPhaseCol("MOVE", "MOVE", group.moves));
-    phaseGrid.appendChild(buildPhaseCol("ACTIONS", "ACTIONS", group.actions));
-    phaseGrid.appendChild(buildPhaseCol("DECISION", "DECISION", group.decisions));
+    const followPick = pickBestFollowTarget();
 
-    block.appendChild(headerRow);
-    block.appendChild(phaseGrid);
-    leadCommandContent.appendChild(block);
-  });
+    // ---------- ctx for heuristics/strategies ----------
+    const ctx = {
+      phase: String(game?.phase || ""),
+      round: roundNum,
+      botId: bot?.id || null,
+      denColor,
+
+      carryValue: carryRec,
+      carryValueExact: carryExact,
+      carryValueRec: carryRec,
+      isLast,
+      scoreBehind,
+
+      handActionIds: ids,
+      handSize: ids.length,
+
+      actionsPlayedThisRound,
+      discardActionIds,
+      discardThisRoundActionIds,
+      discardRecentActionIds,
+
+      nextEventId: nextId,
+      nextEventFacts,
+      dangerNext,
+      nextKnown,
+      knownUpcomingEvents,
+      knownUpcomingCount,
+      scoutTier,
+
+      roosterSeen,
+      postRooster2Window,
+
+      lockEventsActive,
+      opsLockedActive,
+
+      hasEligibleFollowTarget: followPick.eligible && !!followPick.targetId,
+      bestFollowTargetIsSameDen: followPick.sameDen,
+      bestFollowTargetDenRevealed: followPick.denRevealed,
+
+      revealedDenEventsByColor,
+    };
+
+    for (const id of ids) ctx["handHas_" + id] = true;
+
+  // ---------- ranking (strategy.js) ----------
+const usedIds = (
+  Array.isArray(game?.discardThisRoundActionIds) && game.discardThisRoundActionIds.length
+)
+  ? game.discardThisRoundActionIds.map((x) => String(x))
+  : (Array.isArray(discardThisRoundActionIds) ? discardThisRoundActionIds : []);
+
+const res = evaluateOpsActions({
+  game,
+  me: bot,
+  players: list,
+  flagsRound: flags,
+  cfg: getStrategyCfgForBot(bot, game), // behoud: per-bot DISC overrides (+ optioneel game.botDiscProfiles)
+});
+    
+// ✅ Respecteer strategy: als best = PASS → echt PASS
+if (res?.best?.kind !== "PLAY") return null;
+
+const passU0 = Number(res?.baseline?.passUtility ?? 0);
+const req0 = Number(res?.meta?.requiredGain ?? 0);
+const minU0 = passU0 + req0;
+    
+    if (game?.debugBots) {
+      console.log(
+        "[OPS]",
+        bot.id,
+        "hand", (bot.hand || []).length,
+        "best", res?.best?.kind, res?.best?.reason,
+        "bestU", res?.best?.utility,
+        "topU", res?.ranked?.[0]?.utility
+      );
+    }
+
+    const candidates = [];
+candidates.push(...(res.best.plays || []));
+
+// ranked alleen als ze óók boven de drempel zitten (fallback als best play illegaal is)
+for (const r of (res?.ranked || [])) {
+  if (r?.play && Number(r.utility) >= minU0) candidates.push(r.play);
+}
+    
+    const botPlayedSet = new Set(botPlayedActionIdsThisRound);
+
+    const GLOBAL_SINGLETON_ACTIONS = new Set([
+      "KICK_UP_DUST",
+      "PACK_TINKER",
+      "NO_GO_ZONE",
+      "SCATTER",
+    ]);
+
+    for (const play of candidates) {
+      const id = String(play?.actionId || "").trim();
+      if (!id) continue;
+
+      if (botPlayedSet.has(id)) continue;
+      if (GLOBAL_SINGLETON_ACTIONS.has(id) && usedIds.includes(id)) continue;
+
+      // legality checks
+if (id === "KICK_UP_DUST") {
+  if (lockEventsActive) continue;
+  if (!Array.isArray(game?.eventTrack)) continue;
+  if (!Number.isFinite(Number(game?.eventIndex))) continue;
+  if (Number(game.eventIndex) >= game.eventTrack.length - 1) continue;
 }
 
+if (id === "PACK_TINKER") {
+  // Pack Tinker = hand ↔ discard pile (niet eventTrack)
+  const pile = Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : [];
+  const hasPile = pile.some((x) => x && typeof x === "object" && x.uid && x.name);
+  if (!hasPile) continue;
+  if ((handNames?.length || 0) < 2) continue; // je moet iets anders hebben om te ruilen
+}
 
-async function ensureBurrowFlag(gameId, playerId) {
-  const pRef = doc(db, "games", gameId, "players", playerId);
+      if (id === "HOLD_STILL" && opsLockedActive) continue;
 
-  await runTransaction(db, async (tx) => {
-    const snap = await tx.get(pRef);
+      // IMPORTANT: choose a token that actually exists in hand
+      const chosenName =
+        entries.find((e) => e.actionId === id)?.handToken ||
+        String(play?.name || "").trim();
 
-    // als player doc nog niet bestaat: niks doen (jouw create flow zet het dan)
-    if (!snap.exists()) return;
+      if (!chosenName) continue;
 
-    const data = snap.data() || {};
-    if (data.burrowUsedThisRaid == null) {
-      tx.update(pRef, { burrowUsedThisRaid: false });
+      let targetId = play?.targetId || null;
+
+      if ((id === "MASK_SWAP" || id === "HOLD_STILL") && !targetId) {
+        targetId = pickRichestTarget(players || [], bot.id);
+        if (!targetId) continue;
+      }
+
+      if (id === "FOLLOW_THE_TAIL" && !targetId) {
+        targetId = followPick.targetId || pickRichestTarget(players || [], bot.id);
+        if (!targetId) continue;
+      }
+
+      if (id === "SCENT_CHECK" && !targetId) {
+        const intelTarget =
+          (players || [])
+            .filter((x) => x?.id && x.id !== bot.id && isInYard(x))
+            .map((x) => ({
+              id: x.id,
+              k: Array.isArray(x?.knownUpcomingEvents) ? x.knownUpcomingEvents.length : 0,
+              loot: sumLootPoints(x),
+            }))
+            .sort((a, b) => (b.k - a.k) || (b.loot - a.loot))[0]?.id || null;
+
+        targetId = intelTarget || pickRichestTarget(players || [], bot.id);
+        if (!targetId) continue;
+      }
+
+      return { name: chosenName, actionId: id, targetId };
     }
+
+    return null;
+  } catch (err) {
+    console.warn("[BOTS] pickBestActionFromHand crashed -> PASS", err);
+    return null;
+  }
+}
+
+function getOpsTurnId(game) {
+  if (!game || game.phase !== "ACTIONS") return null;
+  const order = Array.isArray(game.opsTurnOrder) ? game.opsTurnOrder : [];
+  if (!order.length) return null;
+  const idx = Number.isFinite(game.opsTurnIndex) ? game.opsTurnIndex : 0;
+  if (idx < 0 || idx >= order.length) return null;
+  return order[idx];
+}
+
+function canBotMove(game, p) {
+  if (!game || !p) return false;
+  if (!isActiveRaidStatus(game.status)) return false;
+  if (game.phase !== "MOVE") return false;
+  if (game.raidEndedByRooster) return false;
+  if (!isInYard(p)) return false;
+  const moved = Array.isArray(game.movedPlayerIds) ? game.movedPlayerIds : [];
+  return !moved.includes(p.id);
+}
+
+function canBotDecide(game, p) {
+  if (!game || !p) return false;
+  if (!isActiveRaidStatus(game.status)) return false;
+  if (game.phase !== "DECISION") return false;
+  if (game.raidEndedByRooster) return false;
+  if (!isInYard(p)) return false;
+  if (p.decision) return false;
+  return true;
+}
+
+function hasCard(hand, name) {
+  const n = String(name || "");
+  return Array.isArray(hand) && hand.some((c) => String(c?.name || c).trim() === n);
+}
+
+function removeOneCard(hand, name) {
+  const n = String(name || "");
+  const idx = hand.findIndex((c) => String(c?.name || c).trim() === n);
+  if (idx >= 0) hand.splice(idx, 1);
+  return idx >= 0;
+}
+
+function discardPileHasCard(game, name) {
+  const n = String(name || "").trim();
+  const pile = Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : [];
+  return pile.some((x) => x && typeof x === "object" && x.uid && String(x.name || "").trim() === n);
+}
+
+function canBotPackTinkerNow(game, bot) {
+  const hand = Array.isArray(bot?.hand) ? bot.hand : [];
+  const hasOther = hand.some((c) => String(c?.name || c).trim() !== "Pack Tinker");
+  const pile = Array.isArray(game?.actionDiscardPile) ? game.actionDiscardPile : [];
+  const hasPile = pile.some((x) => x && typeof x === "object" && x.uid && x.name);
+  return hasOther && hasPile;
+}
+
+function pickRichestTarget(players, excludeId) {
+  const candidates = (players || []).filter((x) => x?.id && x.id !== excludeId && isInYard(x));
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => sumLootPoints(b) - sumLootPoints(a));
+  return candidates[0]?.id || null;
+}
+
+/** ===== runner id (prevents multi-tab chaos; lock still the real guard) ===== */
+function getRunnerId() {
+  try {
+    const k = "vj_botRunnerId";
+    let v = localStorage.getItem(k);
+    if (!v) {
+      v = globalThis.crypto?.randomUUID
+        ? crypto.randomUUID()
+        : String(Math.random()).slice(2) + "-" + Date.now();
+      localStorage.setItem(k, v);
+    }
+    return v;
+  } catch {
+    return String(Math.random()).slice(2) + "-" + Date.now();
+  }
+}
+/** ===== logging ===== */
+async function logBotAction({ db, gameId, addLog, payload }) {
+  // ✅ keep: structured action timeline
+  await addDoc(collection(db, "games", gameId, "actions"), {
+    ...payload,
+    createdAt: serverTimestamp(),
   });
+
+  // ❌ disable: extra log writes (story log)
+  // if (typeof addLog === "function") {
+  //   await addLog(gameId, {
+  //     round: payload.round ?? 0,
+  //     phase: payload.phase ?? "",
+  //     kind: "BOT",
+  //     playerId: payload.playerId,
+  //     message: payload.message || `${payload.playerName || "BOT"}: ${payload.choice}`,
+  //   });
+  // }
 }
 
 async function applyOpsActionAndAdvanceTurn({ db, gameRef, actorId, isPass }) {
   const now = Date.now();
 
-  await runTransaction(db, async (tx) => {
+  return await runTransaction(db, async (tx) => {
     const snap = await tx.get(gameRef);
-    if (!snap.exists()) return;
+    if (!snap.exists()) return { didApply: false, reason: "no-game" };
 
     const g = snap.data();
-    if (g.phase !== "ACTIONS") return;
+    if (g.phase !== "ACTIONS") return { didApply: false, reason: "not-actions" };
 
     const order = Array.isArray(g.opsTurnOrder) ? g.opsTurnOrder : [];
-    if (!order.length) return;
+    if (!order.length) return { didApply: false, reason: "no-order" };
 
     const idx = Number.isFinite(g.opsTurnIndex) ? g.opsTurnIndex : 0;
     const expected = order[idx];
 
-    // ✅ alleen de speler die aan de beurt is mag iets doen
-    if (expected !== actorId) return;
+    // Alleen wie aan de beurt is
+    if (expected !== actorId) return { didApply: false, reason: "not-your-turn" };
 
     const opsLocked = !!g.flagsRound?.opsLocked;
     const target = Number(g.opsActiveCount || order.length);
     const passesNow = Number(g.opsConsecutivePasses || 0);
 
-    // ✅ als OPS al klaar is: blokkeer alle nieuwe acties
-    if (opsLocked || passesNow >= target) return;
+    // Als OPS klaar is: niets meer accepteren
+    if (opsLocked || passesNow >= target) return { didApply: false, reason: "ops-ended" };
 
     const nextIdx = (idx + 1) % order.length;
 
-    // ✅ PASS telt op, elke echte action reset de teller
+    // PASS telt op, echte action reset
     let nextPasses = isPass ? passesNow + 1 : 0;
 
-    // ✅ clamp: nooit boven target
+    // clamp
     if (nextPasses > target) nextPasses = target;
 
     const ended = nextPasses >= target;
@@ -452,3782 +1825,1625 @@ async function applyOpsActionAndAdvanceTurn({ db, gameRef, actorId, isPass }) {
       opsConsecutivePasses: nextPasses,
       ...(ended
         ? {
-            flagsRound: { ...(g.flagsRound || {}), opsLocked: true }, // ✅ hard stop
+            flagsRound: { ...(g.flagsRound || {}), opsLocked: true },
             opsEndedAtMs: now,
           }
         : {}),
     });
-  });
-}
 
-async function openLeadCommandCenter() {
-  if (!currentGame || !currentPlayer) {
-    alert("Geen game of speler geladen.");
-    return;
-  }
-
-  const leadId = await resolveLeadPlayerId(currentGame);
-  if (!leadId) {
-    alert("Er is nog geen Lead Fox aangewezen.");
-    return;
-  }
-
-  if (leadId !== currentPlayer.id) {
-    alert("Alleen de Lead Fox heeft toegang tot het Command Center met alle keuzes van deze ronde.");
-    return;
-  }
-
-  if (!leadCommandModalOverlay || !leadCommandContent) {
-    alert("Command Center UI ontbreekt in de HTML.");
-    return;
-  }
-
-  leadCommandModalOverlay.classList.remove("hidden");
-
-  let round = Number(currentGame?.round ?? 0);
-
-  stopLeadCommandCenterLive();
-
-  // 1) Players live (handig voor namen/den)
-  const playersRef = collection(db, "games", gameId, "players");
-  const unsubPlayers = onSnapshot(playersRef, (qs) => {
-    leadCCPlayers = qs.docs.map((d) => ({ id: d.id, ...d.data() }));
-    renderLeadCommandCenterUI(Number(currentGame?.round ?? round), leadCCPlayers, leadCCLogs);
-  });
-  leadCCUnsubs.push(unsubPlayers);
-// 2) Actions live (bots + humans)
-// BotRunner schrijft keuzes naar /actions; spelers doen dat ook via logMoveAction().
-const actionsCol = collection(db, "games", gameId, "actions");
-const actionsQ = query(actionsCol, orderBy("createdAt", "desc"), limit(800));
-
-const unsubActions = onSnapshot(
-  actionsQ,
-  (qs) => {
-    leadCCLogs = qs.docs.map((d) => d.data());
-    renderLeadCommandCenterUI(Number(currentGame?.round ?? round), leadCCPlayers, leadCCLogs);
-  },
-  (err) => {
-    console.error("[LCC] actions snapshot failed", err);
-    if (leadCommandContent) {
-      leadCommandContent.innerHTML =
-        `<p style="opacity:.8">LCC kan actions niet lezen: ${String(err?.message || err)}</p>`;
-    }
-  }
-);
-
-leadCCUnsubs.push(unsubActions);
-
-}
-
-function closeLeadCommandCenter() {
-  stopLeadCommandCenterLive();
-  if (!leadCommandModalOverlay) return;
-  leadCommandModalOverlay.classList.add("hidden");
-}
-
-// Koppeling van Action Card naam -> asset-bestand in /assets
-const ACTION_CARD_IMAGES = {
-  "Scatter!": "card_action_scatter.png",
-  "Den Signal": "card_action_den_signal.png",
-  "No-Go Zone": "card_action_no_go_zone.png",
-  "Kick Up Dust": "card_action_kick_up_dust.png",
-  "Burrow Beacon": "card_action_burrow_beacon.png",
-  "Molting Mask": "card_action_molting_mask.png",
-  "Hold Still": "card_action_hold_still.png",
-  "Nose for Trouble": "card_action_nose_for_trouble.png",
-  "Scent Check": "card_action_scent_check.png",
-  "Follow the Tail": "card_action_follow_tail.png",
-  "Alpha Call": "card_action_alpha_call.png",
-  "Pack Tinker": "card_action_pack_tinker.png",
-  "Mask Swap": "card_action_mask_swap.png",
-};
-
-// Hero / spelerkaart
-const playerAvatarEl = document.getElementById("playerAvatar");
-const playerCardArtEl = document.getElementById("playerCardArt");
-const playerNameEl = document.getElementById("playerName");
-const playerDenColorEl = document.getElementById("playerDenColor");
-const playerStatusEl = document.getElementById("playerStatus");
-const playerScoreEl = document.getElementById("playerScore");
-const lootSummaryEl = document.getElementById("lootSummary");
-const lootMeterEl = document.getElementById("lootMeter");
-const lootMeterFillEl = lootMeterEl ? lootMeterEl.querySelector(".loot-meter-fill") : null;
-
-// Event + scout + flags
-const eventCurrentDiv = document.getElementById("eventCurrent");
-const eventScoutPreviewDiv = document.getElementById("eventScoutPreview");
-const specialFlagsDiv = document.getElementById("specialFlags");
-
-// Phase panels
-const phaseMovePanel = document.getElementById("phaseMovePanel");
-const phaseActionsPanel = document.getElementById("phaseActionsPanel");
-const phaseDecisionPanel = document.getElementById("phaseDecisionPanel");
-
-const moveStateText = document.getElementById("moveStateText");
-const actionsStateText = document.getElementById("actionsStateText");
-const decisionStateText = document.getElementById("decisionStateText");
-
-// Buttons (MOVE / DECISION / ACTIONS)
-const btnSnatch = document.getElementById("btnSnatch");
-const btnForage = document.getElementById("btnForage");
-const btnScout = document.getElementById("btnScout");
-const btnShift = document.getElementById("btnShift");
-
-const btnLurk = document.getElementById("btnLurk");
-const btnBurrow = document.getElementById("btnBurrow");
-const btnDash = document.getElementById("btnDash");
-
-const btnPass = document.getElementById("btnPass");
-const btnHand = document.getElementById("btnHand");
-const btnLead = document.getElementById("btnLead");
-  btnHint = document.getElementById("btnHint");
-const btnLoot = document.getElementById("btnLoot");
-
-// Modals (HAND / LOOT)
-const handModalOverlay = document.getElementById("handModalOverlay");
-const handModalClose = document.getElementById("handModalClose");
-const handCardsGrid = document.getElementById("handCardsGrid");
-
-const lootModalOverlay = document.getElementById("lootModalOverlay");
-const lootModalClose = document.getElementById("lootModalClose");
-const lootCardsGrid = document.getElementById("lootCardsGrid");
-
-/* === Simple Host Icon Mapper (DROP-IN) === */
-const HOST_FILES = {
-  idle_start: "host_sleeping.png",
-  move_cta: "host_holdup.png",
-  actions_turn: "host_thumbsup.png",
-  actions_wait: "host_nowwhat_stare.png",
-  decision_cta: "host_holdup.png",
-  reveal: "host_nowwhat_stare.png",
-  pass: "host_dontknow.png",
-  success: "host_muscle_flex.png",
-  scatter: "host_holdup.png",
-  beacon: "host_scared_fear.png",
-  ops_locked: "host_jerkmove.png",
-  loot_big: "host_rich_money.png",
-  caught: "host_sad_defeated.png",
-  end: "host_sad_defeated.png",
-};
-const HOST_DEFAULT_FILE = "host_thumbsup.png";
-
-function setHost(kind, text) {
-  const statusEl = document.getElementById("hostStatusLine");
-  const sticker = document.getElementById("hostSticker");
-  const bar = document.getElementById("hostBar");
-
-  if (statusEl) statusEl.textContent = text || "";
-
-  const file = HOST_FILES[kind] || HOST_DEFAULT_FILE;
-  if (sticker) {
-    const fallback = `./assets/${HOST_DEFAULT_FILE}`;
-    sticker.onerror = () => {
-      sticker.onerror = null;
-      sticker.src = fallback;
+    return {
+      didApply: true,
+      ended,
+      nextPasses,
+      target,
+      nextIdx,
     };
-    sticker.src = `./assets/${file}`;
-    sticker.alt = `Host: ${kind}`;
-  }
-  if (bar) {
-    bar.classList.remove("flash");
-    void bar.offsetWidth;
-    bar.classList.add("flash");
-  }
-}
-
-// preload (optioneel, lichtgewicht)
-(function preloadHostIcons() {
-  Object.values(HOST_FILES).forEach((fn) => {
-    const i = new Image();
-    i.src = `./assets/${fn}`;
-  });
-})();
-
-// ===== Host/Coach – onderbalk met stickers =====
-const HOST_BASE = "./assets/";
-const HOST_DEFAULT = "host_thumbsup.png";
-
-export const HOST_INTENTS = {
-  confirm: ["host_thumbsup.png", "host_easypeazy.png"],
-  power: ["host_muscle_flex.png", "host_rich_money.png"],
-  tip: [
-    "host_holdup.png",
-    "host_nowwhat_stare.png",
-    "host_oops_nowwhat.png",
-    "host_drink_coffee.png",
-    "host_toldyouso.png",
-    "host_difficult_sweat.png",
-  ],
-  warn: ["host_scared_fear.png", "host_disbelief.png", "host_jerkmove.png"],
-  fail: [
-    "host_sad_defeated.png",
-    "host_reallysad_tears.png",
-    "host_crying_tears.png",
-    "host_knockedout.png",
-    "host_dead.png",
-    "host_discusted_flies.png",
-  ],
-  fun: [
-    "host_lol_tears.png",
-    "host_dontknow.png",
-    "host_oops_saint.png",
-    "host_inlove.png",
-    "host_loveyou_kiss.png",
-  ],
-  idle: ["host_sleeping.png"],
-};
-export const HOST_TRIGGERS = {
-  action_success: "confirm",
-  action_buff: "power",
-  loot_big: "power",
-  need_choice: "tip",
-  pre_reveal: "tip",
-  timeout: "idle",
-  beacon_on: "warn",
-  dog_near: "warn",
-  bad_map: "warn",
-  paint_bomb: "fail",
-  caught: "fail",
-  round_lost: "fail",
-  funny: "fun",
-  no_info: "fun",
-};
-const HOST_PRIOR = { warn: 5, fail: 5, confirm: 4, power: 4, tip: 3, fun: 2, idle: 1 };
-let _hostGate = { until: 0, prior: 0 };
-
-function pickHostSticker(intent) {
-  const list = HOST_INTENTS[intent] || HOST_INTENTS.tip;
-  return list[Math.floor(Math.random() * list.length)] || HOST_DEFAULT;
-}
-
-function setHostStatus(text) {
-  const el = document.getElementById("hostStatusLine");
-  if (el) el.textContent = text || "";
-}
-function setHostFeedback(text) {
-  const el = document.getElementById("hostFeedbackLine");
-  if (el) el.textContent = text || "";
-}
-
-// Action Cards
-function getActionCardImage(card) {
-  if (!card || !card.name) return null;
-  const key = String(card.name).trim();
-  if (card.art) return card.art;
-  return ACTION_CARD_IMAGES[key] || null;
-}
-
-// Legacy shim
-window.msg = function (text, kind = "status") {
-  if (kind === "feedback") setHostFeedback(text);
-  else setHostStatus(text);
-};
-
-function presetText(trigger) {
-  const T = {
-    action_success: "Lekker! Slim gespeeld.",
-    action_buff: "Power-up geactiveerd.",
-    loot_big: "Zak puilt uit — top!",
-    need_choice: "Kies je zet…",
-    pre_reveal: "Even stil — reveal komt.",
-    timeout: "Koffiepauze?",
-    beacon_on: "Alarm aan! Snel en stil.",
-    dog_near: "Hond dichtbij — oppassen.",
-    bad_map: "Kaart klopt niet…",
-    paint_bomb: "Au — zak gereset.",
-    caught: "Gepakt! Volgende keer anders.",
-    round_lost: "Damn. Nieuwe ronde.",
-    funny: "😅",
-    no_info: "Geen data; gok slim.",
-  };
-  return T[trigger] ?? "";
-}
-
-export function ensureHostCoachMount() {
-  const bar = document.getElementById("hostBar");
-  const sticker = document.getElementById("hostSticker");
-  const sLine = document.getElementById("hostStatusLine");
-  const fLine = document.getElementById("hostFeedbackLine");
-  if (!bar || !sticker || !sLine || !fLine) {
-    console.warn("Host bar ontbreekt in HTML.");
-  }
-}
-
-export function preloadHost() {
-  const files = new Set(Object.values(HOST_INTENTS).flat());
-  files.forEach((fn) => {
-    const i = new Image();
-    i.src = HOST_BASE + fn;
   });
 }
 
-export function hostSay(trigger, text) {
-  const bar = document.getElementById("hostBar");
-  const sticker = document.getElementById("hostSticker");
-  const fLine = document.getElementById("hostFeedbackLine");
-
+/** ===== lock (one bot-runner active per game) ===== */
+async function acquireBotLock({ db, gameId, gameRef, runnerKey }) {
   const now = Date.now();
-  const intent = HOST_TRIGGERS[trigger] || "tip";
-  const prior = HOST_PRIOR[intent] || 1;
-  if (now < _hostGate.until && prior < _hostGate.prior) return;
-
-  if (sticker) {
-    const file = pickHostSticker(intent);
-    sticker.src = HOST_BASE + file;
-    sticker.alt = "Host: " + intent;
-  }
-  if (fLine) {
-    fLine.textContent = text || presetText(trigger);
-  }
-  if (bar) {
-    bar.classList.remove("flash");
-    void bar.offsetWidth;
-    bar.classList.add("flash");
-  }
-  _hostGate = { until: now + 2000, prior };
-}
-
-function splitEventTrackByStatus(game) {
-  const track = Array.isArray(game.eventTrack) ? [...game.eventTrack] : [];
-  const eventIndex = typeof game.eventIndex === "number" ? game.eventIndex : 0;
-  return {
-    track,
-    eventIndex,
-    locked: track.slice(0, eventIndex),
-    future: track.slice(eventIndex),
-  };
-}
-function shuffleArray(arr) {
-  const copy = [...arr];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-}
-
-// Kleine init-helper voor host-balk (voor nu alleen tekst/reset)
-function hostInitUI() {
-  ensureHostCoachMount();
-  preloadHost();
-  const s = document.getElementById("hostStatusLine");
-  const f = document.getElementById("hostFeedbackLine");
-  if (s) s.textContent = "Wachten tot de host de raid start…";
-  if (f) f.textContent = "";
-}
-
-// ===== FIRESTORE REFS / STATE =====
-// (declared earlier to avoid TDZ)
-let prevGame = null;
-let prevPlayer = null;
-
-// Lead Fox cache
-let cachedLeadId = null;
-let cachedLeadIndex = null;
-
-function resetLeadCache() {
-  cachedLeadId = null;
-  cachedLeadIndex = null;
-}
-
-async function deriveLeadIdFromIndex(game) {
-  const idx = typeof game.leadIndex === "number" ? game.leadIndex : null;
-  if (idx === null || idx < 0) return null;
-
-  if (cachedLeadId && cachedLeadIndex === idx) {
-    return cachedLeadId;
-  }
 
   try {
-    const players = await fetchPlayersForGame();
-    const ordered = sortPlayersByJoinOrder(players);
-    if (!ordered.length || idx >= ordered.length) return null;
+    const ok = await runTransaction(db, async (tx) => {
+      const snap = await tx.get(gameRef);
+      if (!snap.exists()) return false;
+      const g = snap.data();
 
-    cachedLeadId = ordered[idx].id;
-    cachedLeadIndex = idx;
-    return cachedLeadId;
-  } catch (err) {
-    console.warn("deriveLeadIdFromIndex error", err);
-    return null;
-  }
-}
+      if (g?.botsEnabled !== true) return false;
+      if (isGameFinished(g)) return false;
 
-async function resolveLeadPlayerId(game) {
-  if (!game) return null;
-  if (game.leadPlayerId) return game.leadPlayerId;
-  if (game.leadId) return game.leadId;
-  return await deriveLeadIdFromIndex(game);
-}
+      const lockUntil = Number(g.botsLockUntil || 0);
+      const lockBy = String(g.botsLockBy || "");
 
-// ===== HELPERS ROUND FLAGS / PLAYERS =====
+      if (lockUntil > now && lockBy && lockBy !== runnerKey) return false;
 
-// Hero-kaart op het spelersscherm (zelfde logica als community board)
-function renderHeroAvatarCard(player, game) {
-  const avatarEl = document.getElementById("playerAvatar");
-  if (!avatarEl || !player) return;
-
-  avatarEl.innerHTML = "";
-
-  let isLead = false;
-  if (game && Array.isArray(game.playersOrder)) {
-    isLead = !!player.isLead;
-  }
-
-  const cardEl = renderPlayerSlotCard({ ...player, isLead }, { size: "large" });
-  if (cardEl) avatarEl.appendChild(cardEl);
-}
-
-function mergeRoundFlags(game) {
-  const base = {
-    lockEvents: false,
-    scatter: false,
-    denImmune: {},
-    // noPeek = posities (1-based) die geblokkeerd zijn door No-Go Zone
-    noPeek: [],
-    // noPeekAll = "blind play" (bots + UI): geen gratis track-kennis / geen track preview
-    noPeekAll: false,
-    noPeekReason: "",
-    predictions: [],
-    opsLocked: false,
-    followTail: {},
-    scentChecks: [],
-  };
-
-  const raw = (game && game.flagsRound) ? game.flagsRound : {};
-  const out = { ...base, ...(raw || {}) };
-
-  // Backwards compatibility:
-  // - oud: flagsRound.noPeek = boolean (global blind)
-  // - oud: flagsRound.noPeek = { all: true, zones: [...] }
-  const np = raw ? raw.noPeek : undefined;
-
-  if (typeof np === "boolean") {
-    out.noPeekAll = np;
-    out.noPeek = [];
-  } else if (np && typeof np === "object" && !Array.isArray(np)) {
-    if (typeof np.all === "boolean") out.noPeekAll = np.all;
-    if (Array.isArray(np.zones)) out.noPeek = np.zones.slice();
-  } else if (Array.isArray(np)) {
-    out.noPeek = np.slice();
-  }
-
-  // Alternatieve veldnamen (als we ooit migreren)
-  if (Array.isArray(raw?.noGoZones)) out.noPeek = raw.noGoZones.slice();
-  if (typeof raw?.noPeekAll === "boolean") out.noPeekAll = raw.noPeekAll;
-  if (typeof raw?.noPeekReason === "string") out.noPeekReason = raw.noPeekReason;
-
-  // Safety: force types
-  if (!Array.isArray(out.noPeek)) out.noPeek = [];
-  out.noPeekAll = !!out.noPeekAll;
-  out.noPeekReason = String(out.noPeekReason || "");
-
-  return out;
-}
-// ===== DEN INTEL (team shared SCOUT) =====
-function normalizeDenKey(c) {
-  if (!c) return "";
-  return String(c).trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
-}
-function getPlayerDenKey(p) {
-  return normalizeDenKey(p?.color || p?.denColor || p?.den || "");
-}
-function getDenIntelEntry(game, denKey) {
-  if (!game || !denKey) return null;
-  const di = game.denIntel || {};
-  return di[denKey] || di[denKey.toLowerCase()] || null;
-}
-
-// Returns newest-first list of team scouts for *your* den in the current round.
-// Supports both new map format (denIntel.RED.scouts["3"] = {...}) and legacy single object.
-function getTeamScoutsThisRound(game, player) {
-  const roundNow = Number(game?.round || 0);
-  const denKey = getPlayerDenKey(player);
-  const entry = getDenIntelEntry(game, denKey);
-  if (!entry) return [];
-
-  const out = [];
-
-  // NEW format: entry.scouts = { "1": {...}, "2": {...} }
-  const scoutsObj = entry.scouts && typeof entry.scouts === "object" ? entry.scouts : null;
-  if (scoutsObj) {
-    for (const [posKey, v] of Object.entries(scoutsObj)) {
-      if (!v) continue;
-      const rr = Number(v.round ?? entry.round ?? 0);
-      if (rr !== roundNow) continue;
-
-      const posN = Number(v.pos ?? posKey ?? null);
-      const pos = Number.isFinite(posN) ? posN : null;
-      const idx =
-        typeof v.index === "number"
-          ? v.index
-          : pos != null
-            ? pos - 1
-            : null;
-
-      out.push({
-        round: rr,
-        pos,
-        index: idx,
-        eventId: v.eventId || null,
-        by: v.by || v.playerId || null,
-        byName: v.byName || v.playerName || "",
-        atMs: Number(v.atMs || v.at || 0) || 0,
-      });
-    }
-  }
-
-  // Legacy format: entry = {round,index,eventId,by,...}
-  if (typeof entry.eventId === "string" && Number(entry.round ?? 0) === roundNow) {
-    const posN = Number(entry.pos ?? (typeof entry.index === "number" ? entry.index + 1 : NaN));
-    const pos = Number.isFinite(posN) ? posN : null;
-    const idx =
-      typeof entry.index === "number"
-        ? entry.index
-        : pos != null
-          ? pos - 1
-          : null;
-
-    out.push({
-      round: roundNow,
-      pos,
-      index: idx,
-      eventId: entry.eventId,
-      by: entry.by || entry.playerId || null,
-      byName: entry.byName || entry.playerName || "",
-      atMs: Number(entry.atMs || entry.at || 0) || 0,
+      tx.update(gameRef, { botsLockUntil: now + LOCK_MS, botsLockBy: runnerKey });
+      return true;
     });
-  }
 
-  // Filter stale scouts if the Event Track changed (Kick Up Dust / SHIFT):
-  // alleen scouts tonen die nog steeds matchen met de huidige track[pos].
-  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
-  let filtered = out;
-  if (track.length) {
-    filtered = out.filter((s) => {
-      if (!s || !s.eventId) return false;
-      const idx =
-        typeof s.index === "number"
-          ? s.index
-          : s.pos != null
-            ? s.pos - 1
-            : null;
-      if (idx == null || idx < 0 || idx >= track.length) return false;
-      return track[idx] === s.eventId;
-    });
-  }
-
-  // newest first
-  filtered.sort((a, b) => (b.atMs || 0) - (a.atMs || 0));
-  return filtered;
-}
-
-function renderEventCardInto(container, ev, opts = {}) {
-  if (!container) return;
-  container.innerHTML = "";
-
-  const label = String(opts.label || "");
-  const byLine = String(opts.byLine || "");
-
-  if (label) {
-    const labelDiv = document.createElement("div");
-    labelDiv.style.fontSize = "0.78rem";
-    labelDiv.style.opacity = "0.75";
-    labelDiv.style.marginBottom = "0.25rem";
-    labelDiv.textContent = label;
-    container.appendChild(labelDiv);
-  }
-
-  if (ev?.imageFront) {
-    const img = document.createElement("img");
-    img.src = ev.imageFront;
-    img.alt = ev?.title || "Event";
-    img.className = "vj-event-img";
-    container.appendChild(img);
-  }
-
-  const titleDiv = document.createElement("div");
-  titleDiv.style.fontWeight = "600";
-  titleDiv.textContent = ev?.title || "Event";
-  container.appendChild(titleDiv);
-
-  if (byLine) {
-    const byDiv = document.createElement("div");
-    byDiv.className = "vj-event-byline";
-    byDiv.textContent = byLine;
-    container.appendChild(byDiv);
-  }
-
-  const textDiv = document.createElement("div");
-  textDiv.style.fontSize = "0.85rem";
-  textDiv.style.opacity = "0.9";
-  textDiv.textContent = ev?.text || "";
-  container.appendChild(textDiv);
-}
-
-function renderTeamScoutsInto(container, scouts, roundNow) {
-  if (!container) return;
-  container.innerHTML = "";
-  if (!scouts || !scouts.length) return;
-
-  const head = document.createElement("div");
-  head.className = "vj-scout-head";
-  head.textContent = `TEAM SCOUTS (ronde ${roundNow})`;
-  container.appendChild(head);
-
-  const grid = document.createElement("div");
-  grid.className = "vj-scout-grid";
-
-  for (const s of scouts) {
-    const ev = getEventById(s.eventId);
-    if (!ev) continue;
-
-    const item = document.createElement("div");
-    item.className = "vj-scout-item";
-
-    if (ev.imageFront) {
-      const img = document.createElement("img");
-      img.src = ev.imageFront;
-      img.alt = ev.title || "Event";
-      img.className = "vj-scout-thumb";
-      item.appendChild(img);
-    }
-
-    const meta = document.createElement("div");
-    meta.className = "vj-scout-meta";
-
-    const title = document.createElement("div");
-    title.className = "vj-scout-title";
-    const posTxt = s.pos != null ? `#${s.pos}` : (typeof s.index === "number" ? `#${s.index + 1}` : "");
-    title.textContent = `${posTxt} ${ev.title || ""}`.trim();
-
-    const sub = document.createElement("div");
-    sub.className = "vj-scout-sub";
-    sub.textContent = s.byName ? `door ${s.byName}` : "";
-
-    meta.appendChild(title);
-    meta.appendChild(sub);
-
-    item.appendChild(meta);
-    grid.appendChild(item);
-  }
-
-  container.appendChild(grid);
-}
-
-function renderTrackPeekStrip(container, game, opts = {}) {
-  if (!container || !game) return;
-
-  const phase = String(game?.phase || "");
-  if (phase === "REVEAL" || phase === "END") return;
-
-  const { track, eventIndex } = splitEventTrackByStatus(game);
-  if (!track || !track.length) return;
-
-  const max = Math.max(1, Math.min(3, Number(opts.max || 2)));
-
-  const head = document.createElement("div");
-  head.className = "vj-scout-head";
-  head.textContent = "TRACK PREVIEW (open info)";
-  container.appendChild(head);
-
-  const grid = document.createElement("div");
-  grid.className = "vj-scout-grid";
-
-  for (let i = 0; i < max; i++) {
-    const idx = Number(eventIndex || 0) + i;
-    if (idx < 0 || idx >= track.length) break;
-
-    const evId = track[idx];
-    const ev = getEventById(evId);
-    if (!ev) continue;
-
-    const item = document.createElement("div");
-    item.className = "vj-scout-item";
-
-    if (ev.imageFront) {
-      const img = document.createElement("img");
-      img.src = ev.imageFront;
-      img.alt = ev.title || "Event";
-      img.className = "vj-scout-thumb";
-      item.appendChild(img);
-    }
-
-    const meta = document.createElement("div");
-    meta.className = "vj-scout-meta";
-
-    const title = document.createElement("div");
-    title.className = "vj-scout-title";
-    title.textContent = `#${idx + 1} ${ev.title || ""}`.trim();
-
-    const sub = document.createElement("div");
-    sub.className = "vj-scout-sub";
-    sub.textContent = i === 0 ? "volgende" : "daarna";
-
-    meta.appendChild(title);
-    meta.appendChild(sub);
-
-    item.appendChild(meta);
-    grid.appendChild(item);
-  }
-
-  container.appendChild(grid);
-}
-
-function isInYardLocal(p) {
-  return p && p.inYard !== false && !p.dashed;
-}
-
-async function fetchPlayersForGame() {
-  const col = collection(db, "games", gameId, "players");
-  const snap = await getDocs(col);
-  const players = [];
-  snap.forEach((docSnap) => {
-    players.push({ id: docSnap.id, ...docSnap.data() });
-  });
-  return players;
-}
-
-async function chooseOtherPlayerPrompt(title) {
-  const players = await fetchPlayersForGame();
-  const others = players.filter((p) => p.id !== playerId && isInYardLocal(p));
-
-  if (!others.length) {
-    alert("Er zijn geen andere vossen in de Yard om te kiezen.");
-    return null;
-  }
-
-  const lines = others.map((p, idx) => `${idx + 1}. ${p.name || "Vos"}`);
-  const choiceStr = prompt(`${title}\n` + lines.join("\n"));
-  if (!choiceStr) return null;
-
-  const idx = parseInt(choiceStr, 10) - 1;
-  if (Number.isNaN(idx) || idx < 0 || idx >= others.length) {
-    alert("Ongeldige keuze.");
-    return null;
-  }
-  return others[idx];
-}
-
-async function maybeShowScentCheckInfo(game) {
-  const flags = mergeRoundFlags(game);
-  const checks = Array.isArray(flags.scentChecks) ? flags.scentChecks : [];
-  const myChecks = checks.filter((c) => c.viewerId === playerId);
-  if (!myChecks.length) return;
-
-  for (const ch of myChecks) {
-    try {
-      const pref = doc(db, "games", gameId, "players", ch.targetId);
-      const snap = await getDoc(pref);
-      if (!snap.exists()) continue;
-      const p = snap.data();
-      const name = p.name || "Vos";
-      const dec = p.decision || "(nog geen keuze)";
-      alert(`[Scent Check] ${name} heeft op dit moment DECISION: ${dec}.`);
-    } catch (err) {
-      console.error("ScentCheck peek error", err);
-    }
-  }
-}
-
-function sortPlayersByJoinOrder(players) {
-  return [...players].sort((a, b) => {
-    const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
-    const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
-    return ao - bo;
-  });
-}
-
-if (!gameId || !playerId) {
-  if (gameStatusDiv) {
-    gameStatusDiv.textContent = "Ontbrekende game- of speler-id in de URL.";
-  }
-}
-
-// ===== PHASE & PERMISSIONS =====
-
-function canMoveNow(game, player) {
-  if (!game || !player) return false;
-  if (game.status !== "round") return false;
-  if (game.phase !== "MOVE") return false;
-  if (game.raidEndedByRooster) return false;
-  if (player.inYard === false) return false;
-  if (player.dashed) return false;
-
-  const moved = game.movedPlayerIds || [];
-  return !moved.includes(playerId);
-}
-
-function canDecideNow(game, player) {
-  if (!game || !player) return false;
-  if (game.status !== "round") return false;
-  if (game.phase !== "DECISION") return false;
-  if (game.raidEndedByRooster) return false;
-  if (player.inYard === false) return false;
-  if (player.dashed) return false;
-  if (player.decision) return false;
-  return true;
-}
-
-function canPlayActionNow(game, player) {
-  if (!game || !player) return false;
-  if (game.status !== "round") return false;
-  if (game.phase !== "ACTIONS") return false;
-  if (game.raidEndedByRooster) return false;
-  if (player.inYard === false) return false;
-  if (player.dashed) return false;
-  return true;
-}
-
-function isMyOpsTurn(game) {
-  if (!game) return false;
-  if (game.phase !== "ACTIONS") return false;
-  const order = game.opsTurnOrder || [];
-  if (!order.length) return false;
-  const idx = typeof game.opsTurnIndex === "number" ? game.opsTurnIndex : 0;
-  if (idx < 0 || idx >= order.length) return false;
-  return order[idx] === playerId;
-}
-
-// ===== GAME/PLAYER SAFE HELPERS =====
-
-function getSackTotal(g) {
-  const s = g?.sack ?? g?.raid?.sack ?? g?.lootSack ?? g?.sackCards ?? 0;
-  if (Array.isArray(s)) return s.length;
-  if (typeof s === "number") return s;
-  if (s && typeof s.total === "number") return s.total;
-  return 0;
-}
-function getBeaconOn(g) {
-  const v = g?.beaconOn ?? g?.beacon?.on ?? g?.status?.beacon ?? false;
-  return v === true || v === "on" || v === 1;
-}
-function getRoosterCount(g) {
-  return Number(g?.roosterCount ?? g?.rooster?.count ?? 0);
-}
-function getCaught(p) {
-  return !!(p?.caught ?? p?.status?.caught);
-}
-function getDogPos(g) {
-  return g?.dog?.pos ?? g?.guards?.dog ?? g?.sheepdog?.pos ?? null;
-}
-function getPlayerPos(p) {
-  return p?.pos ?? p?.position ?? null;
-}
-function getDogDistance(game, player) {
-  const d = getDogPos(game),
-    p = getPlayerPos(player);
-  if (!d || !p || typeof d.x !== "number" || typeof p.x !== "number") return null;
-  return Math.abs(d.x - p.x) + Math.abs(d.y - p.y);
-}
-
-// ===== HOST HOOKS (snapshot-delta) =====
-
-function applyHostHooks(prevGame, game, prevPlayer, player, lastEvent) {
-  try {
-    if (prevGame && prevGame.phase !== "REVEAL" && game?.phase === "REVEAL") {
-      hostSay("pre_reveal");
-    }
-    if (getSackTotal(prevGame) < 8 && getSackTotal(game) >= 8) {
-      hostSay("loot_big");
-    }
-    if (!getBeaconOn(prevGame) && getBeaconOn(game)) {
-      hostSay("beacon_on");
-    }
-    const d = getDogDistance(game, player);
-    if (d !== null && d <= 1) {
-      hostSay("dog_near");
-    }
-    if (lastEvent && lastEvent.id === "PAINT_BOMB_NEST") {
-      hostSay("paint_bomb");
-    }
-    if (!getCaught(prevPlayer) && getCaught(player)) {
-      hostSay("caught");
-    }
-    if (getRoosterCount(prevGame) !== 3 && getRoosterCount(game) === 3) {
-      hostSay("round_lost");
-    }
+    return ok === true;
   } catch (e) {
-    console.warn("applyHostHooks", e);
+    console.warn("[BOTS] acquire lock failed", e);
+    return false;
   }
 }
 
-// ===== LOOT / SCORE HELPERS + UI =====
+/** ===== smarter MOVE ===== */
+async function botDoMove({ db, gameId, botId, latestPlayers = [] }) {
+  const gRef = doc(db, "games", gameId);
+  const pRef = doc(db, "games", gameId, "players", botId);
 
-function calcLootStats(player) {
-  if (!player) return { eggs: 0, hens: 0, prize: 0, lootBonus: 0, score: 0 };
+  let logPayload = null;
 
-  const loot = Array.isArray(player.loot) ? player.loot : [];
+  await runTransaction(db, async (tx) => {
+    const gSnap = await tx.get(gRef);
+    const pSnap = await tx.get(pRef);
+    if (!gSnap.exists() || !pSnap.exists()) return;
 
-  let eggs = 0;
-  let hens = 0;
-  let prize = 0;
-  let otherPoints = 0;
+    const g = gSnap.data();
+    const p = { id: pSnap.id, ...pSnap.data() };
+    if (!canBotMove(g, p)) return;
 
-  loot.forEach((card) => {
-    const tRaw = card.t || card.type || "";
-    const t = String(tRaw).toUpperCase();
-    const v = typeof card.v === "number" ? card.v : 0;
+    const moved = Array.isArray(g.movedPlayerIds) ? [...g.movedPlayerIds] : [];
+    const hand = Array.isArray(p.hand) ? [...p.hand] : [];
+    const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
+    const lootDeck = Array.isArray(g.lootDeck) ? [...g.lootDeck] : [];
+    const loot = Array.isArray(p.loot) ? [...p.loot] : [];
 
-    if (t.includes("PRIZE")) prize += 1;
-    else if (t.includes("HEN")) hens += 1;
-    else if (t.includes("EGG")) eggs += 1;
-    else otherPoints += v;
+    const flags = fillFlags(g.flagsRound);
+    // --- Den Intel share (publish) ---
+const denColor = normColor(p.color);
+
+const share = extractIntelForDenShare({ game: g, player: p });
+if (share && denColor) {
+  const prev = flags?.denIntel?.[denColor] || null;
+  const merged = mergeDenIntel(prev, {
+    ...share,
+    by: String(p.id || botId || ""),
+    at: Date.now(),
   });
 
-  const pointsFromCounts = eggs + hens * 2 + prize * 3 + otherPoints;
-  const recordedScore = typeof player.score === "number" ? player.score : 0;
-  const score = recordedScore > 0 ? recordedScore : pointsFromCounts;
-
-  const lootBonus = recordedScore > pointsFromCounts ? recordedScore - pointsFromCounts : 0;
-  return { eggs, hens, prize, lootBonus, score };
+  tx.update(gRef, { [`flagsRound.denIntel.${denColor}`]: merged });
 }
+    const myColor = normColor(p.color);
+    const immune = !!flags.denImmune?.[myColor];
+    const lootPts = sumLootPoints({ loot });
 
-function updateLootUi(player) {
-  if (!lootSummaryEl || !lootMeterFillEl) return;
+    // === Metrics-driven MOVE planning (carryValueRec + dangerEffective) ===
+    // Rule: do NOT peek the hidden next event. Only use deterministic next-event info
+    // if the bot actually knows it (SCOUT / intel). Otherwise rely on probabilistic danger.
+    const meForMetrics = { ...p, hand, loot };
 
-  const { eggs, hens, prize, lootBonus, score } = calcLootStats(player || {});
+    // Per-bot tuning (DISC + optional per-RAID overrides)
+    const cfg0 = { ...BOT_UTILITY_CFG, ...(getStrategyCfgForBot(p, g) || {}) };
 
-  if (eggs === 0 && hens === 0 && prize === 0 && score === 0) {
-    lootSummaryEl.textContent = "Nog geen buit verzameld.";
-  } else {
-    let line = `Eggs: ${eggs}  Hens: ${hens}  Prize Hens: ${prize}`;
-    if (lootBonus > 0) line += `  | Loot Sack: +${lootBonus}`;
-    lootSummaryEl.textContent = line;
-  }
+    // SHIFT anti-spam tuning (with safe fallbacks)
+    const roundNum = Number(g.round || 0);
+    const shiftDangerTrigger = Number.isFinite(Number(cfg0.shiftDangerTrigger)) ? Number(cfg0.shiftDangerTrigger) : 7.2;
+    const shiftLookahead = Number.isFinite(Number(cfg0.shiftLookahead)) ? Number(cfg0.shiftLookahead) : 4;
+    const shiftDistancePenalty = Number.isFinite(Number(cfg0.shiftDistancePenalty)) ? Number(cfg0.shiftDistancePenalty) : 0.25;
+    const shiftBenefitMin = Number.isFinite(Number(cfg0.shiftBenefitMin)) ? Number(cfg0.shiftBenefitMin) : 1.6;
+    const shiftCooldownRounds = Number.isFinite(Number(cfg0.shiftCooldownRounds)) ? Number(cfg0.shiftCooldownRounds) : 1;
+    const shiftOverrideBenefit = Number.isFinite(Number(cfg0.shiftOverrideBenefit)) ? Number(cfg0.shiftOverrideBenefit) : 3.0;
+    const lastMoveKind = String(p?.lastMoveKind || "").toUpperCase();
+    const lastMoveRound = Number.isFinite(Number(p?.lastMoveRound)) ? Number(p.lastMoveRound) : -999;
+    const shiftOnCooldown = (lastMoveKind === "SHIFT") && ((roundNum - lastMoveRound) <= shiftCooldownRounds);
 
-  const baseMax = 12;
-  const rawPct = baseMax > 0 ? (score / baseMax) * 100 : 0;
-  const meterPct = Math.max(5, Math.min(100, Math.round(rawPct)));
-  lootMeterFillEl.style.width = `${meterPct}%`;
+    const basePlayers = Array.isArray(latestPlayers) ? latestPlayers : [];
+    const mergedPlayers = basePlayers.length
+      ? basePlayers.map((x) => (String(x?.id) === String(botId) ? meForMetrics : x))
+      : [meForMetrics];
 
-  if (playerScoreEl) {
-    let label = `Score: ${score} (E:${eggs} H:${hens} P:${prize}`;
-    if (lootBonus > 0) label += ` +${lootBonus}`;
-    label += ")";
-    playerScoreEl.textContent = label;
-  }
-}
-
-// ===== LOOT / HINT BUTTON UI (glow + pulse) =====
-function _setBtnGlow(btn, on) {
-  if (!btn) return;
-  if (on) btn.classList.add("is-glow");
-  else btn.classList.remove("is-glow", "is-pulse");
-}
-
-function _setBtnPulse(btn, on) {
-  if (!btn) return;
-  if (on) btn.classList.add("is-pulse");
-  else btn.classList.remove("is-pulse");
-}
-
-function _computeLootHash(player) {
-  const p = player || {};
-  const stats = calcLootStats(p);
-  const lootLen = Array.isArray(p.loot) ? p.loot.length : 0;
-  return _fnv1aHex(`${stats.eggs}|${stats.hens}|${stats.prize}|${stats.lootBonus}|${stats.score}|${lootLen}`);
-}
-
-function _hasAnyLoot(player) {
-  const p = player || {};
-  const lootLen = Array.isArray(p.loot) ? p.loot.length : 0;
-  const stats = calcLootStats(p);
-  return lootLen > 0 || (stats.score || 0) > 0;
-}
-
-function updateLootButtonState(prevP, newP) {
-  if (!btnLoot) return;
-
-  const hasLoot = _hasAnyLoot(newP);
-  _setBtnGlow(btnLoot, hasLoot);
-
-  if (!hasLoot) {
-    _lootCurrentHash = _computeLootHash(newP);
-    _setBtnPulse(btnLoot, false);
-    return;
-  }
-
-  const prevStats = calcLootStats(prevP || {});
-  const newStats = calcLootStats(newP || {});
-  const gained = (newStats.score || 0) > (prevStats.score || 0);
-
-  _lootCurrentHash = _computeLootHash(newP);
-
-  // Pulse alleen bij "nieuw ontvangen" (score omhoog) én nog niet gezien
-  const unseen = !_lootSeenHash || _lootCurrentHash !== _lootSeenHash;
-  _setBtnPulse(btnLoot, gained && unseen);
-}
-
-function markLootSeen() {
-  if (!_lootCurrentHash) return;
-  _lootSeenHash = _lootCurrentHash;
-  _safeLSSet(_uiKey("lootSeenHash"), _lootSeenHash);
-  _setBtnPulse(btnLoot, false);
-  _setBtnGlow(btnLoot, _hasAnyLoot(currentPlayer));
-}
-
-function _hintHasContent(h) {
-  if (!h) return false;
-  if (typeof h.title === "string" && h.title.trim()) return true;
-  if (Array.isArray(h.bullets) && h.bullets.filter(Boolean).length) return true;
-  return false;
-}
-
-function _hintHash(h) {
-  if (!h) return null;
-  const title = (h.title || "").trim();
-  const bullets = Array.isArray(h.bullets) ? h.bullets.filter(Boolean).join("|") : "";
-  const alts = Array.isArray(h.alternatives) ? h.alternatives.map((a) => (typeof a === "string" ? a : a?.title || "")).filter(Boolean).join("|") : "";
-  return _fnv1aHex(`${title}||${bullets}||${alts}`);
-}
-
-function _computeAdvisorHintSafe() {
-  try {
-    if (typeof getAdvisorHint !== "function") return null;
-    if (!lastGame || !lastMe) return null;
-    return getAdvisorHint({
-      game: lastGame,
-      me: lastMe,
-      players: lastPlayers || [],
-      actions: lastActions || [],
-      profileKey: "BEGINNER_COACH",
+    const isLead = computeIsLeadForPlayer(g, meForMetrics, mergedPlayers);
+    const carryExact = computeCarryValue(meForMetrics);
+    const carryRecObj = computeCarryValueRec({
+      game: g,
+      player: meForMetrics,
+      players: mergedPlayers,
+      mode: "publicSafe",
     });
-  } catch {
-    return null;
-  }
-}
+    const carryValueRec = Number(carryRecObj?.carryValueRec || 0);
 
-function updateHintButtonFromState() {
-  if (!btnHint) btnHint = document.getElementById("btnHint");
-  if (!btnHint) return;
+    const danger = computeDangerMetrics({
+      game: g,
+      player: meForMetrics,
+      players: mergedPlayers,
+      flagsRound: flags,
+      intel: {
+        denColor: myColor,
+        isLead,
+        carryValueExact: carryExact,
+        carryValueRec,
+      },
+    });
 
-  const g = lastGame || currentGame || null;
-  const hint = _computeAdvisorHintSafe();
+    const dangerEffective = Number(danger?.dangerEffective || 0);
+    const pDanger = Number(danger?.pDanger || 0);
+    const confidence = Number(danger?.confidence || 0);
 
-  // Bright als er (waarschijnlijk) een hint is
-  const hasHint = _hintHasContent(hint) || (!!lastGame && !!lastMe);
-  _setBtnGlow(btnHint, hasHint);
+    const nextUsedId = danger?.nextEventIdUsed || null;
+    const upcoming = nextUsedId ? classifyEvent(nextUsedId) : { type: "UNKNOWN" };
 
-  const phase = String(g?.phase || "").toUpperCase();
-  if (!g || (phase !== "OPS" && phase !== "ACTIONS")) {
-    _setBtnPulse(btnHint, false);
-    return;
-  }
+    // Defense readiness: can we survive a bad obstacle without needing to DASH?
+    const hasHardDefense = hasCard(hand, "Den Signal");
+    const hasTrackDefense = !flags.lockEvents && hasCard(hand, "Kick Up Dust");
 
-  if (!_hintHasContent(hint)) {
-    _setBtnPulse(btnHint, false);
-    return;
-  }
+    const defenseReady = immune || hasHardDefense || hasTrackDefense;
 
-  const round = Number.isFinite(Number(g.round)) ? Number(g.round) : null;
-  _hintCurrentHash = _hintHash(hint);
+    // If we *know* Gate Toll is next and we have no loot -> SNATCH to avoid forced capture.
+    const mustHaveLoot =
+      upcoming.type === "TOLL" && danger?.intel?.nextKnown === true;
 
-  const roundIsNew = round != null && _hintSeenOpsRound != null ? round > _hintSeenOpsRound : false;
-  const hashIsNew = !!_hintCurrentHash && (!_hintSeenOpsHash || _hintCurrentHash !== _hintSeenOpsHash);
+    // Translate (carryValueRec + dangerEffective) into a MOVE choice.
+    // Goal: bots aim for high score (keep farming), but invest in survivability + tools so OPS has real options.
+    // New: allow SCOUT + SHIFT (aligned with player.js rules as close as possible).
 
-  _setBtnPulse(btnHint, roundIsNew || hashIsNew);
-}
+    const track = Array.isArray(g.eventTrack) ? [...g.eventTrack] : [];
+    const eventIdx = Number.isFinite(Number(g.eventIndex)) ? Number(g.eventIndex) : 0;
 
-function markHintSeenIfOps(hintObj, gameObj) {
-  const g = gameObj || lastGame || null;
-  const phase = String(g?.phase || "").toUpperCase();
-  if (!g || (phase !== "OPS" && phase !== "ACTIONS")) return;
+    // flags.noPeek has 2 meanings in this codebase:
+    // - boolean true => global "no-peek mode"
+    // - array [pos,...] => No-Go Zone blocked scout positions (1-based)
+    const noPeekMode = flags?.noPeek === true;
+    const noGoPositions = (Array.isArray(flags?.noGoPositions) ? flags.noGoPositions : [])
+      .map((x) => Number(x))
+      .filter((x) => Number.isFinite(x));
 
-  const h = hintObj || _computeAdvisorHintSafe();
-  if (!_hintHasContent(h)) return;
+    const canScout = !flags?.scatter && track.length > 0;
+    const canShift = !flags?.lockEvents && track.length >= 2 && eventIdx < track.length - 1 && loot.length > 0;
 
-  const round = Number.isFinite(Number(g.round)) ? Number(g.round) : null;
-  const hh = _hintHash(h);
+    const dangerHigh = dangerEffective >= 7.0;
+    const dangerMid = dangerEffective >= 5.2;
+    const uncertain = confidence <= 0.40;
+    const cashPressure = carryValueRec >= 8.0;
+    const extremePressure = carryValueRec >= 10.5;
 
-  if (hh) {
-    _hintSeenOpsHash = hh;
-    _safeLSSet(_uiKey("hintSeenOpsHash"), _hintSeenOpsHash);
-  }
-  if (round != null) {
-    _hintSeenOpsRound = round;
-    _safeLSSet(_uiKey("hintSeenOpsRound"), String(round));
-  }
+    // Stronger: keep a healthy hand early so OPS can actually do something.
+    const desiredHandMin = roundNum <= 1 ? 4 : 3;
+    const desiredHandMax = 6;
 
-  _setBtnPulse(btnHint, false);
-  _setBtnGlow(btnHint, true);
-}
-
-
-// ===== HOST FEEDBACK =====
-
-function setActionFeedback(msg) {
-  if (!hostFeedbackLine) return;
-  if (!msg) {
-    hostFeedbackLine.textContent = "";
-    return;
-  }
-  const time = new Date().toLocaleTimeString("nl-NL", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-  hostFeedbackLine.textContent = `[${time}] ${msg}`;
-}
-
-// ===== PLAYER CARD ART (card_player1–5) =====
-
-const PLAYER_CARD_FILES = [
-  "card_player1.png",
-  "card_player2.png",
-  "card_player3.png",
-  "card_player4.png",
-  "card_player5.png",
-];
-
-function pickPlayerCardFile(player) {
-  if (!player) return null;
-  if (typeof player.cardArt === "string" && player.cardArt) return player.cardArt;
-  if (typeof player.avatarKey === "string" && player.avatarKey) return player.avatarKey;
-
-  const join = typeof player.joinOrder === "number" ? player.joinOrder : 0;
-  if (!PLAYER_CARD_FILES.length) return null;
-  const idx = Math.abs(join) % PLAYER_CARD_FILES.length;
-  return PLAYER_CARD_FILES[idx];
-}
-
-// ===== HERO CARD VISUAL (NEON + STATUS + LEAD) =====
-
-async function updateHeroCardVisual(game, player) {
-  if (!playerAvatarEl) return;
-
-  playerAvatarEl.classList.remove(
-    "den-red",
-    "den-blue",
-    "den-green",
-    "den-yellow",
-    "status-yard",
-    "status-caught",
-    "status-dashed",
-    "is-lead-fox"
-  );
-
-  if (!player) {
-    if (playerCardArtEl) playerCardArtEl.style.backgroundImage = "";
-    return;
-  }
-
-  const color = (player.color || "").toUpperCase();
-  if (color === "RED") playerAvatarEl.classList.add("den-red");
-  else if (color === "BLUE") playerAvatarEl.classList.add("den-blue");
-  else if (color === "GREEN") playerAvatarEl.classList.add("den-green");
-  else if (color === "YELLOW") playerAvatarEl.classList.add("den-yellow");
-
-  let statusClass = "status-yard";
-  if (player.dashed) statusClass = "status-dashed";
-  else if (player.inYard === false) statusClass = "status-caught";
-  playerAvatarEl.classList.add(statusClass);
-
-  const leadId = await resolveLeadPlayerId(game);
-  if (leadId && player.id && leadId === player.id) {
-    playerAvatarEl.classList.add("is-lead-fox");
-  }
-
-  if (playerCardArtEl) {
-    const file = pickPlayerCardFile(player);
-    playerCardArtEl.style.backgroundImage = file ? `url('./assets/${file}')` : "";
-  }
-}
-
-// ===== UI: PHASE PANELS + GAME / EVENT RENDERING =====
-
-function updatePhasePanels(game, player) {
-  if (!phaseMovePanel || !phaseActionsPanel || !phaseDecisionPanel) return;
-
-  phaseMovePanel.classList.remove("active");
-  phaseActionsPanel.classList.remove("active");
-  phaseDecisionPanel.classList.remove("active");
-
-  if (!game) {
-    setHost("idle_start", "Wachten op game-data…");
-    return;
-  }
-
-  const phase = game.phase || "";
-  const status = game.status || "";
-
-  if (status === "finished" || phase === "END") {
-    setHost("end", "Raid is afgelopen – er worden geen keuzes meer gevraagd.");
-    updateMoveButtonsState();
-    updateDecisionButtonsState();
-    renderHand();
-    return;
-  }
-
-  if (phase === "MOVE") {
-    phaseMovePanel.classList.add("active");
-    if (player && canMoveNow(game, player)) {
-      setHost("move_cta", "MOVE – kies: SNATCH / FORAGE / SCOUT / SHIFT.");
-    } else {
-      setHost("actions_wait", "MOVE – je kunt nu geen MOVE doen.");
+    // ---- SCOUT pick (1-based) ----
+    let scoutPos = null;
+    if (canScout) {
+      const startPos = eventIdx + 1; // next event (1-based)
+      const endPos = Math.min(track.length, startPos + 2); // don't scout too far
+      for (let pos = startPos; pos <= endPos; pos++) {
+        if (noGoPositions.includes(pos)) continue;
+        scoutPos = pos;
+        break;
+      }
     }
-  } else if (phase === "ACTIONS") {
-    phaseActionsPanel.classList.add("active");
-    if (player && canPlayActionNow(game, player)) {
-      if (isMyOpsTurn(game)) {
-        setHost("actions_turn", "ACTIONS – jij bent aan de beurt. Speel een kaart of PASS.");
+
+    const knownUpcomingEvents = Array.isArray(p?.knownUpcomingEvents)
+      ? p.knownUpcomingEvents.filter(Boolean)
+      : [];
+
+    const wantScout =
+      noPeekMode &&
+      canScout &&
+      scoutPos != null &&
+      knownUpcomingEvents.length < 1; // no intel yet
+
+    // ---- SHIFT pick: swap the next event with a safer one within a small lookahead ----
+    let shiftPick = null;
+    if (canShift) {
+      const nextId = track[eventIdx] ? String(track[eventIdx]) : null;
+      if (nextId) {
+        const nextFacts = getEventFacts(nextId, { game: g, me: meForMetrics, denColor: myColor, isLead });
+        const nextPeak = peakDanger(nextFacts);
+
+        // Only bother shifting if the near-term looks nasty and we don't have defensive tools ready.
+        if (nextPeak >= shiftDangerTrigger && !defenseReady) {
+          const LOOKAHEAD = shiftLookahead;
+          let best = null;
+
+          for (let j = eventIdx + 1; j < Math.min(track.length, eventIdx + 1 + LOOKAHEAD); j++) {
+            const candId = track[j] ? String(track[j]) : null;
+            if (!candId) continue;
+
+            const f = getEventFacts(candId, { game: g, me: meForMetrics, denColor: myColor, isLead });
+            const candPeak = peakDanger(f);
+
+            // Benefit: reduce immediate danger, small penalty for swapping too far.
+            const benefit = (nextPeak - candPeak) - shiftDistancePenalty * (j - eventIdx);
+
+            if (!best || benefit > best.benefit) {
+              best = { j, candId, candPeak, benefit };
+            }
+          }
+
+          if (best && best.benefit >= shiftBenefitMin) {
+            shiftPick = {
+              i1: eventIdx,
+              i2: best.j,
+              pos1: eventIdx + 1,
+              pos2: best.j + 1,
+              benefit: best.benefit,
+              nextId,
+              nextPeak,
+              candId: best.candId,
+              candPeak: best.candPeak,
+            };
+          }
+        }
+      }
+
+    // Anti-SHIFT spam: block repeated SHIFT unless the benefit is huge.
+    if (shiftOnCooldown && shiftPick && Number(shiftPick.benefit || 0) < shiftOverrideBenefit) {
+      shiftPick = null;
+    }
+    }
+
+    // ---- FORAGE desire ----
+    const avoidSnatch =
+      carryValueRec >= 7.5 &&
+      (dangerMid || pDanger >= 0.2 || uncertain) &&
+      !defenseReady;
+
+    const wantForage =
+      !mustHaveLoot &&
+      actionDeck.length > 0 &&
+      hand.length < desiredHandMax &&
+      (
+        hand.length < desiredHandMin ||                 // hard minimum hand size
+        (dangerHigh && !defenseReady) ||                // danger, no defense
+        (dangerMid && cashPressure && !defenseReady) || // pressure + danger
+        (extremePressure && (pDanger >= 0.25 || uncertain)) ||
+        avoidSnatch
+      );
+
+    // Choose MOVE
+    let did = null;
+
+    if (mustHaveLoot && lootPts <= 0) {
+      // Must have loot to stay viable (Gate Toll etc.)
+      did = { kind: "SNATCH", detail: "mustHaveLoot" };
+    } else if (wantScout) {
+      did = { kind: "SCOUT", detail: `pos ${scoutPos}` };
+    } else if (actionDeck.length > 0 && hand.length < desiredHandMin) {
+      did = { kind: "FORAGE", detail: `hand<${desiredHandMin}` };
+    } else if (shiftPick) {
+      did = { kind: "SHIFT", detail: `${shiftPick.pos1}<->${shiftPick.pos2} (Δ≈${shiftPick.benefit.toFixed(1)})` };
+    } else if (wantForage) {
+      did = { kind: "FORAGE", detail: `rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)}` };
+    } else {
+      did = { kind: "SNATCH", detail: `rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)}` };
+    }
+
+    // Execute MOVE (mutate local copies used for tx.update)
+    if (did.kind === "SNATCH") {
+      if (!lootDeck.length) {
+        // fallback to forage if possible
+        if (!actionDeck.length) return;
+        let drawn = 0;
+        for (let i = 0; i < 2; i++) {
+          if (!actionDeck.length) break;
+          hand.push(actionDeck.pop());
+          drawn++;
+        }
+        did = { kind: "FORAGE", detail: `${drawn} kaart(en) (loot op)` };
       } else {
-        setHost("actions_wait", "ACTIONS – wacht tot je aan de beurt bent.");
+        const card = lootDeck.pop();
+        loot.push(card);
+        did.detail = `${card?.t || "Loot"} ${card?.v ?? ""} (${did.detail})`;
       }
-    } else {
-      setHost("actions_wait", "ACTIONS – je doet niet (meer) mee in deze ronde.");
-    }
-  } else if (phase === "DECISION") {
-    phaseDecisionPanel.classList.add("active");
-    if (player && canDecideNow(game, player)) {
-      setHost("decision_cta", "DECISION – kies LURK / HIDE (Burrow) / DASH.");
-    } else if (player && player.decision) {
-      setHost("actions_wait", `DECISION – jouw keuze staat al vast: ${player.decision}.`);
-    } else {
-      setHost("actions_wait", "DECISION – je doet niet mee.");
-    }
-  } else if (phase === "REVEAL") {
-    setHost("reveal", "REVEAL – Event wordt toegepast. Kijk mee op het grote scherm.");
-  } else {
-    setHost("idle_start", "Wacht tot de host de raid start…");
-  }
-
-  updateMoveButtonsState();
-  updateDecisionButtonsState();
-  renderHand();
-}
-
-function renderGame() {
-  if (!currentGame || !gameStatusDiv) return;
-
-  const g = currentGame;
-
-  gameStatusDiv.textContent = `Code: ${g.code} – Ronde: ${g.round || 0} – Fase: ${g.phase || "?"}`;
-
-  if (g.status === "lobby" || g.status === "new" || g.phase === "SETUP") {
-    setHostStatus("Wachten tot de host de raid start…");
-  } else if (g.phase === "MOVE") {
-    setHostStatus("MOVE-fase – kies SNATCH / FORAGE / SCOUT / SHIFT.");
-  } else if (g.phase === "ACTIONS") {
-    setHostStatus(
-      isMyOpsTurn(g)
-        ? "ACTIONS-fase – jij bent aan de beurt. Speel een kaart of kies PASS."
-        : "ACTIONS-fase – wacht tot jij aan de beurt bent."
-    );
-  } else if (g.phase === "DECISION") {
-    setHostStatus("DECISION-fase – kies LURK / BURROW / DASH.");
-  } else if (g.phase === "REVEAL") {
-    setHostStatus("REVEAL – Event wordt toegepast.");
-  } else if (g.status === "finished" || g.phase === "END") {
-    setHostStatus("Raid afgelopen – bekijk het scorebord op het Community Board.");
-  } else {
-    setHostStatus("Even geduld…");
-  }
-
-  if (g.status === "finished" || g.phase === "END") {
-    setActionFeedback("Het spel is afgelopen – het scorebord staat op het Community Board.");
-    if (eventCurrentDiv) eventCurrentDiv.textContent = "Spel afgelopen. Bekijk het scorebord op het grote scherm.";
-    if (eventScoutPreviewDiv) eventScoutPreviewDiv.textContent = "";
-    if (specialFlagsDiv) specialFlagsDiv.innerHTML = "";
-
-    updatePhasePanels(g, currentPlayer);
-    updateHeroCardVisual(currentGame, currentPlayer);
-    return;
-  }
-
-  if (g.phase !== "ACTIONS") setActionFeedback("");
-
-  if (eventCurrentDiv) eventCurrentDiv.innerHTML = "";
-  if (eventScoutPreviewDiv) eventScoutPreviewDiv.textContent = "";
-  if (specialFlagsDiv) specialFlagsDiv.innerHTML = "";
-
-  const roundNow = Number(g.round || 0);
-  const teamScouts = getTeamScoutsThisRound(g, currentPlayer);
-  const latestTeamScout = teamScouts.length ? teamScouts[0] : null;
-
-  let ev = null;
-  let label = "";
-  let byLine = "";
-
-  if (g.phase === "REVEAL" && g.currentEventId) {
-    ev = getEventById(g.currentEventId);
-    label = "Actueel Event (REVEAL)";
-  } else if (latestTeamScout && latestTeamScout.eventId) {
-    ev = getEventById(latestTeamScout.eventId);
-    const posShow =
-      latestTeamScout.pos != null
-        ? latestTeamScout.pos
-        : typeof latestTeamScout.index === "number"
-          ? latestTeamScout.index + 1
-          : "?";
-    label = `TEAM SCOUT – positie ${posShow}`;
-    byLine = latestTeamScout.byName ? `gescout door ${latestTeamScout.byName}` : "";
-  } else if (
-    currentPlayer &&
-    currentPlayer.scoutPeek &&
-    typeof currentPlayer.scoutPeek.index === "number" &&
-    currentPlayer.scoutPeek.round === (g.round || 0)
-  ) {
-    // fallback (oude data): alleen jouw persoonlijke scoutPeek
-    const peek = currentPlayer.scoutPeek;
-    const track = g.eventTrack || [];
-    const idx = peek.index;
-    if (idx >= 0 && idx < track.length && track[idx] === peek.eventId) {
-      ev = getEventById(peek.eventId);
-      label = `SCOUT preview – positie ${idx + 1}`;
-    }
-  }
-
-  if (ev && eventCurrentDiv) {
-    renderEventCardInto(eventCurrentDiv, ev, { label, byLine });
-  } else if (eventCurrentDiv) {
-    eventCurrentDiv.textContent =
-      "Nog geen Event Card onthuld (pas zichtbaar bij REVEAL of via TEAM SCOUT).";
-  }
-
-  if (eventScoutPreviewDiv) {
-    eventScoutPreviewDiv.innerHTML = "";
-
-    const flags = mergeRoundFlags(g);
-
-    // Track preview (alleen als blind play NIET actief is)
-    if (!flags.noPeekAll) {
-      renderTrackPeekStrip(eventScoutPreviewDiv, g, { max: 2 });
-    }
-
-    // TEAM SCOUTS (jouw den, deze ronde)
-    const scoutsWrap = document.createElement("div");
-    eventScoutPreviewDiv.appendChild(scoutsWrap);
-    renderTeamScoutsInto(scoutsWrap, teamScouts, roundNow);
-  }
-  if (specialFlagsDiv) {
-    const flags = mergeRoundFlags(g);
-
-    if (flags.noPeekAll) {
-      const chip = document.createElement("span");
-      chip.className = "event-flag-chip event-flag-chip--danger";
-      chip.textContent =
-        "Blind play actief" + (flags.noPeekReason ? ` (${flags.noPeekReason})` : "");
-      specialFlagsDiv.appendChild(chip);
-    }
-
-    if (flags.scatter) {
-      const chip = document.createElement("span");
-      chip.className = "event-flag-chip event-flag-chip--danger";
-      chip.textContent = "Scatter! – niemand mag Scouten deze ronde";
-      specialFlagsDiv.appendChild(chip);
-    }
-
-    if (flags.lockEvents) {
-      const chip = document.createElement("span");
-      chip.className = "event-flag-chip event-flag-chip--safe";
-      chip.textContent = "Burrow Beacon – Event Track gelocked";
-      specialFlagsDiv.appendChild(chip);
-    }
-  }
-
-  updatePhasePanels(g, currentPlayer);
-  updateHeroCardVisual(currentGame, currentPlayer);
-}
-
-function renderPlayer() {
-  if (!currentPlayer) return;
-
-  const p = currentPlayer;
-  const g = currentGame || null;
-
-  if (playerNameEl) playerNameEl.textContent = p.name || "Onbekende vos";
-
-  if (playerDenColorEl) {
-    const color = p.color || p.denColor || p.den || "?";
-    playerDenColorEl.textContent = color ? `Den-kleur: ${String(color).toUpperCase()}` : "Den-kleur onbekend";
-  }
-
-  if (playerStatusEl) {
-    const status =
-      p.inYard === false ? "Gevangen / uit de raid" : p.dashed ? "Met buit gevlucht (DASH)" : "In de Yard";
-    playerStatusEl.textContent = `Status: ${status}`;
-  }
-
-  // Score UI blijft via updateLootUi (live)
-  renderHeroAvatarCard(p, g);
-
-  if (typeof updateLootMeterAndSummary === "function") updateLootMeterAndSummary(p);
-  if (typeof updateLootUi === "function") updateLootUi(p);
-  if (typeof updatePhasePanels === "function") updatePhasePanels(currentGame, p);
-  if (typeof updateHeroCardVisual === "function") updateHeroCardVisual(currentGame, p);
-}
-
-// ===== MOVE / DECISION BUTTON STATE =====
-
-function updateMoveButtonsState() {
-  if (!btnSnatch || !btnForage || !btnScout || !btnShift || !moveStateText) return;
-
-  if (!currentGame || !currentPlayer) {
-    btnSnatch.disabled = true;
-    btnForage.disabled = true;
-    btnScout.disabled = true;
-    btnShift.disabled = true;
-    moveStateText.textContent = "Geen game of speler geladen.";
-    return;
-  }
-
-  const g = currentGame;
-  const p = currentPlayer;
-
-  if (g.status === "finished" || g.phase === "END") {
-    btnSnatch.disabled = true;
-    btnForage.disabled = true;
-    btnScout.disabled = true;
-    btnShift.disabled = true;
-    moveStateText.textContent = "Het spel is afgelopen – je kunt geen MOVE meer doen.";
-    return;
-  }
-
-  const canMove = canMoveNow(g, p);
-  const moved = g.movedPlayerIds || [];
-
-  btnSnatch.disabled = !canMove;
-  btnForage.disabled = !canMove;
-  btnScout.disabled = !canMove;
-  btnShift.disabled = !canMove;
-
-  if (!canMove) {
-    if (g.phase !== "MOVE") moveStateText.textContent = `Je kunt nu geen MOVE doen (fase: ${g.phase}).`;
-    else if (p.inYard === false) moveStateText.textContent = "Je bent niet meer in de Yard.";
-    else if (p.dashed) moveStateText.textContent = "Je hebt al DASH gekozen in een eerdere ronde.";
-    else if (moved.includes(playerId)) moveStateText.textContent = "Je hebt jouw MOVE voor deze ronde al gedaan.";
-    else if (g.status !== "round") moveStateText.textContent = "Er is nog geen actieve ronde.";
-    else moveStateText.textContent = "Je kunt nu geen MOVE doen.";
-  } else {
-    moveStateText.textContent = "Je kunt één MOVE doen: SNATCH, FORAGE, SCOUT of SHIFT.";
-  }
-}
-
-function updateDecisionButtonsState() {
-  if (!btnLurk || !btnBurrow || !btnDash || !decisionStateText) return;
-
-  if (!currentGame || !currentPlayer) {
-    btnLurk.disabled = true;
-    btnBurrow.disabled = true;
-    btnDash.disabled = true;
-    decisionStateText.textContent = "Geen game of speler geladen.";
-    return;
-  }
-
-  const g = currentGame;
-  const p = currentPlayer;
-
-  if (g.status === "finished" || g.phase === "END") {
-    btnLurk.disabled = true;
-    btnBurrow.disabled = true;
-    btnDash.disabled = true;
-    decisionStateText.textContent = "Het spel is afgelopen – geen DECISION meer nodig.";
-    return;
-  }
-
-  if (g.phase !== "DECISION") {
-    btnLurk.disabled = true;
-    btnBurrow.disabled = true;
-    btnDash.disabled = true;
-    decisionStateText.textContent = "DECISION is nog niet aan de beurt.";
-    return;
-  }
-
-  if (p.inYard === false) {
-    btnLurk.disabled = true;
-    btnBurrow.disabled = true;
-    btnDash.disabled = true;
-    decisionStateText.textContent = "Je zit niet meer in de Yard en doet niet mee aan deze DECISION.";
-    return;
-  }
-
-  if (p.dashed) {
-    btnLurk.disabled = true;
-    btnBurrow.disabled = true;
-    btnDash.disabled = true;
-    decisionStateText.textContent = "Je hebt al eerder DASH gekozen en doet niet meer mee in de Yard.";
-    return;
-  }
-
-  if (p.decision) {
-    btnLurk.disabled = true;
-    btnBurrow.disabled = true;
-    btnDash.disabled = true;
-    decisionStateText.textContent = `Je DECISION voor deze ronde is: ${p.decision}.`;
-    return;
-  }
-
-  const can = canDecideNow(g, p);
-  btnLurk.disabled = !can;
-  btnBurrow.disabled = !can;
-  btnDash.disabled = !can;
-
-  decisionStateText.textContent = can
-    ? "Kies jouw DECISION: LURK, HIDE (Burrow) of DASH."
-    : "Je kunt nu geen DECISION kiezen.";
-}
-// ===== HAND UI (ACTIONS) — REWRITE (drop-in replacement) =====
-
-// globale (module) guard tegen dubbel klikken / dubbel submit
-window.__VJ_ACTION_PLAY_IN_FLIGHT__ = window.__VJ_ACTION_PLAY_IN_FLIGHT__ || false;
-
-function renderHand() {
-  if (!actionsStateText) return;
-
-  if (!currentPlayer || !currentGame) {
-    actionsStateText.textContent = "Geen hand geladen.";
-    if (btnHand) btnHand.disabled = true;
-    if (btnPass) btnPass.disabled = true;
-    return;
-  }
-
-  const g = currentGame;
-  const p = currentPlayer;
-  const hand = Array.isArray(p.hand) ? p.hand : [];
-
-  const canPlayOverall = typeof canPlayActionNow === "function" ? canPlayActionNow(g, p) : false;
-  const myTurnOverall = typeof isMyOpsTurn === "function" ? isMyOpsTurn(g) : false;
-
-  if (!hand.length) {
-    actionsStateText.textContent =
-      g.status === "finished" || g.phase === "END"
-        ? "Het spel is afgelopen – je kunt geen Action Cards meer spelen."
-        : "Je hebt geen Action Cards in je hand.";
-
-    if (btnHand) btnHand.disabled = true;
-    if (btnPass) btnPass.disabled = !(canPlayOverall && myTurnOverall);
-    return;
-  }
-
-  // HAND knop: alleen “openen” als je überhaupt action mag spelen
-  if (btnHand) btnHand.disabled = !canPlayOverall;
-
-  if (g.phase !== "ACTIONS") {
-    actionsStateText.textContent = `ACTIONS-fase is nu niet actief. Je hebt ${hand.length} kaart(en) klaarstaan.`;
-  } else if (!canPlayOverall) {
-    actionsStateText.textContent = "Je kunt nu geen Action Cards spelen (niet in de Yard of al DASHED).";
-  } else if (!myTurnOverall) {
-    actionsStateText.textContent = `Je hebt ${hand.length} kaart(en), maar het is nu niet jouw beurt.`;
-  } else {
-    actionsStateText.textContent = `Jij bent aan de beurt – kies een kaart via HAND of kies PASS. Je hebt ${hand.length} kaart(en).`;
-  }
-
-  if (btnPass) btnPass.disabled = !(canPlayOverall && myTurnOverall);
-}
-
-function openHandModal() {
-  if (!handModalOverlay || !handCardsGrid) return;
-  if (!currentGame || !currentPlayer) return;
-  renderHandGrid();
-  handModalOverlay.classList.remove("hidden");
-}
-
-function closeHandModal() {
-  if (!handModalOverlay) return;
-  handModalOverlay.classList.add("hidden");
-}
-
-// ===== SOLO RAID: split Action Cards by value =====
-const SOLO_NO_VALUE_ACTIONS = new Set([
-  "holdstill",
-  "maskswap",
-  "alphacall",
-  "scatter",
-  "burrowbeacon",
-  "followthetail",
-  "scentcheck",
-  "nogozone"
-]);
-
-function normActionName(name) {
-  return String(name || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-}
-
-// Solo = only 1 active player left in the Yard (niet dashed / niet gevangen)
-function isSoloRaidNow() {
-  const list = Array.isArray(leadCCPlayers) ? leadCCPlayers : [];
-  const active = list.filter((pl) => pl && pl.inYard !== false && !pl.dashed);
-  return active.length <= 1;
-}
-
-function renderHandGrid() {
-  if (!handCardsGrid) return;
-  handCardsGrid.innerHTML = "";
-
-  const g = currentGame;
-  const p = currentPlayer;
-
-  if (!g || !p) {
-    const msg = document.createElement("p");
-    msg.textContent = "Game of speler niet geladen.";
-    msg.style.fontSize = "0.85rem";
-    msg.style.opacity = "0.85";
-    handCardsGrid.appendChild(msg);
-    return;
-  }
-
-  const hand = Array.isArray(p.hand) ? p.hand : [];
-  if (!hand.length) {
-    const msg = document.createElement("p");
-    msg.textContent = "Je hebt geen Action Cards in je hand.";
-    msg.style.fontSize = "0.85rem";
-    msg.style.opacity = "0.85";
-    handCardsGrid.appendChild(msg);
-    return;
-  }
-
-    const solo = isSoloRaidNow();
-
-  const appendLabel = (text) => {
-    const d = document.createElement("div");
-    d.className = "hand-group-label";
-    d.textContent = text;
-    handCardsGrid.appendChild(d);
-  };
-
-  const appendDivider = () => {
-    const d = document.createElement("div");
-    d.className = "hand-group-divider";
-    handCardsGrid.appendChild(d);
-  };
-
-  const renderTile = (card, idx, lowValue = false) => {
-    const tile = document.createElement("button");
-    tile.type = "button";
-    tile.className = "hand-card-tile" + (lowValue ? " hand-card-tile--lowvalue" : "");
-
-    const cardName = typeof card === "string" ? card : (card?.name || card?.id || "");
-
-    let cardEl = null;
-    try {
-      if (typeof renderActionCard === "function") {
-        cardEl = renderActionCard(cardName || card, {
-          size: "medium",
-          noOverlay: true,
-          footer: "",
-        });
+    } else if (did.kind === "FORAGE") {
+      if (!actionDeck.length) {
+        // fallback to snatch if possible
+        if (!lootDeck.length) return;
+        const card = lootDeck.pop();
+        loot.push(card);
+        did = { kind: "SNATCH", detail: `${card?.t || "Loot"} ${card?.v ?? ""} (action op)` };
+      } else {
+        let drawn = 0;
+        for (let i = 0; i < 2; i++) {
+          if (!actionDeck.length) break;
+          hand.push(actionDeck.pop());
+          drawn++;
+        }
+        did.detail = `${drawn} kaart(en) (${did.detail})`;
       }
-    } catch (e) {
-      console.warn("[HAND] renderActionCard failed:", e);
-    }
+    } else if (did.kind === "SCOUT") {
+      const pos = Number(scoutPos);
+      const i0 = Number.isFinite(pos) ? pos - 1 : eventIdx;
+      const eventId = track[i0] ? String(track[i0]) : null;
 
-    if (cardEl) {
-      cardEl.classList.add("hand-card");
-      tile.appendChild(cardEl);
-    } else {
-      const fallback = document.createElement("div");
-      fallback.className = "vj-card hand-card";
-      const label = document.createElement("div");
-      label.className = "hand-card-label";
-      label.textContent = cardName || `Kaart #${idx + 1}`;
-      fallback.appendChild(label);
-      tile.appendChild(fallback);
-    }
-
-    tile.addEventListener("click", () => openHandCardDetail(idx));
-    handCardsGrid.appendChild(tile);
-  };
-
-  // Normaal gedrag: geen splitsing
-  if (!solo) {
-    hand.forEach((card, idx) => renderTile(card, idx, false));
-    return;
-  }
-
-  // Solo: split in waardevol vs geen waarde
-  const high = [];
-  const low = [];
-
-  hand.forEach((card, idx) => {
-    const cardName = typeof card === "string" ? card : (card?.name || card?.id || "");
-    const key = normActionName(cardName);
-    if (SOLO_NO_VALUE_ACTIONS.has(key)) low.push({ card, idx });
-    else high.push({ card, idx });
-  });
-
-  if (high.length) {
-    appendLabel("Bruikbaar (solo)");
-    high.forEach((x) => renderTile(x.card, x.idx, false));
-  }
-
-  if (low.length) {
-    if (high.length) appendDivider();
-    appendLabel("Geen verschil meer (solo)");
-    low.forEach((x) => renderTile(x.card, x.idx, true));
-  }
-}
-
-// ===== ACTION CARD INFO =====
-
-function getActionCardInfo(cardOrName) {
-  const name =
-    typeof cardOrName === "string"
-      ? cardOrName
-      : (cardOrName?.name || cardOrName?.id || "");
-  if (!name) return null;
-  if (typeof getActionInfoByName !== "function") return null;
-  return getActionInfoByName(name) || null;
-}
-
-function openHandCardDetail(index) {
-  if (!handCardsGrid) return;
-  if (!currentGame || !currentPlayer) return;
-
-  const g = currentGame;
-  const p = currentPlayer;
-
-  const hand = Array.isArray(p.hand) ? p.hand : [];
-  if (index < 0 || index >= hand.length) return;
-
-  const card = hand[index];
-  const cardName = typeof card === "string" ? card : (card?.name || card?.id || "");
-
-  handCardsGrid.innerHTML = "";
-
-  const wrapper = document.createElement("div");
-  wrapper.className = "hand-card-detail";
-
-  const bigCard = document.createElement("div");
-  bigCard.className = "vj-card hand-card hand-card-large";
-
-  const def =
-    cardName && typeof getActionDefByName === "function"
-      ? getActionDefByName(cardName)
-      : null;
-  if (def?.imageFront) bigCard.style.backgroundImage = `url('${def.imageFront}')`;
-
-  const label = document.createElement("div");
-  label.className = "hand-card-label";
-  label.textContent = def?.name || cardName || `Kaart #${index + 1}`;
-  bigCard.appendChild(label);
-
-  const textBox = document.createElement("div");
-  textBox.className = "hand-card-detail-text";
-
-  const titleEl = document.createElement("h3");
-  titleEl.textContent = def?.name || cardName || "Onbekende kaart";
-  textBox.appendChild(titleEl);
-
-  const info = getActionCardInfo(cardName);
-
-  if (def?.phase || def?.timing) {
-    const pMoment = document.createElement("p");
-    const phaseTxt = def?.phase ? String(def.phase) : "";
-    const timingTxt = def?.timing ? String(def.timing) : "";
-    const joined = [phaseTxt, timingTxt].filter(Boolean).join(" • ");
-    pMoment.innerHTML = `<strong>Moment:</strong> ${joined}`;
-    textBox.appendChild(pMoment);
-  }
-
-  if (info) {
-    if (info.choice) {
-      const pChoice = document.createElement("p");
-      pChoice.innerHTML = `<strong>Kies:</strong> ${info.choice}`;
-      textBox.appendChild(pChoice);
-    }
-    if (info.effect) {
-      const pEffect = document.createElement("p");
-      pEffect.innerHTML = `<strong>Effect:</strong> ${info.effect}`;
-      textBox.appendChild(pEffect);
-    }
-    if (info.note) {
-      const pNote = document.createElement("p");
-      pNote.innerHTML = `<strong>Let op:</strong> ${info.note}`;
-      textBox.appendChild(pNote);
-    }
-  } else {
-    const descEl = document.createElement("p");
-    descEl.textContent =
-      def?.description ||
-      (typeof card === "object" && (card?.desc || card?.text)) ||
-      "Deze kaart heeft nog geen digitale beschrijving.";
-    textBox.appendChild(descEl);
-  }
-
-  const actions = document.createElement("div");
-  actions.className = "hand-card-detail-actions";
-
-  const playBtn = document.createElement("button");
-  playBtn.type = "button";
-  playBtn.className = "phase-btn phase-btn-primary";
-  playBtn.textContent = "Speel deze kaart";
-
-  const canPlayNow =
-    (typeof canPlayActionNow === "function" ? canPlayActionNow(g, p) : false) &&
-    (typeof isMyOpsTurn === "function" ? isMyOpsTurn(g) : false);
-
-  const opsLocked = !!(g?.flagsRound?.opsLocked);
-
-  // ook blokkeren als er al een submit “in flight” is
-  playBtn.disabled = !canPlayNow || opsLocked || window.__VJ_ACTION_PLAY_IN_FLIGHT__ === true;
-
-  playBtn.addEventListener("click", async () => {
-    // hard guard tegen dubbel klikken
-    if (window.__VJ_ACTION_PLAY_IN_FLIGHT__ === true) return;
-    window.__VJ_ACTION_PLAY_IN_FLIGHT__ = true;
-
-    // direct UI lock zodat de gebruiker feedback heeft
-    playBtn.disabled = true;
-
-    try {
-      if (typeof playActionCard !== "function") {
-        alert("playActionCard() staat later in player.js — niet gevonden.");
-        return;
+      if (!eventId) {
+        // nothing to scout -> fallback to forage/snatch
+        if (actionDeck.length > 0) {
+          let drawn = 0;
+          for (let i = 0; i < 2; i++) {
+            if (!actionDeck.length) break;
+            hand.push(actionDeck.pop());
+            drawn++;
+          }
+          did = { kind: "FORAGE", detail: `${drawn} kaart(en) (scout fail)` };
+        } else if (lootDeck.length) {
+          const card = lootDeck.pop();
+          loot.push(card);
+          did = { kind: "SNATCH", detail: `${card?.t || "Loot"} ${card?.v ?? ""} (scout fail)` };
+        } else {
+          return;
+        }
+      } else {
+        // save intel for noPeek mode + den share
+        const nextKnown = [eventId, ...knownUpcomingEvents.filter((x) => String(x) !== eventId)].slice(0, 2);
+        // store scoutPeek too (same shape as player) for debugging/UI if needed
+        p._scoutUpdate = {
+          scoutPeek: { round: Number(g.round || 0), index: i0, eventId },
+          knownUpcomingEvents: nextKnown,
+        };
+        did.detail = `#${pos}=${eventId}`;
       }
+    } else if (did.kind === "SHIFT") {
+      if (!shiftPick) return;
+      // only swap future slots (>= eventIdx) like player.js
+      const i1 = shiftPick.i1;
+      const i2 = shiftPick.i2;
 
-      // ✅ wijziging: alleen sluiten als kaart ECHT gespeeld is
-      // (playActionCard moet boolean returnen: true=gespeeld, false=niet gespeeld)
-      const ok = await playActionCard(index);
-
-      if (ok === true) {
-        closeHandModal();
-        return;
-      }
-
-      // niet gespeeld → overlay open houden en opnieuw syncen
-      if (handModalOverlay && !handModalOverlay.classList.contains("hidden")) {
-        // terug naar grid is meestal de prettigste UX
-        renderHandGrid();
-      }
-    } catch (err) {
-      console.error("[HAND] playActionCard error:", err);
-      alert("Er ging iets mis bij het spelen van de kaart. Probeer opnieuw.");
-      // overlay blijft open zodat speler opnieuw kan proberen
-    } finally {
-      // unlock na een korte tick zodat Firestore updates kunnen binnenkomen
-      setTimeout(() => {
-        window.__VJ_ACTION_PLAY_IN_FLIGHT__ = false;
-
-        // als overlay nog open is: knopstatus opnieuw bepalen
-        if (handModalOverlay && !handModalOverlay.classList.contains("hidden")) {
-          const g2 = currentGame;
-          const p2 = currentPlayer;
-          const canPlayNow2 =
-            (typeof canPlayActionNow === "function" ? canPlayActionNow(g2, p2) : false) &&
-            (typeof isMyOpsTurn === "function" ? isMyOpsTurn(g2) : false);
-          const opsLocked2 = !!(g2?.flagsRound?.opsLocked);
-          playBtn.disabled = !canPlayNow2 || opsLocked2;
+      if (i1 < eventIdx || i2 < eventIdx) {
+        // should not happen, but stay safe
+        did = { kind: "FORAGE", detail: "shift invalid" };
+        if (actionDeck.length > 0) {
+          let drawn = 0;
+          for (let i = 0; i < 2; i++) {
+            if (!actionDeck.length) break;
+            hand.push(actionDeck.pop());
+            drawn++;
+          }
+          did.detail += ` (${drawn} kaart(en))`;
+        } else if (lootDeck.length) {
+          const card = lootDeck.pop();
+          loot.push(card);
+          did = { kind: "SNATCH", detail: `${card?.t || "Loot"} ${card?.v ?? ""} (shift invalid)` };
+        } else {
+          return;
+        }
+      } else {
+        // ✅ SHIFT COST: return highest loot to bottom of loot deck (prevents SHIFT spam)
+        if (!loot.length) {
+          // should not happen because canShift requires loot, but stay safe
+          did = { kind: "FORAGE", detail: "shift cost fail (no loot)" };
+          if (actionDeck.length > 0) {
+            let drawn = 0;
+            for (let i = 0; i < 2; i++) {
+              if (!actionDeck.length) break;
+              hand.push(actionDeck.pop());
+              drawn++;
+            }
+            did.detail += ` (${drawn} kaart(en))`;
+          } else if (lootDeck.length) {
+            const card = lootDeck.pop();
+            loot.push(card);
+            did = { kind: "SNATCH", detail: `${card?.t || "Loot"} ${card?.v ?? ""} (shift cost fail)` };
+          } else {
+            return;
+          }
+        } else {
+          let hiIdx = 0;
+          let hiVal = -1e9;
+          for (let k = 0; k < loot.length; k++) {
+            const v = Number(loot[k]?.v ?? loot[k]?.value ?? 0);
+            if (v > hiVal) {
+              hiVal = v;
+              hiIdx = k;
+            }
+          }
+          const spent = loot.splice(hiIdx, 1)[0];
+          if (spent) lootDeck.unshift(spent); // bottom of deck (since draw uses pop())
+          did.detail += ` cost: returned ${spent?.t || "Loot"} ${spent?.v ?? ""}`;
         }
 
-        renderHand?.(); // update buttons + state text
-      }, 200);
+        const tmp = track[i1];
+        track[i1] = track[i2];
+        track[i2] = tmp;
+        // attach for tx.update below
+        g._shiftTrack = track;
+      }
     }
+
+
+    // persist player + game changes
+    const pUpdate = { hand, loot };
+    pUpdate.lastMoveKind = did?.kind || null;
+    pUpdate.lastMoveRound = Number(g.round || 0);
+    if (p && p._scoutUpdate && typeof p._scoutUpdate === "object") {
+      Object.assign(pUpdate, p._scoutUpdate);
+    }
+    tx.update(pRef, pUpdate);
+
+    const gUpdate = { actionDeck, lootDeck, movedPlayerIds: [...new Set([...moved, botId])] };
+    if (g && Array.isArray(g._shiftTrack)) {
+      gUpdate.eventTrack = g._shiftTrack;
+    }
+    tx.update(gRef, gUpdate);
+
+    const botAfter = { ...p, hand, loot };
+
+    logPayload = {
+      round: Number(g.round || 0),
+      phase: "MOVE",
+      playerId: botId,
+      playerName: p.name || "BOT",
+      botColor: normColor(p.color || p.den || p.denColor),
+      discProfile: (DISC_BY_DEN[normColor(p.color || p.den || p.denColor)] || null),
+      hand,
+      choice: `MOVE_${did.kind}`,
+      message: `BOT deed ${did.kind} (${did.detail})`,
+      kind: "BOT_MOVE",
+      at: Date.now(),
+      metrics: buildBotMetricsForLog({ game: g, bot: botAfter, players: latestPlayers || [], flagsRoundOverride: flags }),
+    };
   });
 
-  const backBtn = document.createElement("button");
-  backBtn.type = "button";
-  backBtn.className = "phase-btn phase-btn-secondary";
-  backBtn.textContent = "Terug naar hand";
-  backBtn.addEventListener("click", () => renderHandGrid());
-
-  actions.appendChild(playBtn);
-  actions.appendChild(backBtn);
-
-  wrapper.appendChild(bigCard);
-  wrapper.appendChild(textBox);
-  wrapper.appendChild(actions);
-
-  handCardsGrid.appendChild(wrapper);
+  if (logPayload) await logBotAction({ db, gameId, addLog: null, payload: logPayload });
 }
 
-// ===== LOOT MODAL =====
+/** ===== smarter OPS ===== */
+function chooseBotOpsPlay({ game, bot, players }) {
+  const g = game;
+  const p = bot;
 
-function getLootCardImage(card) {
-  const tRaw = (card && (card.t || card.type)) || "";
-  const t = String(tRaw).toUpperCase();
-  if (t.includes("PRIZE")) return "card_loot_prize_hen.png";
-  if (t.includes("HEN")) return "card_loot_hen.png";
-  if (t.includes("EGG")) return "card_loot_egg.png";
+  const flags = fillFlags(g.flagsRound);
+
+  const myColor = normColor(p.color);
+  const immune = !!flags.denImmune?.[myColor];
+
+  const upcoming = classifyEvent(nextEventId(g, 0));
+  const hand = Array.isArray(p.hand) ? p.hand : [];
+
+  const roundNum = Number(g.round || 0);
+
+  // If OPS locked: must pass (caller will handle)
+  if (flags.opsLocked) return null;
+
+  // -------------------------
+  // Conserve rules (hand/deck sparen)
+  // -------------------------
+
+  // reserve: early game 2 kaarten houden, later 1
+  const reserve = roundNum <= 1 ? 2 : 1;
+
+  // heeft bot deze ronde al een action gespeeld?
+  const disc = Array.isArray(g.actionDiscard) ? g.actionDiscard : [];
+  const alreadyPlayedThisRound = disc.some(
+    (x) => x?.by === p.id && Number(x?.round || 0) === roundNum
+  );
+
+  // gevaar waarvoor Den Signal echt relevant is (DOG of DEN van jouw kleur)
+  const dangerSoonDogDen =
+    upcoming.type === "DOG" ||
+    (upcoming.type === "DEN" && normColor(upcoming.color) === myColor);
+
+  const urgentDefense = dangerSoonDogDen && !immune && hasCard(hand, "Den Signal");
+
+  // - als hand te klein is: alleen noodrem spelen
+  if (hand.length <= reserve && !urgentDefense) return null;
+
+  // - als bot deze ronde al speelde: alleen noodrem spelen
+  if (alreadyPlayedThisRound && !urgentDefense) return null;
+
+  // -------------------------
+  // 1) Survival first: Den Signal
+  // -------------------------
+  if (!immune && hasCard(hand, "Den Signal")) {
+    if (upcoming.type === "DOG") return { name: "Den Signal" };
+    if (upcoming.type === "DEN" && normColor(upcoming.color) === myColor) return { name: "Den Signal" };
+  }
+
+  // -------------------------
+  // 2) Danger management: push danger away (track-manip / mask swap)
+  // -------------------------
+  if (dangerSoonDogDen && !immune) {
+  if (!flags.lockEvents && hasCard(hand, "Kick Up Dust")) return { name: "Kick Up Dust" };
+
+  // Pack Tinker alleen als er écht iets bruikbaars in de discard ligt (bv Den Signal)
+  if (hasCard(hand, "Pack Tinker") && canBotPackTinkerNow(g, p) && discardPileHasCard(g, "Den Signal")) {
+    return { name: "Pack Tinker" };
+  }
+
+  if (hasCard(hand, "Mask Swap")) {
+    const targetId = pickRichestTarget(players, p.id);
+    if (targetId) return { name: "Mask Swap", targetId };
+  }
+}
+
+  // -------------------------
+  // 3) Tactical: Hold Still op rijkste target
+  // -------------------------
+  if (hasCard(hand, "Hold Still")) {
+    const targetId = pickRichestTarget(players, p.id);
+    if (targetId) return { name: "Hold Still", targetId };
+  }
+
+  // -------------------------
+  // 4) Utility: Alpha Call (alleen als deck nog heeft + hand niet huge)
+  // -------------------------
+  const actionDeckLen = Array.isArray(g.actionDeck) ? g.actionDeck.length : 0;
+  if (actionDeckLen > 0 && hasCard(hand, "Alpha Call") && hand.length < 4) {
+    return { name: "Alpha Call" };
+  }
+
+  // -------------------------
+  // 5) End OPS faster: No-Go Zone als veel al gepasst is
+  // -------------------------
+  const orderLen = Array.isArray(g.opsTurnOrder) ? g.opsTurnOrder.length : 0;
+  const passes = Number(g.opsConsecutivePasses || 0);
+  if (orderLen >= 2 && passes >= Math.floor(orderLen * 0.6) && hasCard(hand, "No-Go Zone")) {
+    return { name: "No-Go Zone" };
+  }
+
+  // Otherwise: pass
   return null;
 }
 
-function renderLootModal() {
-  if (!lootCardsGrid) return;
-  lootCardsGrid.innerHTML = "";
+function pickPackTinkerSwap(game) {
+  const track = Array.isArray(game?.eventTrack) ? [...game.eventTrack] : [];
+  const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : 0;
+  if (track.length < 2) return null;
+  if (idx >= track.length - 1) return null;
 
-  if (!currentPlayer) {
-    const msg = document.createElement("p");
-    msg.textContent = "Speler niet geladen.";
-    msg.style.fontSize = "0.85rem";
-    msg.style.opacity = "0.85";
-    lootCardsGrid.appendChild(msg);
-    return;
+  // swap "next up" with a later non-dog if possible
+  const nextId = track[idx];
+  const nextType = classifyEvent(nextId);
+  let j = -1;
+
+  for (let k = track.length - 1; k > idx; k--) {
+    const t = classifyEvent(track[k]);
+    if (nextType.type === "DOG") {
+      if (t.type !== "DOG") {
+        j = k;
+        break;
+      }
+    } else {
+      j = k;
+      break;
+    }
   }
 
-  const p = currentPlayer;
-  let loot = Array.isArray(p.loot) ? [...p.loot] : [];
+  if (j <= idx) return null;
+  return [idx, j];
+}
 
-  if (!loot.length) {
-    const eggs = p.eggs || 0;
-    const hens = p.hens || 0;
-    const prize = p.prize || 0;
+function shuffleFutureTrack(game) {
+  const track = Array.isArray(game?.eventTrack) ? [...game.eventTrack] : [];
+  const idx = Number.isFinite(game?.eventIndex) ? game.eventIndex : 0;
+  if (track.length <= 1) return null;
 
-    if (!eggs && !hens && !prize) {
-      const msg = document.createElement("p");
-      msg.textContent = "Je hebt nog geen buit verzameld.";
-      msg.style.fontSize = "0.85rem";
-      msg.style.opacity = "0.85";
-      lootCardsGrid.appendChild(msg);
+  const locked = track.slice(0, idx);
+  const future = track.slice(idx);
+  const shuffled = shuffleArray(future);
+
+  return [...locked, ...shuffled];
+}
+
+  async function botDoOpsTurn({ db, gameId, botId, latestPlayers }) {
+  const gRef = doc(db, "games", gameId);
+  const pRef = doc(db, "games", gameId, "players", botId);
+
+
+  // ✅ ALWAYS use fresh players snapshot outside the transaction
+  // so this bot reacts to OPS cards that were just played by others.
+  const freshPlayersOuter = await fetchPlayersOutsideTx(db, gameId, latestPlayers);
+  const playersForOps = Array.isArray(freshPlayersOuter) && freshPlayersOuter.length
+    ? freshPlayersOuter
+    : (Array.isArray(latestPlayers) ? latestPlayers : []);
+
+  let logPayload = null;
+
+  await runTransaction(db, async (tx) => {
+    const gSnap = await tx.get(gRef);
+    const pSnap = await tx.get(pRef);
+    if (!gSnap.exists() || !pSnap.exists()) return;
+
+    const g = gSnap.data();
+    const p = { id: pSnap.id, ...pSnap.data() };
+
+    if (!isActiveRaidStatus(g.status) || g.phase !== "ACTIONS") return;
+
+    const order = Array.isArray(g.opsTurnOrder) ? g.opsTurnOrder : [];
+    const idx = Number.isFinite(g.opsTurnIndex) ? g.opsTurnIndex : 0;
+    if (!order.length || order[idx] !== botId) return;
+
+    const roundNum = Number(g.round || 0);
+
+    const flagsRound = fillFlags(g.flagsRound);
+
+    // ✅ HARD STOP: als OPS al klaar is → niets meer doen (voorkomt eindeloos PASS ophogen)
+    const target = Number(g.opsActiveCount || order.length);
+    const passesNow = Number(g.opsConsecutivePasses || 0);
+    if (flagsRound.opsLocked || passesNow >= target) return;
+
+    // ⏳ UI pacing: wacht tot de vorige gespeelde kaart minimaal zichtbaar was
+    const holdUntil = Number(g.opsHoldUntilMs || 0);
+    if (holdUntil && Date.now() < holdUntil) return;
+
+    const nextIdx = (idx + 1) % order.length;
+
+    const hand = Array.isArray(p.hand) ? [...p.hand] : [];
+    const actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
+    const actionDiscard = Array.isArray(g.actionDiscard) ? [...g.actionDiscard] : [];
+    const actionDiscardPile = Array.isArray(g.actionDiscardPile) ? [...g.actionDiscardPile] : [];
+
+    // ✅ Max 1 Action Card per speler per ronde (zonder extra writes)
+const discNow = Array.isArray(g.actionDiscard) ? g.actionDiscard : [];
+const alreadyPlayedThisRound = discNow.some(
+  (x) => String(x?.by || "") === String(botId) && Number(x?.round || 0) === roundNum
+);
+
+let passReason = null;
+
+const play = alreadyPlayedThisRound
+  ? (passReason = "ALREADY_PLAYED_THIS_ROUND", null)
+  : await pickBestActionFromHand({ db, gameId, game: g, bot: p, players: playersForOps });
+
+// als strategy PASS zegt (pickBestActionFromHand → null)
+if (!alreadyPlayedThisRound && !play) passReason = "LOW_VALUE_OR_HOLD_FOR_COMBO";
+
+    // =========================
+    // PASS
+    // =========================
+    if (!play) {
+      let nextPasses = passesNow + 1;
+      if (nextPasses > target) nextPasses = target;
+
+      const ended = nextPasses >= target;
+
+      tx.update(gRef, {
+        opsTurnIndex: nextIdx,
+        opsConsecutivePasses: nextPasses,
+        ...(ended
+          ? {
+              flagsRound: { ...(g.flagsRound || {}), opsLocked: true }, // ✅ hard stop
+              opsEndedAtMs: Date.now(),
+            }
+          : {}),
+      });
+
+      const botAfter = { ...p, hand };
+
+      logPayload = {
+        round: roundNum,
+        phase: "ACTIONS",
+        playerId: botId,
+        playerName: p.name || "BOT",
+        botColor: normColor(p.color || p.den || p.denColor),
+        discProfile: (DISC_BY_DEN[normColor(p.color || p.den || p.denColor)] || null),
+        hand,
+        choice: "ACTION_PASS",
+        message: "BOT kiest PASS",
+        kind: "BOT_OPS",
+        at: Date.now(),
+        metrics: buildBotMetricsForLog({ game: g, bot: botAfter, players: playersForOps, flagsRoundOverride: flagsRound }),
+      };
       return;
     }
 
-    if (prize > 0) loot.push({ t: "Prize Hen", v: 3, count: prize });
-    if (hens > 0) loot.push({ t: "Hen", v: 2, count: hens });
-    if (eggs > 0) loot.push({ t: "Egg", v: 1, count: eggs });
-  }
-
-  loot.forEach((card) => {
-    const tile = document.createElement("div");
-    tile.className = "loot-card-tile";
-
-    const cardDiv = document.createElement("div");
-    cardDiv.className = "vj-card loot-card";
-
-    const imgFile = getLootCardImage(card);
-    if (imgFile) cardDiv.style.backgroundImage = `url('./assets/${imgFile}')`;
-
-    const label = document.createElement("div");
-    label.className = "loot-card-label";
-
-    const type = card.t || card.type || "Loot";
-    const val = card.v ?? "?";
-    const count = card.count || 1;
-
-    label.textContent = `${type} x${count} (waarde ${val})`;
-
-    cardDiv.appendChild(label);
-    tile.appendChild(cardDiv);
-    lootCardsGrid.appendChild(tile);
-  });
-}
-
-function openLootModal() {
-  if (!lootModalOverlay) return;
-  renderLootModal();
-  lootModalOverlay.classList.remove("hidden");
-}
-function closeLootModal() {
-  if (!lootModalOverlay) return;
-  lootModalOverlay.classList.add("hidden");
-}
-
-// ==========================================
-// Advisor Hint Overlay — LEAD overlay stijl (PLAYER COMPACT + WHY THIS FULL)
-// ==========================================
-
-(() => {
-  if (window.__advisorOverlayLoaded_v3) return;
-  window.__advisorOverlayLoaded_v3 = true;
-
-  let _advisorOverlay = null;
-  let _advisorPanel = null;
-  let _wired = false;
-
-  function safeArr(x) { return Array.isArray(x) ? x : []; }
-  function normLines(arr) {
-    return safeArr(arr).map((x) => String(x ?? "").trim()).filter(Boolean);
-  }
-
-  function pct01(x) {
-    const n = Number(x);
-    if (!Number.isFinite(n)) return null;
-    return Math.round(Math.max(0, Math.min(1, n)) * 100);
-  }
-
-  function escapeHtml(s) {
-    return String(s ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
-  }
-
-  // ---- Mini pills bovenaan (kort, mag blijven)
-  function buildMiniPills(ctx) {
-    const me = ctx?.me || {};
-    const pills = [];
-
-    const inYard = me.inYard !== false && !me.dashed;
-    const caught = me.inYard === false;
-    const dashed = !!me.dashed;
-
-    let score = 0;
-    try {
-      if (typeof calcLootStats === "function") {
-        const s = calcLootStats(me);
-        score = Number(s?.score) || 0;
-      }
-    } catch (_) {}
-
-    pills.push({ cls: inYard ? "safe" : "danger", text: `Yard: ${inYard ? "YES" : "NO"}` });
-    pills.push({ cls: caught ? "danger" : "info", text: `Caught: ${caught ? "YES" : "NO"}` });
-    pills.push({ cls: "info", text: `Dash: ${dashed ? "YES" : "NO"}` });
-    pills.push({ cls: "info", text: `Loot: ${score}` });
-
-    return pills;
-  }
-
-  // ---- Pick label in kaartkop
-  function pickLine(best) {
-    if (!best) return "—";
-    if (best.pick) return String(best.pick);
-
-    if (best.play === "PASS") return "PASS";
-    if (best.cardId) return `Speel: ${best.cardId}`;
-    if (best.cardName) return `Speel: ${best.cardName}`;
-    if (best.move) return String(best.move);
-    if (best.decision) return String(best.decision);
-    if (best.play) return String(best.play);
-
-    return "—";
-  }
-
-  // ---- Bullets splitsen (oude format)
-  function splitBullets(bullets) {
-    const src = normLines(bullets);
-    const common = [];
-    const def = [];
-    const agg = [];
-    let mode = "common";
-
-    for (const line of src) {
-      const s = String(line || "").trim();
-
-      if (/^DEFENSIEF:/i.test(s)) {
-        mode = "def";
-        const cleaned = s.replace(/^DEFENSIEF:\s*/i, "").trim();
-        if (cleaned) def.push(cleaned);
-        continue;
-      }
-      if (/^AANVALLEND:/i.test(s)) {
-        mode = "agg";
-        const cleaned = s.replace(/^AANVALLEND:\s*/i, "").trim();
-        if (cleaned) agg.push(cleaned);
-        continue;
-      }
-
-      if (mode === "def") def.push(s);
-      else if (mode === "agg") agg.push(s);
-      else common.push(s);
-    }
-
-    return { common, def, agg };
-  }
-
-  // ---- Filter wat spelers NIET hoeven te zien (compact)
-  function isPlayerHiddenLine(s) {
-    if (!s) return true;
-    const t = String(s).trim();
-
-    if (/^Ronde:/i.test(t)) return true;
-    if (t.includes("Fase:")) return true;
-    if (/^Hand:/i.test(t)) return true;
-    if (/^Herkenning:/i.test(t)) return true;
-    if (/^Onbekend:/i.test(t)) return true;
-    if (/^Jouw Den-kleur:/i.test(t)) return true;
-    if (/^Kans:\s*Den-event/i.test(t)) return true;
-    if (/^Context:/i.test(t)) return true;
-
-    if (/^DEFENSIEF:/i.test(t)) return true;
-    if (/^AANVALLEND:/i.test(t)) return true;
-
-    return false;
-  }
-
-  function isRiskLine(s) {
-    const t = String(s || "").trim();
-    return t.startsWith("Volgende kaart:");
-  }
-  
-function isStrategyLine(s) {
-  const t = String(s || "").trim();
-  return (
-    /^Speel dit uit:/i.test(t) ||
-    /^Strategie:/i.test(t) ||
-    /^OPS tip:/i.test(t) ||
-    /^Let op:/i.test(t) ||
-    /^Alarm:/i.test(t) ||
-    /^Speel /i.test(t) ||
-    /^Gebruik /i.test(t) ||
-    /^Kies /i.test(t) ||
-    /^Probeer /i.test(t)
-  );
-}
-
-function stripStrategyPrefix(s) {
-  return String(s || "")
-    .replace(/^(Speel dit uit:|Strategie:|OPS tip:|Let op:|Alarm:)\s*/i, "")
-    .trim();
-}
-
-function pickRiskLineFromCommon(lines) {
-  const arr = normLines(lines);
-  return arr.find((x) => String(x).trim().startsWith("Volgende kaart:")) || null;
-}
-
-function normKey(s) {
-  return String(s || "").trim().toLowerCase();
-}
-
-// extra: filter rommel die niet in de compacte kaart mag
-function isExplainLine(x) {
-  const t = String(x || "").trim();
-  if (!t) return false;
-
-  // nooit in compacte kaart
-  if (typeof isPlayerHiddenLine === "function" && isPlayerHiddenLine(t)) return false;
-  if (typeof isRiskLine === "function" && isRiskLine(t)) return false;
-  if (t.startsWith("Volgende kaart:")) return false;
-
-  // liever niet als "reason", dat is voor de 3e bullet
-  if (isStrategyLine(t)) return false;
-
-  // context-ruis
-  if (/^Context:/i.test(t)) return false;
-
-  return true;
-}
-
-// pak 1e/2e regel uit SPECIFIC die niet al in COMMON zit (en voldoet aan predicate)
-function uniqueLinesFromSpecific(specific, common, predicate, max = 2) {
-  const commonSet = new Set(normLines(common).map(normKey));
-  const out = [];
-  const seen = new Set();
-
-  for (const l of normLines(specific)) {
-    if (predicate && !predicate(l)) continue;
-    const k = normKey(l);
-    if (commonSet.has(k)) continue;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(l);
-    if (out.length >= max) break;
-  }
-  return out;
-}
-
-function fallbackReasonFromPick(best, style) {
-  const pick = pickLine(best).toUpperCase();
-
-  if (style === "DEFENSIEF") {
-    if (pick.includes("SHIFT")) return "SHIFT verlaagt je directe risico door de track slimmer te zetten.";
-    if (pick.includes("SCOUT")) return "SCOUT geeft info zonder extra risico, zodat je straks beter kiest.";
-    if (pick.includes("LURK")) return "LURK houdt je veilig en laat je flexibel reageren.";
-    if (pick.includes("BURROW")) return "BURROW is je noodrem tegen gevaar, maar is schaars.";
-    return "Defensief minimaliseert risico en houdt je opties open.";
-  }
-
-  // AANVALLEND
-  if (pick.includes("SNATCH")) return "SNATCH maximaliseert je loot-kans nu (tempo maken).";
-  if (pick.includes("FORAGE")) return "FORAGE is steady loot pakken met laag gedoe.";
-  if (pick.includes("DASH")) return "DASH converteert je loot naar score voordat iets misgaat.";
-  return "Aanvallend maximaliseert loot/tempo, met bewust meer risico.";
-}
-
-function fallbackPlayFromPick(best, style) {
-  const pick = pickLine(best).toUpperCase();
-
-  if (style === "DEFENSIEF") {
-    if (pick.includes("SHIFT")) return "Zet risico later; hou de ronde gecontroleerd.";
-    if (pick.includes("SCOUT")) return "Gebruik info om straks de veiligste keuze te maken.";
-    if (pick.includes("BURROW")) return "Bewaar BURROW voor echte dreiging; niet panieken.";
-    return "Speel op veiligheid: pak loot als het ‘gratis’ voelt.";
-  }
-
-  // AANVALLEND
-  if (pick.includes("SNATCH")) return "Ga voor maximale buit nu; druk zetten op de ronde.";
-  if (pick.includes("FORAGE")) return "Pak consistente loot, maar blijf tempo houden.";
-  if (pick.includes("DASH")) return "Cash out als de timing gunstig is; voorkom verliezen.";
-  return "Speel op tempo: loot pakken, kansen benutten, risico accepteren.";
-}
-
-// ---- Compact bullets per kaart
-// NU: onderste 2 bullets worden bij voorkeur uit SPECIFIC gehaald (def/agg verschilt),
-// zodat je die betere kaart-uitleg ziet in het adviesblok.
-function buildPlayerCardBullets({ style, best, common, specific }) {
-  const c = normLines(common);
-  const s = normLines(specific);
-
-  // 1) risk is common (zelfde voor beide)
-  const risk = pickRiskLineFromCommon(c);
-
-  // 2) pak 2 beste uitleg-regels uit SPECIFIC (uniek t.o.v. common)
-  //    explain[0] => Waarom dit werkt
-  //    explain[1] => Speel dit uit
-  const explain = uniqueLinesFromSpecific(s, c, isExplainLine, 2);
-
-  const reasonLine = explain[0] || fallbackReasonFromPick(best, style);
-
-  // 3) tweede uitleg-regel óf een echte strategy-line uit SPECIFIC
-  const stratRaw =
-    explain[1] ||
-    (uniqueLinesFromSpecific(s, c, (x) => isStrategyLine(x), 1)[0] || null);
-
-  const stratLine = stratRaw ? stripStrategyPrefix(stratRaw) : fallbackPlayFromPick(best, style);
-
-  const out = [];
-  if (risk) out.push(risk);
-  if (reasonLine) out.push(`Waarom dit werkt: ${reasonLine}`);
-
-  // dedupe: als strategie hetzelfde is als reden, skip
-  const r = normKey(reasonLine);
-  const st = normKey(stratLine);
-  if (stratLine && (!r || (st && r !== st && !r.includes(st)))) {
-    out.push(`Speel dit uit: ${stratLine}`);
-  }
-
-  if (!out.length) out.push("Geen compact advies beschikbaar (check Why this).");
-  return out.slice(0, 3);
-}
-
-  // ---- Why this = alles (incl. raw bullets + debug)
-  function buildWhyThis(hint, ctx, split) {
-    const v = hint?.version ? `Advisor: ${hint.version}` : "";
-    const title = hint?.title ? `Titel: ${hint.title}` : "";
-    const phase = hint?.phase || hint?.debug?.phase || "";
-
-    const pills = buildMiniPills(ctx);
-
-    const common = normLines(split?.common);
-    const def = normLines(split?.def);
-    const agg = normLines(split?.agg);
-
-    const dbg = hint?.debug ? JSON.stringify(hint.debug, null, 2) : "";
-
-    return `
-      ${v ? `<div>${escapeHtml(v)}</div>` : ""}
-      ${title ? `<div>${escapeHtml(title)}</div>` : ""}
-      ${phase ? `<div>Fase: ${escapeHtml(phase)}</div>` : ""}
-
-      <div class="advisor-tags" style="margin-top:.4rem;">
-        ${pills.map((p) => `<span class="advisor-tag">${escapeHtml(p.text)}</span>`).join("")}
-      </div>
-
-      <div style="margin-top:.75rem;">
-        <div style="font-weight:700; margin-bottom:.25rem;">Alle bullets (raw)</div>
-        ${common.length ? `<div style="margin:.35rem 0;"><strong>Common</strong><ul>${common.map(x=>`<li>${escapeHtml(x)}</li>`).join("")}</ul></div>` : ""}
-        ${def.length ? `<div style="margin:.35rem 0;"><strong>Def</strong><ul>${def.map(x=>`<li>${escapeHtml(x)}</li>`).join("")}</ul></div>` : ""}
-        ${agg.length ? `<div style="margin:.35rem 0;"><strong>Agg</strong><ul>${agg.map(x=>`<li>${escapeHtml(x)}</li>`).join("")}</ul></div>` : ""}
-      </div>
-
-      ${dbg ? `
-        <details style="margin-top:.6rem;">
-          <summary style="cursor:pointer;">Debug (json)</summary>
-          <pre style="white-space:pre-wrap; font-size:.75rem; opacity:.85; margin-top:.45rem;">${escapeHtml(dbg)}</pre>
-        </details>
-      ` : ""}
-    `;
-  }
-
-  function renderCard({ label, best, bullets }) {
-    const pick = pickLine(best);
-    const risk = best?.riskLabel || best?.risk || "—";
-    const conf = pct01(best?.confidence) ?? pct01(best?.conf);
-
-    const list = safeArr(bullets).filter(Boolean).slice(0, 4);
-
-    return `
-      <div class="advisor-card">
-        <div class="k">${escapeHtml(label)}</div>
-        <div class="pick">${escapeHtml(pick)}</div>
-        <p class="meta">Risico: <strong>${escapeHtml(risk)}</strong>${conf !== null ? ` • Zekerheid: <strong>${conf}%</strong>` : ""}</p>
-        <ul>
-          ${list.map((b) => `<li>${escapeHtml(b)}</li>`).join("")}
-        </ul>
-      </div>
-    `;
-  }
-
-  function ensureDom() {
-    if (_advisorOverlay && _advisorPanel) return;
-
-    if (!document.getElementById("advisorHintStyles")) {
-      const st = document.createElement("style");
-      st.id = "advisorHintStyles";
-      st.textContent = `
-        .advisor-grid { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:.75rem; }
-        @media (max-width: 820px){ .advisor-grid{ grid-template-columns: 1fr; } }
-        .advisor-card{
-          border-radius:.9rem;
-          padding:.75rem .85rem;
-          background: radial-gradient(circle at top left, rgba(255,255,255,0.08), rgba(10,10,20,0.9));
-          border: 1px solid rgba(255,255,255,0.08);
-        }
-        .advisor-card .k{ font-size:.78rem; letter-spacing:.14em; text-transform:uppercase; opacity:.85; margin-bottom:.25rem; }
-        .advisor-card .pick{ font-size:1rem; font-weight:700; margin-bottom:.2rem; }
-        .advisor-card .meta{ font-size:.78rem; opacity:.85; margin:0 0 .45rem; }
-        .advisor-card ul{ margin:.35rem 0 0; padding-left:1.05rem; }
-        .advisor-card li{ font-size:.82rem; line-height:1.35; opacity:.92; margin:.18rem 0; }
-        .advisor-mini { display:flex; flex-wrap:wrap; gap:.35rem; margin:.5rem 0 .75rem; }
-        .advisor-pill{
-          font-size:.75rem; padding:.15rem .5rem; border-radius:999px;
-          border:1px solid rgba(255,255,255,.18); background: rgba(0,0,0,.35);
-        }
-        .advisor-pill.safe{ border-color: rgba(34,197,94,.6); }
-        .advisor-pill.danger{ border-color: rgba(248,113,113,.7); }
-        .advisor-pill.info{ border-color: rgba(59,130,246,.65); }
-        .advisor-why{ margin-top:.75rem; }
-        .advisor-why summary{ cursor:pointer; font-size:.85rem; opacity:.9; }
-        .advisor-why .body{ margin-top:.5rem; font-size:.82rem; opacity:.85; line-height:1.4; }
-        .advisor-tags{ display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.4rem; }
-        .advisor-tag{ font-size:.72rem; padding:.12rem .45rem; border-radius:999px; border:1px solid rgba(255,255,255,.18); opacity:.9; }
-      `;
-      document.head.appendChild(st);
-    }
-
-    let overlay = document.getElementById("advisorHintModalOverlay");
-    if (!overlay) {
-      overlay = document.createElement("div");
-      overlay.id = "advisorHintModalOverlay";
-      overlay.className = "vj-modal-overlay hidden";
-      overlay.innerHTML = `
-        <div class="vj-modal-panel lead-command-panel" role="dialog" aria-modal="true">
-          <button class="vj-modal-close" type="button" aria-label="Sluit">×</button>
-          <h2 class="lead-command-title">LEAD FOX ADVISOR</h2>
-          <p class="lead-command-subtitle" id="advisorHintSub">—</p>
-
-          <div class="advisor-mini" id="advisorHintMini"></div>
-          <div class="advisor-grid" id="advisorHintGrid"></div>
-
-          <details class="advisor-why">
-            <summary>Why this</summary>
-            <div class="body" id="advisorHintWhy"></div>
-          </details>
-        </div>
-      `;
-      document.body.appendChild(overlay);
-    }
-
-    _advisorOverlay = overlay;
-    _advisorPanel = overlay.querySelector(".vj-modal-panel");
-
-    if (!_wired) {
-      _wired = true;
-
-      const closeBtn = _advisorOverlay.querySelector(".vj-modal-close");
-      closeBtn.addEventListener("click", () => closeAdvisorHintOverlay());
-
-      _advisorOverlay.addEventListener("click", (e) => {
-        if (e.target === _advisorOverlay) closeAdvisorHintOverlay();
-      });
-
-      document.addEventListener("keydown", (e) => {
-        if (e.key !== "Escape") return;
-        if (_advisorOverlay && !_advisorOverlay.classList.contains("hidden")) closeAdvisorHintOverlay();
-      });
-    }
-
-    window.openAdvisorHintOverlay = openAdvisorHintOverlay;
-    window.closeAdvisorHintOverlay = closeAdvisorHintOverlay;
-  }
-
-  function openAdvisorHintOverlay(hint, ctx = {}) {
-    ensureDom();
-
-    const sub = _advisorOverlay.querySelector("#advisorHintSub");
-    const mini = _advisorOverlay.querySelector("#advisorHintMini");
-    const grid = _advisorOverlay.querySelector("#advisorHintGrid");
-    const why = _advisorOverlay.querySelector("#advisorHintWhy");
-
-    const conf = pct01(hint?.confidence);
-    const v = hint?.version ? ` • ${hint.version}` : "";
-    sub.textContent = `Risico: ${hint?.risk || "—"}${conf !== null ? ` • Zekerheid: ${conf}%` : ""}${v}`;
-
-    const pills = buildMiniPills(ctx);
-    mini.innerHTML = pills.map((p) => `<span class="advisor-pill ${p.cls}">${escapeHtml(p.text)}</span>`).join("");
-
-    const hasNew = hint?.def && hint?.agg;
-
-    let split = { common: [], def: [], agg: [] };
-    let bestDef = null;
-    let bestAgg = null;
-
-    if (hasNew) {
-      split.common = safeArr(hint.commonBullets || []);
-      split.def = safeArr(hint.def?.bullets || []);
-      split.agg = safeArr(hint.agg?.bullets || []);
-      bestDef = hint.def;
-      bestAgg = hint.agg;
-    } else {
-      split = splitBullets(hint?.bullets);
-      bestDef = hint?.debug?.bestDef || hint || null;
-      bestAgg = hint?.debug?.bestAgg || null;
-    }
-
-    const defPlayerBullets = buildPlayerCardBullets({
-      style: "DEFENSIEF",
-      best: bestDef,
-      common: split.common,
-      specific: split.def,
+let cardName = String(play?.name || "").trim();
+let removed = removeOneCard(hand, cardName);
+
+// Fallback: als play.name een ACTION_ID is, map dan terug naar echte kaartnaam uit de hand
+if (!removed) {
+  const wantedId = String(play?.actionId || play?.id || "").trim();
+  if (wantedId) {
+    const match = hand.find((c) => {
+      const nm = String(c?.name || c || "").trim();
+      const def = nm ? getActionDefByName(nm) : null;
+      return String(def?.id || "") === wantedId;
     });
 
-    const aggPlayerBullets = buildPlayerCardBullets({
-      style: "AANVALLEND",
-      best: bestAgg,
-      common: split.common,
-      specific: split.agg,
-    });
-
-    grid.innerHTML = `
-      ${renderCard({ label: "DEFENSIEF", best: bestDef, bullets: defPlayerBullets })}
-      ${renderCard({ label: "AANVALLEND", best: bestAgg, bullets: aggPlayerBullets })}
-    `;
-
-    why.innerHTML = buildWhyThis(hint, ctx, split);
-
-    _advisorOverlay.classList.remove("hidden");
+    if (match) {
+      cardName = String(match?.name || match || "").trim();
+      removed = removeOneCard(hand, cardName);
+    }
   }
-
-  function closeAdvisorHintOverlay() {
-    ensureDom();
-    _advisorOverlay.classList.add("hidden");
-  }
-
-  window.openAdvisorHintOverlay = openAdvisorHintOverlay;
-  window.closeAdvisorHintOverlay = closeAdvisorHintOverlay;
-})();
-
-// ===== MOVE-ACTIES (single definitions + payload naar /log) =====
-
-async function loadGameAndPlayer() {
-  if (!gameRef || !playerRef) return null;
-
-  const [gameSnap, playerSnap] = await Promise.all([getDoc(gameRef), getDoc(playerRef)]);
-  if (!gameSnap.exists() || !playerSnap.exists()) return null;
-
-  return { game: gameSnap.data(), player: playerSnap.data() };
 }
 
-async function performSnatch() {
-  const loaded = await loadGameAndPlayer();
-  if (!loaded) return;
+if (!removed) {
+  // fallback to PASS if card missing
+  let nextPasses = passesNow + 1;
+  if (nextPasses > target) nextPasses = target;
 
-  const { game, player } = loaded;
+  const ended = nextPasses >= target;
 
-  if (!canMoveNow(game, player)) {
-    alert("Je kunt nu geen MOVE doen.");
-    return;
-  }
-
-  const lootDeck = Array.isArray(game.lootDeck) ? [...game.lootDeck] : [];
-  if (!lootDeck.length) {
-    alert("De buitstapel is leeg. Je kunt nu geen SNATCH doen.");
-    return;
-  }
-
-  const card = lootDeck.pop();
-  const loot = Array.isArray(player.loot) ? [...player.loot] : [];
-  loot.push(card);
-
-  await Promise.all([
-    updateDoc(playerRef, { loot }),
-    updateDoc(gameRef, { lootDeck, movedPlayerIds: arrayUnion(playerId) }),
-  ]);
-
-  await logMoveAction(game, player, "MOVE_SNATCH_FROM_DECK", "MOVE", {
-    lootType: card?.t || null,
-    lootValue: Number.isFinite(card?.v) ? card.v : null,
+  tx.update(gRef, {
+    opsTurnIndex: nextIdx,
+    opsConsecutivePasses: nextPasses,
+    ...(ended
+      ? {
+          flagsRound: { ...(g.flagsRound || {}), opsLocked: true },
+          opsEndedAtMs: Date.now(),
+        }
+      : {}),
   });
 
-  const label = card?.t || "Loot";
-  const val = card?.v ?? "?";
-  setActionFeedback(`SNATCH: je hebt een ${label} (waarde ${val}) uit de buitstapel getrokken.`);
-}
+  const botAfter = { ...p, hand };
 
-async function performForage() {
-  const loaded = await loadGameAndPlayer();
-  if (!loaded) return;
-
-  const { game, player } = loaded;
-
-  if (!canMoveNow(game, player)) {
-    alert("Je kunt nu geen MOVE doen.");
-    return;
-  }
-
-  const actionDeck = Array.isArray(game.actionDeck) ? [...game.actionDeck] : [];
-  const hand = Array.isArray(player.hand) ? [...player.hand] : [];
-
-  if (!actionDeck.length) {
-    alert("De Action-deck is leeg. Er zijn geen extra kaarten meer.");
-    return;
-  }
-
-  let drawn = 0;
-  for (let i = 0; i < 2; i++) {
-    if (!actionDeck.length) break;
-    hand.push(actionDeck.pop());
-    drawn++;
-  }
-
-  await Promise.all([
-    updateDoc(playerRef, { hand }),
-    updateDoc(gameRef, { actionDeck, movedPlayerIds: arrayUnion(playerId) }),
-  ]);
-
-  await logMoveAction(game, player, `MOVE_FORAGE_${drawn}cards`, "MOVE", { drawn });
-}
-
-async function performScout() {
-  const loaded = await loadGameAndPlayer();
-  if (!loaded) return;
-
-  const { game, player } = loaded;
-
-  if (!canMoveNow(game, player)) {
-    alert("Je kunt nu geen MOVE doen.");
-    return;
-  }
-
-  const flags = mergeRoundFlags(game);
-  if (flags.scatter) {
-    alert("Scatter! is gespeeld: niemand mag Scouten deze ronde.");
-    return;
-  }
-
-  const track = Array.isArray(game.eventTrack) ? game.eventTrack : [];
-  if (!track.length) {
-    alert("Geen Event Track beschikbaar.");
-    return;
-  }
-
-  const posStr = prompt(`Welke event-positie wil je scouten? (1-${track.length})`);
-  if (!posStr) return;
-
-  const pos = parseInt(String(posStr).trim(), 10);
-  if (Number.isNaN(pos) || pos < 1 || pos > track.length) {
-    alert("Ongeldige positie.");
-    return;
-  }
-
-  const noPeek = Array.isArray(flags.noPeek) ? flags.noPeek : [];
-  if (noPeek.includes(pos)) {
-    alert("Deze positie is geblokkeerd door een No-Go Zone.");
-    return;
-  }
-
-  const idx = pos - 1;
-  const eventId = track[idx];
-  const ev = getEventById(eventId);
-
-  alert(`Je scout Event #${pos}: ` + (ev ? ev.title : eventId || "Onbekend event"));
-
-  const roundNow = Number(game.round || 0);
-  const denKey = getPlayerDenKey(player);
-  const shared = {
-    round: roundNow,
-    pos,
-    index: idx,
-    eventId,
-    by: playerId,
-    byName: player?.name || "",
-    atMs: Date.now(),
+  logPayload = {
+    round: roundNum,
+    phase: "ACTIONS",
+    playerId: botId,
+    playerName: p.name || "BOT",
+    choice: "ACTION_PASS",
+    message: `BOT wilde spelen maar kaart niet gevonden → PASS (name="${String(play?.name||"")}", id="${String(play?.actionId||"")}")`,
+    kind: "BOT_OPS",
+    at: Date.now(),
+    metrics: buildBotMetricsForLog({ game: g, bot: botAfter, players: playersForOps, flagsRoundOverride: flagsRound }),
   };
-
-  // ✅ 1) persoonlijke cache (handig als je alleen speelt / legacy)
-  // ✅ 2) team-shared intel op game doc (zelfde DEN)
-  const gameUpdate = { movedPlayerIds: arrayUnion(playerId) };
-  if (denKey) {
-    gameUpdate[`denIntel.${denKey}.scouts.${pos}`] = shared;
-    gameUpdate[`denIntel.${denKey}.last`] = shared;
-  }
-
-  await Promise.all([
-    updateDoc(playerRef, { scoutPeek: shared }),
-    updateDoc(gameRef, gameUpdate),
-  ]);
-
-  await logMoveAction(game, player, `MOVE_SCOUT_${pos}`, "MOVE", { pos, eventId, denKey });
-
-  setActionFeedback(
-    `SCOUT: event #${pos} is nu gedeeld met jouw Den (${denKey || "?"}).`
-  );
+  return;
 }
+    
+    // ✅ canonical name alleen voor effects (safe: discard/log blijft cardName)     
+    const effName = getActionDefByName(cardName)?.name || cardName;
 
-async function performShift() {
-  const loaded = await loadGameAndPlayer();
-  if (!loaded) return;
+    // discard (face-up): kaart gaat direct op de Discard Pile
+const nowMs = Date.now();
+const playedUid = `${nowMs}_${Math.random().toString(16).slice(2)}`;
 
-  const { game, player } = loaded;
+actionDiscard.push({ name: cardName, by: botId, round: roundNum, at: nowMs });
+if (actionDiscard.length > 30) actionDiscard.splice(0, actionDiscard.length - 30);
 
-  if (!canMoveNow(game, player)) {
-    alert("Je kunt nu geen MOVE doen.");
-    return;
-  }
+// ✅ echte aflegstapel met uid (voor Pack Tinker)
+actionDiscardPile.push({ uid: playedUid, name: cardName, by: botId, round: roundNum, at: nowMs });
+if (actionDiscardPile.length > 80) actionDiscardPile.splice(0, actionDiscardPile.length - 80);
 
-  const flags = mergeRoundFlags(game);
-  if (flags.lockEvents) {
-    alert("Events zijn gelocked (Burrow Beacon). Je kunt niet meer shiften.");
-    return;
-  }
+const playedId = String(play?.actionId || "");
+const dIds = Array.isArray(g?.discardThisRoundActionIds) ? [...g.discardThisRoundActionIds] : [];
+if (playedId && !dIds.includes(playedId)) dIds.push(playedId);
+if (dIds.length > 30) dIds.splice(0, dIds.length - 30);
 
-  const { track, eventIndex } = splitEventTrackByStatus(game);
-  if (!track.length) {
-    alert("Geen Event Track beschikbaar.");
-    return;
-  }
+const extraGameUpdates = {
+  lastActionPlayed: { name: cardName, by: botId, round: Number(g.round || 0), at: nowMs },
+  opsHoldUntilMs: nowMs + OPS_DISCARD_VISIBLE_MS,
+  discardThisRoundActionIds: dIds,
+};
 
-  const futureCount = track.length - eventIndex;
-  if (futureCount <= 1) {
-    alert("SHIFT heeft geen effect – er zijn te weinig toekomstige Events om te verschuiven.");
-    return;
-  }
+// ✅ step/version counters: makes per-action snapshots traceable
+extraGameUpdates.opsStep = Number(g.opsStep || 0) + 1;
+extraGameUpdates.opsVersion = Number(g.opsVersion || 0) + 1;
 
-  const maxPos = track.length;
+    // effects
+    if (effName === "Den Signal") {
+      const myColor = normColor(p.color);
+      const denImmune = { ...(flagsRound.denImmune || {}) };
+      if (myColor) denImmune[myColor] = true;
+      flagsRound.denImmune = denImmune;
+    }
 
-  const pos1Str = prompt(`SHIFT – eerste positie (alleen toekomstige events: ${eventIndex + 1}-${maxPos})`);
-  if (!pos1Str) return;
+    if (effName === "No-Go Zone") {
+      flagsRound.opsLocked = true;
+      extraGameUpdates.opsConsecutivePasses = target; // ✅ einde OPS (past bij PhaseGate)
+      extraGameUpdates.opsEndedAtMs = Date.now();
+    }
 
-  const pos2Str = prompt(`SHIFT – tweede positie (alleen toekomstige events: ${eventIndex + 1}-${maxPos})`);
-  if (!pos2Str) return;
+    if (effName === "Hold Still") {
+      const targetId = play.targetId;
+      if (targetId) {
+        const hs = { ...(flagsRound.holdStill || {}) };
+        hs[targetId] = true;
+        flagsRound.holdStill = hs;
+        extraGameUpdates.lastHoldStill = { by: botId, targetId, round: roundNum, at: Date.now() };
+      }
+    }
 
-  const pos1 = parseInt(pos1Str, 10);
-  const pos2 = parseInt(pos2Str, 10);
+    if (effName === "Kick Up Dust") {
+      if (!flagsRound.lockEvents) {
+        const newTrack = shuffleFutureTrack(g);
+        if (newTrack) {
+          extraGameUpdates.eventTrack = newTrack;
+          extraGameUpdates.eventTrackVersion = Number(g.eventTrackVersion || 0) + 1;
+        }
+      }
+    }
 
-  if (
-    Number.isNaN(pos1) ||
-    Number.isNaN(pos2) ||
-    pos1 < 1 || pos1 > maxPos ||
-    pos2 < 1 || pos2 > maxPos ||
-    pos1 === pos2
-  ) {
-    alert("Ongeldige posities voor SHIFT.");
-    return;
-  }
+    if (effName === "Pack Tinker") {
+  // ✅ Nieuwe regels: wissel 1 kaart uit hand met 1 kaart uit actionDiscardPile
+  const pileCandidates = actionDiscardPile
+    .filter((x) => x && typeof x === "object" && x.uid && x.name && x.uid !== playedUid);
 
-  const i1 = pos1 - 1;
-  const i2 = pos2 - 1;
+  // je moet een andere kaart hebben dan Pack Tinker (die is al verwijderd)
+  const handNamesNow = hand.map((c) => String(c?.name || c || "").trim()).filter(Boolean);
 
-  if (i1 < eventIndex || i2 < eventIndex) {
-    alert(`Je kunt geen Events verschuiven die al onthuld zijn. Kies alleen posities vanaf ${eventIndex + 1}.`);
-    return;
-  }
+  if (pileCandidates.length && handNamesNow.length) {
+    const WANT = [
+      "Den Signal",
+      "Hold Still",
+      "No-Go Zone",
+      "Mask Swap",
+      "Scatter!",
+      "Molting Mask",
+      "Kick Up Dust",
+      "Alpha Call",
+      "Pack Tinker",
+      "Nose for Trouble",
+      "Scent Check",
+      "Follow the Tail",
+      "Burrow Beacon",
+    ];
 
-  [track[i1], track[i2]] = [track[i2], track[i1]];
+    const score = (nm) => {
+      const n = String(nm || "").trim();
+      if (flagsRound.lockEvents && n === "Kick Up Dust") return 999; // onbruikbaar nu
+      const i = WANT.indexOf(n);
+      return i >= 0 ? i : 500;
+    };
 
-  await updateDoc(gameRef, {
-    eventTrack: track,
-    movedPlayerIds: arrayUnion(playerId),
-  });
+    // neem beste uit pile
+    pileCandidates.sort((a, b) => score(a.name) - score(b.name));
+    const takeItem = pileCandidates[0];
+    const takeUid = takeItem.uid;
+    const takeName = String(takeItem.name).trim();
 
-  await logMoveAction(game, player, `MOVE_SHIFT_${pos1}<->${pos2}`, "MOVE", { pos1, pos2 });
+    // geef slechtste uit hand
+    const giveName = handNamesNow.slice().sort((a, b) => score(b) - score(a))[0];
 
-  setActionFeedback(`SHIFT: je hebt toekomstige Events op posities ${pos1} en ${pos2} gewisseld.`);
-}
+    const giveIdx = hand.findIndex((c) => String(c?.name || c || "").trim() === giveName);
+    const takeIdx = actionDiscardPile.findIndex((x) => x && x.uid === takeUid);
 
-// ===== DECISION ACTIES =====
-
-async function selectDecision(kind) {
-  if (!gameRef || !playerRef) return;
-
-  const gameSnap = await getDoc(gameRef);
-  const playerSnap = await getDoc(playerRef);
-  if (!gameSnap.exists() || !playerSnap.exists()) return;
-
-  const game = gameSnap.data();
-  const player = playerSnap.data();
-
-  await maybeShowScentCheckInfo(game);
-
-  const flags = mergeRoundFlags(game);
-  const ft = flags.followTail || {};
-  if (ft[playerId]) {
-    setActionFeedback("Follow the Tail is actief: jouw uiteindelijke DECISION zal gelijk worden aan de keuze van de gekozen vos.");
-  }
-
-  if (!canDecideNow(game, player)) {
-    alert("Je kunt nu geen DECISION kiezen.");
-    return;
-  }
-
-  if (kind === "BURROW" && player.burrowUsedThisRaid) {
-    alert("Je hebt BURROW al eerder gebruikt deze raid.");
-    return;
-  }
-
-  const label =
-    kind === "LURK"
-      ? "LURK (blijven)"
-      : kind === "BURROW"
-      ? "BURROW (schuilen)"
-      : kind === "DASH"
-      ? "DASH (wegrennen)"
-      : kind;
-
-  const ok = confirm(`Je staat op het punt ${label} te kiezen als jouw definitieve beslissing voor deze ronde. Bevestigen?`);
-  if (!ok) {
-    setActionFeedback("Je DECISION is nog niet vastgelegd – je kunt nog even nadenken.");
-    return;
-  }
-
-  const update = { decision: kind };
-  if (kind === "BURROW") update.burrowUsedThisRaid = true;
-
-  await updateDoc(playerRef, update);
-  await logMoveAction(game, player, `DECISION_${kind}`, "DECISION");
-}
-
-// ===== ACTION TURN HELPERS + ACTION PLAY/PASS (CLEAN + NO REFRESH NEEDED) =====
-
-// --- 0) Ensure logMoveAction exists (single source of truth) ---
-// Safe: if this block accidentally exists twice, it won't crash.
-var logMoveAction = globalThis.logMoveAction;
-if (typeof logMoveAction !== "function") {
-  logMoveAction = async function logMoveAction(game, player, choice, phase, payload = {}) {
-    try {
-      if (!db || !gameId) return;
-
-      const round = Number(game?.round ?? 0);
-      const pid = player?.id || (typeof playerId !== "undefined" ? playerId : null);
-      const pname = player?.name || "Fox";
-
-      const base = {
-        createdAt: serverTimestamp(),
-        round,
-        phase: String(phase || game?.phase || ""),
-        choice: String(choice || ""),
-        playerId: pid,
-        playerName: pname,
-        payload: payload && typeof payload === "object" ? payload : { value: payload },
+    if (giveIdx >= 0 && takeIdx >= 0 && takeName) {
+      hand[giveIdx] = { name: takeName };
+      actionDiscardPile[takeIdx] = {
+        ...actionDiscardPile[takeIdx],
+        name: giveName,
+        by: botId,
+        round: roundNum,
+        at: nowMs,
       };
 
-      // 1) actions (voor roundInfo monitor)
-      try {
-        const actionsCol = collection(db, "games", gameId, "actions");
-        await addDoc(actionsCol, base);
-      } catch (e) {
-        console.warn("[logMoveAction] actions write failed", e);
-      }
-
-      // 2) log (optioneel)
-      try {
-        if (typeof addLog === "function") {
-          await addLog(gameId, {
-            round,
-            phase: base.phase,
-            kind: "PLAYER",
-            playerId: pid,
-            message: `${pname}: ${base.choice}`,
-            payload: base.payload,
-          });
-        }
-      } catch (e) {
-        console.warn("[logMoveAction] addLog failed", e);
-      }
-    } catch (e) {
-      console.warn("[logMoveAction] failed", e);
+      extraGameUpdates.lastPackTinker = { by: botId, giveName, takeName, takeUid, round: roundNum, at: nowMs };
     }
-  };
-
-  globalThis.logMoveAction = logMoveAction;
-}
-
-// --- 1) Next OPS index (prefers game.opsTurnOrder) ---
-globalThis.computeNextOpsIndex =
-  globalThis.computeNextOpsIndex ||
-  function computeNextOpsIndex(game, players) {
-    const order = Array.isArray(game?.opsTurnOrder) ? game.opsTurnOrder : null;
-    const nOrder = order && order.length ? order.length : 0;
-
-    if (nOrder > 0) {
-      const curRaw = game?.opsTurnIndex ?? 0;
-      const cur = Number.isFinite(Number(curRaw)) ? Number(curRaw) : 0;
-      return (cur + 1) % nOrder;
-    }
-
-    // fallback: derive from active players
-    const list = Array.isArray(players) ? [...players] : [];
-    const ordered =
-      typeof sortPlayersByJoinOrder === "function"
-        ? sortPlayersByJoinOrder(list)
-        : list.sort((a, b) => {
-            const ao = Number.isFinite(a?.joinOrder) ? a.joinOrder : 999999;
-            const bo = Number.isFinite(b?.joinOrder) ? b.joinOrder : 999999;
-            return ao - bo;
-          });
-
-    const active = ordered.filter((p) => p && p.inYard !== false && !p.dashed);
-    const n = active.length;
-    if (!n) return 0;
-
-    const curRaw = game?.opsTurnIndex ?? 0;
-    const cur = Number.isFinite(Number(curRaw)) ? Number(curRaw) : 0;
-    return (cur + 1) % n;
-  };
-
-// --- 2) Single in-flight guard (prevents double click + prevents stuck state) ---
-const OPS_LOCK_KEY = "__VJ_OPS_ACTION_IN_FLIGHT__";
-function opsTryLock() {
-  if (globalThis[OPS_LOCK_KEY] === true) return false;
-  globalThis[OPS_LOCK_KEY] = true;
-  return true;
-}
-function opsUnlock() {
-  globalThis[OPS_LOCK_KEY] = false;
-}
-
-// --- 3) Helpers ---
-function getActionCardName(card) {
-  if (typeof card === "string") return card.trim();
-  return String(card?.name || card?.id || "").trim();
-}
-
-function getOpsParticipantCount(game, players) {
-  const order = Array.isArray(game?.opsTurnOrder) ? game.opsTurnOrder : null;
-  if (order && order.length) return order.length;
-
-  const list = Array.isArray(players) ? players : [];
-  return list.filter((p) => p && p.inYard !== false && !p.dashed).length;
-}
-
-function showActionError(cardName, err) {
-  const msg = err?.message || String(err || "Onbekende fout");
-  console.error("[OPS] playActionCard failed:", cardName, err);
-  try { setActionFeedback?.(`❌ Fout bij "${cardName}": ${msg}`); } catch {}
-  alert(`Er ging iets mis bij het spelen van "${cardName}".\n\n${msg}`);
-}
-
-function showPassError(err) {
-  const msg = err?.message || String(err || "Onbekende fout");
-  console.error("[OPS] passAction failed:", err);
-  try { setActionFeedback?.(`❌ Fout bij PASS: ${msg}`); } catch {}
-  alert(`Er ging iets mis bij PASS.\n\n${msg}`);
-}
-
-// Kaarten die NIET kunnen als je alleen bent
-const NEEDS_OTHER_FOX = new Set(["Mask Swap", "Scent Check", "Follow the Tail"]);
-
-// Safe logger (voorkomt: "logMoveAction is not defined" → crash)
-async function safeLogMoveAction(game, player, choice, phase, payload) {
-  if (typeof logMoveAction === "function") {
-    return logMoveAction(game, player, choice, phase, payload);
   }
-  console.warn("[OPS] logMoveAction ontbreekt, log skipped:", { choice, phase, payload });
-  // Optioneel: als je addLog hebt bestaan, kun je hier nog fallback loggen.
-  // if (typeof addLog === "function") await addLog(gameId, { ... })
 }
 
-// ===== PLAY ACTION CARD =====
-// Returns boolean: true = played, false = not played
-async function playActionCard(index) {
-  if (!opsTryLock()) return false;
+    // Alpha Call: effect is only lead change (no draw in OPS)
 
-  try {
-    if (!gameRef || !playerRef) return false;
-
-    const [gameSnap, playerSnap] = await Promise.all([
-      getDoc(gameRef),
-      getDoc(playerRef),
-    ]);
-    if (!gameSnap.exists() || !playerSnap.exists()) return false;
-
-    const game = gameSnap.data();
-    const player = playerSnap.data();
-
-    if (typeof canPlayActionNow !== "function" || !canPlayActionNow(game, player)) {
-      alert("Je kunt nu geen Actiekaarten spelen.");
-      return false;
-    }
-    if (typeof isMyOpsTurn !== "function" || !isMyOpsTurn(game)) {
-      alert("Je bent niet aan de beurt in de OPS-fase.");
-      return false;
+    if (cardName === "Burrow Beacon") {
+      flagsRound.lockEvents = true;
     }
 
-    const hand = Array.isArray(player.hand) ? [...player.hand] : [];
-    if (!Number.isFinite(index) || index < 0 || index >= hand.length) return false;
-
-    const card = hand[index];
-    const cardName = getActionCardName(card);
-    if (!cardName) {
-      alert("Onbekende Action Card in je hand (geen name/id).");
-      return false;
-    }
-
-    const flagsBefore = (typeof mergeRoundFlags === "function") ? mergeRoundFlags(game) : {};
-    if (flagsBefore?.opsLocked) {
-      alert("Hold Still is actief: je kunt alleen PASS kiezen.");
-      try { setActionFeedback?.("Hold Still is actief – speel geen kaarten meer, kies PASS als je aan de beurt bent."); } catch {}
-      return false;
-    }
-
-    // ✅ 1-speler precheck (scheelt refresh/verwarring)
-    if (NEEDS_OTHER_FOX.has(cardName)) {
-      const n = getOpsParticipantCount(game, lastPlayers || []);
-      if (n < 2) {
-        const m = `"${cardName}" kan nu niet: er is geen andere vos in de Yard.`;
-        try { setActionFeedback?.(m); } catch {}
-        alert(m);
-        return false;
+    if (cardName === "Kick Up Dust") {
+      if (!flagsRound.lockEvents) {
+        flagsRound.noPeekAll = true;
+        flagsRound.noPeekReason = "KICK_UP_DUST";
       }
     }
 
-    // ---- execute effect ----
-    let executed = false;
-    try {
-      switch (cardName) {
-        case "Scatter!":         executed = await playScatter(game, player); break;
-        case "Den Signal":       executed = await playDenSignal(game, player); break;
-        case "No-Go Zone":       executed = await playNoGoZone(game, player); break;
-        case "Kick Up Dust":     executed = await playKickUpDust(game, player); break;
-        case "Burrow Beacon":    executed = await playBurrowBeacon(game, player); break;
-        case "Molting Mask":     executed = await playMoltingMask(game, player); break;
-        case "Hold Still":       executed = await playHoldStill(game, player); break;
-        case "Nose for Trouble": executed = await playNoseForTrouble(game, player); break;
-        case "Scent Check":      executed = await playScentCheck(game, player); break;
-        case "Follow the Tail":  executed = await playFollowTail(game, player); break;
-        case "Alpha Call":       executed = await playAlphaCall(game, player); break;
-        case "Pack Tinker":      executed = await playPackTinker(game, player, index); break;
-        case "Mask Swap":        executed = await playMaskSwap(game, player); break;
-        default:
-          alert("Deze kaart is nog niet volledig geïmplementeerd in de online versie.");
-          return false;
+    if (cardName === "Scatter!") {
+      flagsRound.scatter = true;
+      extraGameUpdates.scatterArmed = true;
+      flagsRound.noPeekAll = true;
+      flagsRound.noPeekReason = "SCATTER";
+    }
+
+    if (cardName === "Scent Check") {
+      const arr = Array.isArray(flagsRound.scentChecks) ? [...flagsRound.scentChecks] : [];
+      if (!arr.includes(botId)) arr.push(botId);
+      flagsRound.scentChecks = arr;
+    }
+
+    if (cardName === "No-Go Zone") {
+      // No-Go Zone: iedereen speelt blind (geen gratis track-kennis)
+      flagsRound.noPeekAll = true;
+      flagsRound.noPeekReason = "NO_GO_ZONE";
+    }
+
+    if (cardName === "Follow the Tail") {
+      const targetId = pickRichestTarget(playersForOps || [], botId);
+      if (targetId) {
+        const ft = { ...(flagsRound.followTail || {}) };
+        ft[botId] = targetId;
+        flagsRound.followTail = ft;
       }
-    } catch (err) {
-      showActionError(cardName, err);
-      return false;
     }
 
-    if (!executed) {
-      // “legaal mislukt”: effectregels zeggen "mag nu niet"
-      try { setActionFeedback?.(`De kaart "${cardName}" kon nu niet worden gespeeld. Hij blijft in je hand.`); } catch {}
-      return false;
+    if (cardName === "Molting Mask") {
+      // Molting Mask: change my den color randomly (strategic reset). This does NOT affect noPeek.
+      const COLORS = ["RED", "BLUE", "GREEN", "YELLOW"];
+      const cur = normColor(p.color);
+      const pool = COLORS.filter((c) => c && c !== cur);
+      const pickFrom = pool.length ? pool : COLORS;
+      const next = pickFrom[Math.floor(Math.random() * pickFrom.length)] || cur;
+      if (next && next !== cur) {
+        // keep ephemeral debug for message/log only (NOT written to Firestore)
+        p.__moltingFrom = cur;
+        p.__moltingTo = next;
+        p.color = next;
+        p.den = next;
+      }
     }
 
-    // ---- consume card ----
-// Pack Tinker wijzigt je hand via engine.js, dus eerst verse hand ophalen
-let handToConsume = hand;
-
-if (cardName === "Pack Tinker") {
-  try {
-    const fresh = await getDoc(playerRef);
-    if (fresh.exists()) {
-      const h2 = fresh.data()?.hand;
-      if (Array.isArray(h2)) handToConsume = [...h2];
+    if (cardName === "Nose for Trouble") {
+      const eventId = nextEventId(g, 0) || nextEventId(g, 1);
+      if (eventId) {
+        const preds = Array.isArray(flagsRound.predictions) ? [...flagsRound.predictions] : [];
+        const filtered = preds.filter((x) => x?.playerId !== botId);
+        filtered.push({ playerId: botId, eventId, round: roundNum, at: Date.now() });
+        flagsRound.predictions = filtered;
+      }
     }
-  } catch {}
+
+    if (cardName === "Mask Swap") {
+      const targetId = play.targetId;
+      if (targetId) {
+        const tRef = doc(db, "games", gameId, "players", targetId);
+        const tSnap = await tx.get(tRef);
+        if (tSnap.exists()) {
+          const t = { id: tSnap.id, ...tSnap.data() };
+          const a = normColor(p.color);
+          const b = normColor(t.color);
+          if (a && b && a !== b) {
+            tx.update(tRef, { color: a, den: a });
+            p.color = b;
+            extraGameUpdates.lastMaskSwap = { by: botId, targetId, a, b, round: roundNum, at: Date.now() };
+          }
+        }
+      }
+    }
+
+    // commit
+    tx.update(pRef, { hand, color: p.color, den: p.color });
+    tx.update(gRef, {
+  actionDeck,
+  actionDiscard,
+  actionDiscardPile,
+  flagsRound,
+  opsTurnIndex: nextIdx,
+  opsConsecutivePasses: 0,
+  ...extraGameUpdates,
+});
+
+    let msg = `BOT speelt Action Card: ${cardName}`;
+    if (cardName === "Pack Tinker" && extraGameUpdates.lastPackTinker) {
+  msg = `BOT speelt Pack Tinker (swap "${extraGameUpdates.lastPackTinker.giveName}" ↔ "${extraGameUpdates.lastPackTinker.takeName}")`;
 }
 
-handToConsume.splice(index, 1);
-await updateDoc(playerRef, { hand: handToConsume });
+    if (cardName === "Kick Up Dust") {
+      msg = flagsRound.lockEvents
+        ? "BOT speelt Kick Up Dust (geen effect: Burrow Beacon actief)"
+        : "BOT speelt Kick Up Dust (future events geschud)";
+    }
+    if (cardName === "Den Signal") {
+      msg = `BOT speelt Den Signal (DEN ${normColor(p.color) || "?"} immune)`;
+    }
+    if (cardName === "Molting Mask") {
+      const from = p.__moltingFrom;
+      const to = p.__moltingTo;
+      if (from && to) msg = `BOT speelt Molting Mask (${from} → ${to})`;
+      else msg = "BOT speelt Molting Mask (den kleur gewijzigd)";
+    }
+    if (cardName === "No-Go Zone") {
+      msg = "BOT speelt No-Go Zone (noPeek actief: event info verborgen deze ronde)";
+    }
 
-    // ---- log (fail-safe) ----
-    await safeLogMoveAction(game, player, `ACTION_${cardName}`, "ACTIONS");
-
-// ✅ bepaal actionId (zodat singleton rules op ID werken)
-const def = getActionDefByName?.(cardName);
-const actionId = String(def?.id || "");
-    
-    // ---- advance OPS turn + reset passes ----
-    const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
-    const gUpdate = {
-      opsTurnIndex: nextIndex,
+    const gAfter = {
+      ...g,
+      ...extraGameUpdates,
+      actionDiscard,
+      flagsRound,
+      // reflect any track mutation for metrics
+      ...(extraGameUpdates?.eventTrack ? { eventTrack: extraGameUpdates.eventTrack } : {}),
+      opsTurnIndex: nextIdx,
       opsConsecutivePasses: 0,
     };
 
-    // ✅ registreer dat deze actionId deze ronde al gespeeld is
-if (actionId && typeof arrayUnion === "function") {
-  gUpdate.discardThisRoundActionIds = arrayUnion(actionId);
-}
-    
-  // optional: discard pile (zelfde write)
-if (typeof arrayUnion === "function") {
-  const meta = {
-    by: (typeof playerId !== "undefined" ? playerId : null),
-    round: Number(game?.round ?? 0),
-    at: Date.now(),
-  };
+    const botAfter = { ...p, hand, color: p.color, den: p.color };
 
-  // legacy/monitoring (laat bestaan)
-  gUpdate.actionDiscard = arrayUnion({
-    name: cardName,
-    ...meta,
-  });
-
-  // ✅ echte aflegstapel voor Pack Tinker (met uid)
-  const uid = `${meta.at}_${Math.random().toString(16).slice(2)}`;
-  gUpdate.actionDiscardPile = arrayUnion({
-    uid,
-    name: cardName,
-    ...meta,
-  });
-}
-    await updateDoc(gameRef, gUpdate);
-
-    try { setHost?.("success", `Kaart gespeeld: ${cardName}`); } catch {}
-    try { hostSay?.("action_success"); } catch {}
-    try { setActionFeedback?.(`✅ Je speelde "${cardName}".`); } catch {}
-
-    return true;
-  } finally {
-    opsUnlock();
-  }
-}
-
-// ===== PASS =====
-// Returns boolean: true = pass recorded, false = not (not your turn etc.)
-async function passAction() {
-  if (!opsTryLock()) return false;
-
-  try {
-    if (!gameRef || !playerRef) return false;
-
-    const [gameSnap, playerSnap] = await Promise.all([
-      getDoc(gameRef),
-      getDoc(playerRef),
-    ]);
-    if (!gameSnap.exists() || !playerSnap.exists()) return false;
-
-    const game = gameSnap.data();
-    const player = playerSnap.data();
-
-    if (typeof canPlayActionNow !== "function" || !canPlayActionNow(game, player)) {
-      alert("Je kunt nu geen PASS doen in deze fase.");
-      return false;
-    }
-    if (typeof isMyOpsTurn !== "function" || !isMyOpsTurn(game)) {
-      alert("Je bent niet aan de beurt in de OPS-fase.");
-      return false;
-    }
-
-    const nextIndex = computeNextOpsIndex(game, lastPlayers || []);
-    const newPasses = Number(game.opsConsecutivePasses || 0) + 1;
-
-    await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: true });
-
-    await safeLogMoveAction(game, player, "ACTION_PASS", "ACTIONS");
-
-    try { setHost?.("pass", "PASS – je laat deze beurt voorbij gaan."); } catch {}
-    try { setActionFeedback?.("PASS geregistreerd."); } catch {}
-
-    return true;
-  } catch (err) {
-    showPassError(err);
-    return false;
-  } finally {
-    opsUnlock();
-  }
-}
-
-// ===== CONCRETE ACTION CARD EFFECTS =====
-
-async function playScatter(game, player) {
-  const flags = mergeRoundFlags(game);
-  flags.scatter = true;
-  // Scatter! => iedereen speelt blind (geen gratis track-kennis)
-  flags.noPeekAll = true;
-  flags.noPeekReason = "SCATTER";
-  await updateDoc(gameRef, { flagsRound: flags });
-  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Scatter! – niemand mag Scouten deze ronde.`,
-  });
-  setActionFeedback("Scatter! is actief – niemand mag Scouten deze ronde.");
-  setHost("scatter", "Scatter! – niemand mag SCOUTen.");
-  return true;
-}
-
-async function playDenSignal(game, player) {
-  const colors = ["RED", "BLUE", "GREEN", "YELLOW"];
-  const my = String(player?.color || player?.den || player?.denColor || "").trim().toUpperCase();
-
-  const menu = colors
-    .map((c, i) => `${i + 1}. ${c}${c === my ? " (jij)" : ""}`)
-    .join("\n");
-
-  const choiceStr = prompt("Den Signal – kies Den kleur om te beschermen:\n" + menu);
-  if (!choiceStr) return false;
-
-  const idx = parseInt(choiceStr, 10) - 1;
-  if (Number.isNaN(idx) || idx < 0 || idx >= colors.length) {
-    alert("Ongeldige keuze.");
-    return false;
-  }
-
-  const color = colors[idx];
-
-  const flags = mergeRoundFlags(game);
-  flags.denImmune = flags.denImmune || {};
-  flags.denImmune[color] = true;
-
-  await updateDoc(gameRef, { flagsRound: flags });
-  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Den Signal – Den ${color} is immuun voor vang-events deze ronde.`,
-  });
-  setActionFeedback(`Den Signal: Den ${color} is immuun voor vang-events deze ronde.`);
-  return true;
-}
-
-async function playNoGoZone(game, player) {
-  const track = game.eventTrack || [];
-  if (!track.length) {
-    alert("Geen Event Track beschikbaar.");
-    return false;
-  }
-
-  const maxPos = track.length;
-  const posStr = prompt(`No-Go Zone – blokkeer een eventpositie (1-${maxPos})`);
-  if (!posStr) return false;
-  const pos = parseInt(posStr, 10);
-  if (Number.isNaN(pos) || pos < 1 || pos > maxPos) {
-    alert("Ongeldige positie.");
-    return false;
-  }
-
-  const flags = mergeRoundFlags(game);
-  const noPeek = flags.noPeek || [];
-  if (!noPeek.includes(pos)) noPeek.push(pos);
-  flags.noPeek = noPeek;
-
-  // No-Go Zone => iedereen speelt blind (geen gratis track-kennis)
-  flags.noPeekAll = true;
-  flags.noPeekReason = "NO_GO_ZONE";
-
-  await updateDoc(gameRef, { flagsRound: flags });
-  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt No-Go Zone – Scouten op positie ${pos} is verboden.`,
-  });
-  setActionFeedback(`No-Go Zone: positie ${pos} kan deze ronde niet gescout worden.`);
-  return true;
-}
-
-async function playKickUpDust(game, player) {
-  const flags = mergeRoundFlags(game);
-  if (flags.lockEvents) {
-    alert("Burrow Beacon is actief – de Event Track is gelocked en kan niet meer veranderen.");
-    return false;
-  }
-
-  // Kick Up Dust => vanaf nu blind play (ook voor bots / track preview)
-  flags.noPeekAll = true;
-  flags.noPeekReason = "KICK_UP_DUST";
-  await updateDoc(gameRef, { flagsRound: flags });
-
-  await applyKickUpDust(gameId);
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Kick Up Dust – toekomstige Events zijn geschud en iedereen speelt blind.`,
-  });
-
-  setActionFeedback(
-    "Kick Up Dust: de toekomstige Event kaarten zijn door elkaar geschud. Onthulde kaarten blijven op hun plek."
-  );
-  return true;
-}
-
-async function playBurrowBeacon(game, player) {
-  const flags = mergeRoundFlags(game);
-  flags.lockEvents = true;
-
-  await updateDoc(gameRef, { flagsRound: flags });
-  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Burrow Beacon – Event Track kan deze ronde niet meer veranderen.`,
-  });
-  setActionFeedback("Burrow Beacon: de Event Track is gelocked – geen SHIFT of schudden meer deze ronde.");
-  setHost("beacon", "Burrow Beacon – Event Track gelocked.");
-  return true;
-}
-
-async function playMoltingMask(game, player) {
-  const colors = ["RED", "BLUE", "GREEN", "YELLOW"];
-  const current = (player.color || "").toUpperCase();
-  const pool = colors.filter((c) => c !== current);
-  const newColor = pool.length
-    ? pool[Math.floor(Math.random() * pool.length)]
-    : colors[Math.floor(Math.random() * colors.length)];
-
-  await updateDoc(playerRef, { color: newColor });
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Molting Mask – nieuwe Den kleur: ${newColor}.`,
-  });
-  setActionFeedback(`Molting Mask: je Den kleur is nu ${newColor}.`);
-  return true;
-}
-
-async function playHoldStill(game, player) {
-  const flags = mergeRoundFlags(game);
-  flags.opsLocked = true;
-
-  await updateDoc(gameRef, { flagsRound: flags });
-  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Hold Still – geen nieuwe Action Cards meer deze ronde, alleen PASS.`,
-  });
-  setActionFeedback("Hold Still is actief – er mogen geen Action Cards meer gespeeld worden, alleen PASS.");
-  setHost("ops_locked", "Hold Still – alleen PASS is toegestaan deze ronde.");
-  return true;
-}
-
-async function playNoseForTrouble(game, player) {
-  const track = game.eventTrack || [];
-  if (!track.length) {
-    alert("Geen Event Track beschikbaar.");
-    return false;
-  }
-
-  const map = new Map();
-  for (const id of track) {
-    if (!map.has(id)) {
-      const ev = getEventById(id);
-      map.set(id, ev ? ev.title : id);
-    }
-  }
-  const options = Array.from(map.entries()).map(([id, title]) => ({ id, title }));
-  options.sort((a, b) => a.title.localeCompare(b.title, "nl"));
-
-  const menuLines = options.map((opt, idx) => `${idx + 1}. ${opt.title}`);
-  const choiceStr = prompt("Nose for Trouble – kies het volgende Event dat je verwacht:\n" + menuLines.join("\n"));
-  if (!choiceStr) return false;
-
-  const idx = parseInt(choiceStr, 10) - 1;
-  if (Number.isNaN(idx) || idx < 0 || idx >= options.length) {
-    alert("Ongeldige keuze.");
-    return false;
-  }
-
-  const chosen = options[idx];
-  const chosenId = chosen.id;
-  const ev = getEventById(chosenId);
-
-  const flags = mergeRoundFlags(game);
-  const preds = Array.isArray(flags.predictions) ? [...flags.predictions] : [];
-  preds.push({ playerId, eventId: chosenId });
-  flags.predictions = preds;
-
-  await updateDoc(gameRef, { flagsRound: flags });
-  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Nose for Trouble – voorspelt: ${ev ? ev.title : chosenId}.`,
-  });
-  setActionFeedback(`Nose for Trouble: je hebt "${ev ? ev.title : chosenId}" voorspeld als volgende Event.`);
-  return true;
-}
-
-async function playScentCheck(game, player) {
-  const target = await chooseOtherPlayerPrompt("Scent Check – kies een vos om te besnuffelen");
-  if (!target) return false;
-
-  try {
-    const pref = doc(db, "games", gameId, "players", target.id);
-    const snap = await getDoc(pref);
-    if (snap.exists()) {
-      const t = snap.data();
-      const dec = t.decision || "(nog geen keuze)";
-      alert(`[Scent Check] ${t.name || "Vos"} heeft op dit moment DECISION: ${dec}.`);
-    }
-  } catch (err) {
-    console.error("ScentCheck immediate peek error", err);
-  }
-
-  const flags = mergeRoundFlags(game);
-  const list = Array.isArray(flags.scentChecks) ? [...flags.scentChecks] : [];
-  list.push({ viewerId: playerId, targetId: target.id });
-  flags.scentChecks = list;
-
-  await updateDoc(gameRef, { flagsRound: flags });
-  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Scent Check op ${target.name || "een vos"}.`,
-  });
-  setActionFeedback(`Scent Check: je volgt deze ronde de beslissingen van ${target.name || "de gekozen vos"} van dichtbij.`);
-  return true;
-}
-
-async function playFollowTail(game, player) {
-  const target = await chooseOtherPlayerPrompt("Follow the Tail – kies een vos om te volgen");
-  if (!target) return false;
-
-  const flags = mergeRoundFlags(game);
-  const ft = flags.followTail || {};
-  ft[playerId] = target.id;
-  flags.followTail = ft;
-
-  await updateDoc(gameRef, { flagsRound: flags });
-  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Follow the Tail en volgt de keuze van ${target.name || "een vos"}.`,
-  });
-  setActionFeedback(`Follow the Tail: jouw uiteindelijke DECISION zal gelijk zijn aan die van ${target.name || "de gekozen vos"}.`);
-  return true;
-}
-
-async function playAlphaCall(game, player) {
-  const players = await fetchPlayersForGame();
-  const orderedAll = sortPlayersByJoinOrder(players);
-
-  // zelfde logica als host.js: alleen actieve yard spelers tellen mee
-  const activeOrdered = orderedAll.filter(isInYardLocal);
-  const baseList = activeOrdered.length ? activeOrdered : orderedAll;
-
-  if (!baseList.length) {
-    alert("Geen spelers gevonden om Lead Fox van te maken.");
-    return false;
-  }
-
-  const lines = baseList.map((p, idx) => `${idx + 1}. ${p.name || "Vos"}`);
-  const choiceStr = prompt("Alpha Call – kies wie de nieuwe Lead Fox wordt:\n" + lines.join("\n"));
-  if (!choiceStr) return false;
-
-  const idx = parseInt(choiceStr, 10) - 1;
-  if (Number.isNaN(idx) || idx < 0 || idx >= baseList.length) {
-    alert("Ongeldige keuze.");
-    return false;
-  }
-
-  await updateDoc(gameRef, { leadIndex: idx });
-  resetLeadCache();
-  await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
-
-  await addLog(gameId, {
-    round: game.round || 0,
-    phase: "ACTIONS",
-    kind: "ACTION",
-    playerId,
-    message: `${player.name || "Speler"} speelt Alpha Call – Lead Fox wordt nu ${baseList[idx].name || "een vos"}.`,
-  });
-  setActionFeedback(`Alpha Call: Lead Fox is nu ${baseList[idx].name || "de gekozen vos"}.`);
-  return true;
-}
-
-async function playPackTinker(game, player, playedIndex) {
-  // ✅ Nieuwe regels: wissel 1 kaart uit hand met 1 kaart uit aflegstapel
-  const discard = Array.isArray(game?.actionDiscardPile) ? [...game.actionDiscardPile] : [];
-  if (!discard.length) {
-    alert("Aflegstapel is leeg. Pack Tinker heeft nu geen effect.");
-    return false;
-  }
-
-  const handRaw = Array.isArray(player?.hand) ? [...player.hand] : [];
-  const handOptions = handRaw
-    .map((c, idx) => ({ idx, name: getActionCardName(c) }))
-    .filter((x) => x.name && x.idx !== playedIndex); // speel-kaart zelf niet kiezen
-
-  if (!handOptions.length) {
-    alert("Je hebt geen andere Action Card in je hand om te wisselen.");
-    return false;
-  }
-
-  const handLines = handOptions.map((h, i) => `${i + 1}. ${h.name}`).join("\n");
-  const giveStr = prompt("Pack Tinker – kies 1 kaart uit je hand om te ruilen:\n" + handLines);
-  if (!giveStr) return false;
-
-  const gi = parseInt(giveStr, 10) - 1;
-  if (Number.isNaN(gi) || gi < 0 || gi >= handOptions.length) {
-    alert("Ongeldige keuze (hand).");
-    return false;
-  }
-  const giveName = handOptions[gi].name;
-
-  const discLines = discard
-    .map((d, i) => `${i + 1}. ${getActionCardName(d?.name || d)}`)
-    .join("\n");
-  const takeStr = prompt("Pack Tinker – kies 1 kaart uit de Aflegstapel:\n" + discLines);
-  if (!takeStr) return false;
-
-  const ti = parseInt(takeStr, 10) - 1;
-  if (Number.isNaN(ti) || ti < 0 || ti >= discard.length) {
-    alert("Ongeldige keuze (aflegstapel).");
-    return false;
-  }
-
-  const takeUid = discard[ti]?.uid;
-  const takeName = getActionCardName(discard[ti]?.name || discard[ti]);
-
-  if (!takeUid || !takeName) {
-    alert("Aflegstapel-item mist uid/name. Start even een nieuwe raid na deploy.");
-    return false;
-  }
-
-  await applyPackTinker(gameId, playerId, giveName, takeUid);
-  setActionFeedback?.(`Pack Tinker: "${giveName}" gewisseld met "${takeName}" uit de aflegstapel.`);
-  return true;
-}
-async function playMaskSwap(game, player) {
-  const target = await chooseOtherPlayerPrompt(
-    "Mask Swap – kies een vos in de Yard om Den-kleur mee te wisselen"
-  );
-  if (!target) return false;
-
-  const meRef = doc(db, "games", gameId, "players", playerId);
-  const tRef = doc(db, "games", gameId, "players", target.id);
-
-  try {
-    await runTransaction(db, async (tx) => {
-      const meSnap = await tx.get(meRef);
-      const tSnap = await tx.get(tRef);
-      if (!meSnap.exists() || !tSnap.exists()) throw new Error("player_missing");
-
-      const me = { id: playerId, ...meSnap.data() };
-      const t = { id: target.id, ...tSnap.data() };
-
-      // safety: beide moeten nog in de Yard zijn
-      if (!isInYardLocal(me) || !isInYardLocal(t)) throw new Error("not_in_yard");
-
-      const a = (me.color || "").toUpperCase();
-      const b = (t.color || "").toUpperCase();
-      if (!a || !b) throw new Error("missing_color");
-      if (a === b) throw new Error("same_color");
-
-      // swap (ook den mee voor consistentie met bots)
-      tx.update(meRef, { color: b, den: b });
-      tx.update(tRef, { color: a, den: a });
-    });
-
-    await addLog(gameId, {
-      round: game.round || 0,
+    logPayload = {
+      round: roundNum,
       phase: "ACTIONS",
-      kind: "ACTION",
-      playerId,
-      message: `${player.name || "Speler"} speelt Mask Swap – wisselt Den-kleur met ${target.name || "een vos"}.`,
-    });
+      playerId: botId,
+      playerName: p.name || "BOT",
+      botColor: normColor(p.color || p.den || p.denColor),
+      discProfile: (DISC_BY_DEN[normColor(p.color || p.den || p.denColor)] || null),
+      hand,
+      choice: `ACTION_${cardName}`,
+      message: msg,
+      kind: "BOT_OPS",
+      at: Date.now(),
+      metrics: buildBotMetricsForLog({ game: gAfter, bot: botAfter, players: playersForOps, flagsRoundOverride: flagsRound }),
+    };
+  });
 
-    setActionFeedback(
-      `Mask Swap: jij wisselde Den-kleur met ${target.name || "de gekozen vos"}.`
-    );
-    return true;
-  } catch (err) {
-    console.error("Mask Swap error", err);
-    alert("Mask Swap mislukt: " + (err?.message || err));
-    return false;
+  if (logPayload) await logBotAction({ db, gameId, addLog: null, payload: logPayload });
+
+
+  // ✅ After EVERY played Action Card: recompute & log snapshots for ALL bots
+  if (
+    OPS_SNAPSHOT_ENABLED &&
+    logPayload &&
+    String(logPayload.choice || "").startsWith("ACTION_") &&
+    String(logPayload.choice || "") !== "ACTION_PASS"
+  ) {
+    const cardName = String(logPayload.choice || "").replace(/^ACTION_/, "");
+    await logOpsSnapshotAfterAction({ db, gameId, byId: botId, cardName });
   }
 }
 
-// ===== INIT / LISTENERS =====
+async function fetchPlayersOutsideTx(db, gameId, latestPlayers = []) {
+  const ids = (latestPlayers || []).map((x) => x?.id).filter(Boolean);
 
-async function ensurePlayerDoc() {
-  if (!playerRef) return;
-  const snap = await getDoc(playerRef);
-  if (snap.exists()) return;
+  // fallback: als er geen ids zijn, gebruik latestPlayers zelf
+  if (!ids.length) return Array.isArray(latestPlayers) ? latestPlayers : [];
 
-  const seed = {
-    name: "Vos",
-    joinOrder: Date.now(),
+  const snaps = await Promise.all(
+    ids.map((id) => getDoc(doc(db, "games", gameId, "players", id)))
+  );
+
+  return snaps
+    .filter((s) => s.exists())
+    .map((s) => ({ id: s.id, ...s.data() }));
+}
+
+
+// ============================
+// OPS Snapshot (after any played Action Card)
+// Recompute fresh metrics for ALL bots so we can audit "what changed" after each card.
+// Logged into actions collection as kind="OPS_SNAPSHOT".
+// ============================
+async function logOpsSnapshotAfterAction({ db, gameId, byId, cardName }) {
+  try {
+    const gRef = doc(db, "games", gameId);
+    const gSnap = await getDoc(gRef);
+    if (!gSnap.exists()) return;
+
+    const g = gSnap.data();
+    if (!isActiveRaidStatus(g.status)) return;
+
+    // Only useful during OPS (ACTIONS); but allow if you want after MOVE too.
+    // We'll keep it strict to prevent noise.
+    if (String(g.phase || "") !== "ACTIONS") return;
+
+    // Fetch all players fresh (yes, it's extra reads, but only when an Action Card is played).
+    const pSnap = await getDocs(collection(db, "games", gameId, "players"));
+    const players = pSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+    const flags = fillFlags(g.flagsRound);
+
+    const bots = (players || []).filter((p) => p?.isBot);
+
+    const lite = (m) => {
+      if (!m || typeof m !== "object") return null;
+      return {
+        dangerEffective: m.dangerEffective,
+        dangerStay: m.dangerStay,
+        dangerPeak: m.dangerPeak,
+        dangerVec: m.dangerVec,
+        pDanger: m.pDanger,
+        confidence: m.confidence,
+        nextEventIdUsed: m.nextEventIdUsed,
+        carryValue: m.carryValue,
+        carryValueRec: m.carryValueRec,
+      };
+    };
+
+    const botsMetrics = {};
+    for (const b of bots) {
+      const denColor = normColor(b.color || b.den || b.denColor);
+      const discProfile = DISC_BY_DEN[denColor] || null;
+
+      const me = {
+        ...b,
+        // keep canonical aliasing (helps if some code reads burrowUsed)
+        burrowUsedThisRaid: b?.burrowUsedThisRaid === true,
+        burrowUsed: b?.burrowUsedThisRaid === true,
+      };
+
+      const m = buildBotMetricsForLog({
+        game: g,
+        bot: me,
+        players,
+        flagsRoundOverride: flags,
+      });
+
+      botsMetrics[String(b.id)] = {
+        id: b.id,
+        name: b.name || "BOT",
+        denColor,
+        discProfile,
+        decision: b.decision || null,
+        inYard: !!b.inYard,
+        dashed: !!b.dashed,
+        burrowUsedThisRaid: !!b.burrowUsedThisRaid,
+        ...(lite(m) || {}),
+      };
+    }
+
+    const byName = (players || []).find((x) => String(x.id) === String(byId))?.name || "BOT";
+
+    await logBotAction({
+      db,
+      gameId,
+      addLog: null,
+      payload: {
+        round: Number(g.round || 0),
+        phase: "ACTIONS",
+        playerId: byId,
+        playerName: byName,
+        choice: `OPS_SNAPSHOT_${String(cardName || "").trim()}`,
+        message: `OPS snapshot na Action Card: ${String(cardName || "").trim()}`,
+        kind: "OPS_SNAPSHOT",
+        at: Date.now(),
+        opsStep: Number(g.opsStep || 0),
+        opsVersion: Number(g.opsVersion || 0),
+        eventTrackVersion: Number(g.eventTrackVersion || 0),
+        bots: botsMetrics,
+      },
+    });
+  } catch (e) {
+    console.warn("[OPS_SNAPSHOT] failed", e);
+  }
+}
+
+
+/** ===== smarter DECISION ===== */
+async function botDoDecision({ db, gameId, botId, latestPlayers = [] }) {
+  const gRef = doc(db, "games", gameId);
+  const pRef = doc(db, "games", gameId, "players", botId);
+
+ let logPayload = null;
+
+// ✅ lees players OUTSIDE de transaction (voorkomt failed-precondition)
+const freshPlayersOuter = await fetchPlayersOutsideTx(db, gameId, latestPlayers);
+
+await runTransaction(db, async (tx) => {
+
+    const gSnap = await tx.get(gRef);
+    const pSnap = await tx.get(pRef);
+    if (!gSnap.exists() || !pSnap.exists()) return;
+
+    const g = gSnap.data();
+    const p = { id: pSnap.id, ...pSnap.data() };
+
+    if (!canBotDecide(g, p)) return;
+
+    const hand = Array.isArray(p?.hand) ? [...p.hand] : [];
+
+
+    // ✅ gebruik de outside snapshot, maar update "me" naar de tx-versie
+const base = Array.isArray(freshPlayersOuter) && freshPlayersOuter.length
+  ? freshPlayersOuter
+  : (Array.isArray(latestPlayers) ? latestPlayers : []);
+
+const playersForDecision = base.length
+  ? base.map((x) => (String(x?.id) === String(botId) ? { ...x, ...p } : x))
+  : [{ ...p }];
+
+    const flags = fillFlags(g?.flagsRound);
+    const noPeek = flags?.noPeek === true;
+
+    const denColor = normColor(p?.color || p?.den || p?.denColor);
+    const presetKey = presetFromDenColor(denColor);
+    const dashDecisionsSoFar = countDashDecisions(playersForDecision);
+    const isLead = computeIsLeadForPlayer(g, p, playersForDecision);
+
+// ✅ CANON: alleen burrowUsedThisRaid (1 bron van waarheid)
+const burrowUsedThisRaid = (p?.burrowUsedThisRaid === true);
+const burrowUsed = burrowUsedThisRaid; // alias voor bestaande code
+
+// ✅ strategy + heuristics verwachten me.burrowUsed (alias); ook burrowUsedThisRaid consistent maken
+const meForDecision = {
+  ...p,
+  burrowUsed,
+  burrowUsedThisRaid,
+};
+
+// ✅ metrics altijd berekenen (voor logs + fallback)
+const metricsNow = buildBotMetricsForLog({
+  game: g,
+  bot: meForDecision,
+  players: playersForDecision || [],
+  flagsRoundOverride: flags,
+});
+
+// ---- HYBRID DECISION ----
+let decision = "LURK";
+let rec = null;
+let dec = null;
+
+// simpele intel-check (optioneel): als bot knownUpcomingEvents heeft, strategy mag ook in noPeek
+const known = Array.isArray(meForDecision?.knownUpcomingEvents)
+  ? meForDecision.knownUpcomingEvents.filter(Boolean)
+  : [];
+const hasKnown = known.length > 0;
+
+const useStrategy = !noPeek || hasKnown;
+
+// ✅ noPeek + eigen intel: geef strategy expliciet de knownUpcomingEvents mee
+const peekIntel = (noPeek && hasKnown)
+  ? { events: known.map((x) => String(x)) }
+  : null;
+
+if (useStrategy) {
+  dec = evaluateDecision({
+    game: g,
+    me: meForDecision,
+    players: playersForDecision || [],
+    flagsRound: flags,
+    cfg: getStrategyCfgForBot(meForDecision, g),
+    peekIntel,
+  });
+
+  decision = dec?.decision || "LURK";
+} else {
+  rec = recommendDecision({
+    presetKey,
+    denColor,
+    game: g,
+    me: meForDecision,
+    ctx: {
+      round: Number(g.round || 0),
+      isLead,
+      dashDecisionsSoFar,
+
+      roosterSeen: Number.isFinite(Number(g?.roosterSeen))
+        ? Number(g.roosterSeen)
+        : countRevealedRoosters(g),
+      postRooster2Window: countRevealedRoosters(g) >= 2,
+
+      carryValue: 0,
+      carryValueRec: 0,
+
+      dangerVec: metricsNow?.dangerVec,
+      dangerPeak: metricsNow?.dangerPeak,
+      dangerStay: metricsNow?.dangerStay,
+      dangerEffective: metricsNow?.dangerEffective,
+      nextEventIdUsed: metricsNow?.nextEventIdUsed,
+      pDanger: metricsNow?.pDanger,
+      confidence: metricsNow?.confidence,
+
+      flagsRound: g?.flagsRound || null,
+    },
+  });
+
+  decision = rec?.decision || "LURK";
+}
+
+// Next event id only when allowed (noPeek=false OR bot has known intel)
+const nextEvent0 = (!noPeek)
+  ? nextEventId(g, 0)
+  : (hasKnown ? String(known[0] || "") : null);
+
+// (optioneel) debug vlag als bot BURROW wil maar al gebruikt is
+const burrowAttemptWhileUsed = (decision === "BURROW") && burrowUsedThisRaid;
+
+// Alleen als bot op LURK uitkomt: check of LURK (stay) veilig is op basis van nextEvent.
+// Onbekend => liever DASH dan dood.
+if (!useStrategy && decision === "LURK") {
+  let dStay = Number.NaN;
+
+  if (nextEvent0) {
+    try {
+      const f = getEventFacts(String(nextEvent0 || ""), {
+        game: g,
+        me: meForDecision,
+        denColor,
+        isLead,
+        flagsRound: flags,
+      });
+      const dl = Number(f?.dangerLurk);
+      if (Number.isFinite(dl)) dStay = dl;
+    } catch (e) {}
+  }
+
+  // Unknown nextEvent (noPeek + no intel): gebruik onze geschatte risk i.p.v. "altijd lethal"
+if (!Number.isFinite(dStay)) {
+  dStay = Number(metricsNow?.dangerStay ?? metricsNow?.dangerEffective ?? 0);
+}
+
+// Als staying risky lijkt: BURROW eerst, pas DASH als BURROW op is
+if (dStay > 3.0) decision = burrowUsedThisRaid ? "DASH" : "BURROW";
+
+}
+
+  // ===== HARD RULE: eigen DEN_* (zonder Den Signal) => LURK is lethal (caught)
+// Alleen veilig: DASH of BURROW. Als BURROW al op is -> force DASH.
+// (En als bot al DASH kiest voor carry/Hidden Nest, laten we dat staan.)
+try {
+  if (useStrategy) {
+    // strategy decides; no post-overrides
+  } else {
+
+  const ne = String(nextEvent0 || "");
+  if (ne.startsWith("DEN_")) {
+    const evDen = ne.slice(4).toUpperCase();
+    const myDen = String(denColor || "").toUpperCase();
+
+    const denImmune = (flags && typeof flags === "object" ? flags.denImmune : null) || null;
+    const immuneToDen = !!(denImmune && evDen && (denImmune[evDen] || denImmune[String(evDen).toLowerCase()]));
+
+    if (myDen && evDen && myDen === evDen && !immuneToDen) {
+      if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
+    }
+  }
+
+  }
+} catch (e) {}
+// ===== HARD RULE: DOG_CHARGE / SECOND_CHARGE / MAGPIE_SNITCH => LURK is lethal
+try {
+  if (useStrategy) {
+    // strategy decides; no post-overrides
+  } else {
+
+  const ne = String(nextEvent0 || "");
+
+  // Den Signal immunity (zelfde stijl als DEN_* rule)
+  const denImmune = (flags && typeof flags === "object" ? flags.denImmune : null) || null;
+  const myDen = String(denColor || "").toUpperCase();
+  const immuneToMyDen = !!(denImmune && myDen && (denImmune[myDen] || denImmune[String(myDen).toLowerCase()]));
+
+  // DOG charges: alleen veilig = DASH of (1x) BURROW
+  if ((ne === "DOG_CHARGE" || ne === "SECOND_CHARGE") && !immuneToMyDen) {
+    if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
+  }
+
+  // Magpie Snitch: alleen relevant voor Lead (hier is Den Signal niet van toepassing)
+  if (ne === "MAGPIE_SNITCH" && isLead) {
+    if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
+  }
+
+  }
+} catch (e) {}
+// ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
+    if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
+      const picked = pickHiddenNestDashSet({ game: g, gameId, players: playersForDecision || [] });
+      const dashSet = picked?.dashSet || null;
+
+      if (dashSet && !dashSet.has(p.id)) {
+      // CANON (jouw regel): Hidden Nest / winst-DASH mag nooit BURROW triggeren.
+        decision = "LURK";
+      }
+
+    }
+
+    const dashPushNext = Number.isFinite(Number(dec?.meta?.dashPushNext))
+      ? Number(dec.meta.dashPushNext)
+      : (Number.isFinite(Number(p?.dashPush)) ? Number(p.dashPush) : 0);
+
+    // ✅ Legality: BURROW is 1x per raid
+    if (decision === "BURROW" && burrowUsedThisRaid) {
+      decision = "DASH";
+    }
+
+    const update = {
+      decision,
+      ...(Number.isFinite(Number(dashPushNext)) ? { dashPush: dashPushNext } : {}),
+      ...(decision === "BURROW" ? { burrowUsedThisRaid: true } : {}),
+    };
+
+    tx.update(pRef, update);
+
+    const botAfter = { ...meForDecision, ...update };
+
+    logPayload = {
+      round: Number(g.round || 0),
+      phase: "DECISION",
+      playerId: botId,
+      playerName: p.name || "BOT",
+      botColor: normColor(p.color || p.den || p.denColor),
+      discProfile: (DISC_BY_DEN[normColor(p.color || p.den || p.denColor)] || null),
+      hand,
+      choice: `DECISION_${decision}`,
+      message: `BOT kiest ${decision}`,
+      kind: "BOT_DECISION",
+      at: Date.now(),
+      metrics: buildBotMetricsForLog({ game: g, bot: botAfter, players: playersForDecision || [], flagsRoundOverride: flags }),
+    };
+  });
+
+  if (logPayload) {
+    await logBotAction({ db, gameId, addLog: null, payload: logPayload });
+  }
+}
+
+/** ===== exported: start runner (1 action per tick + backoff, no interval storm) ===== */
+export function startBotRunner({ db, gameId, addLog, isBoardOnly = false, hostUid = null }) {
+  if (!db || !gameId) return () => {};
+  if (isBoardOnly) return () => {}; // board screens must NOT drive bots
+
+  const runnerKey = hostUid || getRunnerId();
+
+  const gameRef = doc(db, "games", gameId);
+  const playersCol = collection(db, "games", gameId, "players");
+
+  // Safe defaults (no ReferenceError if constants not defined elsewhere)
+  const DEBOUNCE_MS = typeof BOT_DEBOUNCE_MS === "number" ? BOT_DEBOUNCE_MS : 200;
+  const MIN_ACTION_MS = 1500; // critical: slows writes, prevents quota/hot-doc
+  const IDLE_MS = 2500; // when nothing to do
+  const MAX_BACKOFF_MS = 8000;
+
+  let latestGame = null;
+  let latestPlayers = [];
+
+  let unsubGame = null;
+  let unsubPlayers = null;
+
+  let stopped = false;
+  let busy = false;
+
+  let timer = null;
+  let scheduled = false;
+
+  let backoffMs = 0;
+
+  function clearTimer() {
+    if (timer) clearTimeout(timer);
+    timer = null;
+  }
+
+  function plan(ms) {
+    if (stopped) return;
+    clearTimer();
+    timer = setTimeout(loop, ms);
+  }
+
+  function nudge() {
+    // debounce snapshot storms
+    if (stopped) return;
+    if (scheduled) return;
+    scheduled = true;
+    setTimeout(() => {
+      scheduled = false;
+      // push loop soon, but don't spam
+      if (!timer) plan(0);
+    }, DEBOUNCE_MS);
+  }
+
+  function pickOneJob(g, bots) {
+    if (!g || !bots?.length) return null;
+
+    if (g.phase === "MOVE") {
+      const b = bots.find((x) => canBotMove(g, x));
+      return b ? { kind: "MOVE", botId: b.id } : null;
+    }
+
+    if (g.phase === "ACTIONS") {
+      const order = Array.isArray(g.opsTurnOrder) ? g.opsTurnOrder : [];
+      const target = Number(g.opsActiveCount || order.length);
+      const passesNow = Number(g.opsConsecutivePasses || 0);
+      const opsLocked = !!g.flagsRound?.opsLocked;
+
+      // ✅ als OPS klaar is, geen jobs meer plannen
+      if (opsLocked || (target > 0 && passesNow >= target)) return null;
+
+      const turnId = getOpsTurnId(g);
+      if (!turnId) return null;
+      const b = bots.find((x) => x.id === turnId);
+      return b ? { kind: "ACTIONS", botId: b.id } : null;
+    }
+
+    if (g.phase === "DECISION") {
+      const b = bots.find((x) => canBotDecide(g, x));
+      return b ? { kind: "DECISION", botId: b.id } : null;
+    }
+
+    return null;
+  }
+
+  async function loop() {
+    if (stopped) return;
+    if (busy) return plan(400);
+
+    const g = latestGame;
+
+    // Guardrails
+    if (!g || g.botsEnabled !== true) return plan(IDLE_MS);
+    if (isGameFinished(g)) return plan(IDLE_MS);
+    if (!isActiveRaidStatus(g.status)) return plan(IDLE_MS);
+    if (g.raidEndedByRooster) return plan(IDLE_MS);
+
+    const bots = (latestPlayers || []).filter((p) => p?.isBot);
+    const job = pickOneJob(g, bots);
+    if (!job) return plan(IDLE_MS);
+
+    busy = true;
+    try {
+      const gotLock = await acquireBotLock({ db, gameId, gameRef, runnerKey });
+      if (!gotLock) {
+        // backoff on contention
+        backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs ? backoffMs * 2 : 1000);
+        return plan(backoffMs);
+      }
+
+      backoffMs = 0;
+
+      // Execute EXACTLY ONE action per loop (huge quota win)
+      if (job.kind === "MOVE") {
+        await botDoMove({ db, gameId, botId: job.botId, latestPlayers });
+      } else if (job.kind === "ACTIONS") {
+        await botDoOpsTurn({ db, gameId, botId: job.botId, latestPlayers });
+      } else if (job.kind === "DECISION") {
+        await botDoDecision({ db, gameId, botId: job.botId, latestPlayers });
+      }
+    } catch (e) {
+      console.warn("[BOTS] loop error", e);
+      backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs ? backoffMs * 2 : 1000);
+      return plan(backoffMs);
+    } finally {
+      busy = false;
+    }
+
+    // schedule next allowed action
+    plan(MIN_ACTION_MS);
+  }
+
+  // --- snapshots ---
+  unsubGame = onSnapshot(gameRef, (snap) => {
+    latestGame = snap.exists() ? { id: snap.id, ...snap.data() } : null;
+    nudge();
+  });
+
+  unsubPlayers = onSnapshot(playersCol, (snap) => {
+    latestPlayers = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    nudge();
+  });
+
+  // kickstart
+  plan(500);
+
+  return function stop() {
+    stopped = true;
+    clearTimer();
+    if (typeof unsubGame === "function") unsubGame();
+    if (typeof unsubPlayers === "function") unsubPlayers();
+    unsubGame = null;
+    unsubPlayers = null;
+    latestGame = null;
+    latestPlayers = [];
+  };
+}
+
+/** ===== exported: add bot ===== */
+export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLUE", "GREEN", "YELLOW"] }) {
+  if (!db || !gameId) throw new Error("Missing db/gameId");
+
+  const gRef = doc(db, "games", gameId);
+  const playersRef = collection(db, "games", gameId, "players");
+
+  const gSnap = await getDoc(gRef);
+  if (!gSnap.exists()) throw new Error("Game not found");
+  const g = gSnap.data();
+
+  const pSnap = await getDocs(playersRef);
+  const players = pSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+
+  const maxJoin = players.reduce(
+    (m, p) => (Number.isFinite(p?.joinOrder) ? Math.max(m, p.joinOrder) : m),
+    -1
+  );
+  const joinOrder = maxJoin + 1;
+  const color = denColors[joinOrder % denColors.length];
+
+  // ✅ random bot name from pool (prefer unused), fallback to old pattern
+  const used = new Set((players || []).map((p) => String(p?.name || "").trim().toLowerCase()).filter(Boolean));
+  const available = BOT_NAME_POOL.filter((n) => !used.has(String(n).toLowerCase()));
+  const namePool = available.length ? available : BOT_NAME_POOL;
+  const pickedName = namePool[Math.floor(Math.random() * namePool.length)] || `BOT Fox ${joinOrder + 1}`;
+
+  let actionDeck = Array.isArray(g.actionDeck) ? [...g.actionDeck] : [];
+  const hand = [];
+  for (let i = 0; i < 3; i++) if (actionDeck.length) hand.push(actionDeck.pop());
+
+  await addDoc(playersRef, {
+    name: pickedName,
+    isBot: true,
+    isHost: false,
+    uid: null,
+    score: 0,
+    joinedAt: serverTimestamp(),
+    joinOrder,
+    color,
+    den: color,
     inYard: true,
     dashed: false,
-    hand: [],
-    loot: [],
-    eggs: 0,
-    hens: 0,
-    prize: 0,
-    score: 0,
-    color: null,
-    decision: null,
     burrowUsedThisRaid: false,
-  };
-  await setDoc(playerRef, seed, { merge: true });
-}
-
-// ===== MODAL CLOSE WIRING (SAFE: no redeclare) =====
-(() => {
-  // voorkom dubbel binden als dit blok per ongeluk 2x in player.js staat
-  if (globalThis.__VJ_MODAL_CLOSE_WIRING__) return;
-  globalThis.__VJ_MODAL_CLOSE_WIRING__ = true;
-
-  function bindModalClose(overlayEl, closeBtnEl, closeFn) {
-    if (closeBtnEl) {
-      closeBtnEl.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        closeFn();
-      });
-    }
-
-    // klik op backdrop sluit ook
-    if (overlayEl) {
-      overlayEl.addEventListener("click", (e) => {
-        if (e.target === overlayEl) closeFn();
-      });
-    }
-  }
-
-  // --- Lead Fox Command Center (IDs uit HTML) ---
-  const leadOverlay = document.getElementById("leadCommandModalOverlay");
-  const leadCloseBtn = document.getElementById("leadCommandModalClose");
-
-  const closeLead = () => {
-    try {
-      // als jouw functie bestaat, gebruik die
-      if (typeof closeLeadCommandCenter === "function") {
-        closeLeadCommandCenter();
-        return;
-      }
-    } catch {}
-    // fallback: gewoon verbergen
-    if (leadOverlay) leadOverlay.classList.add("hidden");
-  };
-
-  bindModalClose(leadOverlay, leadCloseBtn, closeLead);
-
-  // --- Action Cards Hand modal (IDs uit HTML) ---
-  const handOverlay = document.getElementById("handModalOverlay");
-  const handCloseBtn = document.getElementById("handModalClose");
-
-  const closeHand = () => {
-    // als je elders al closeHandModal() hebt, mag die blijven bestaan,
-    // maar we hebben hem niet nodig
-    if (handOverlay) handOverlay.classList.add("hidden");
-  };
-  
-// ✅ maak 'm weer bruikbaar voor playActionCard / andere code
-if (typeof globalThis.closeHandModal !== "function") {
-  globalThis.closeHandModal = closeHand;
-}
-
-  bindModalClose(handOverlay, handCloseBtn, closeHand);
-
-
-  // --- Loot modal (IDs uit HTML) ---
-  const lootOverlay = document.getElementById("lootModalOverlay");
-  const lootCloseBtn = document.getElementById("lootModalClose");
-
-  const closeLoot = () => {
-    try {
-      if (typeof closeLootModal === "function") {
-        closeLootModal();
-        return;
-      }
-    } catch {}
-    if (lootOverlay) lootOverlay.classList.add("hidden");
-  };
-
-  bindModalClose(lootOverlay, lootCloseBtn, closeLoot);
-
-  // --- ESC sluit overlays ---
-  document.addEventListener(
-    "keydown",
-    (e) => {
-      if (e.key !== "Escape") return;
-
-      if (leadOverlay && !leadOverlay.classList.contains("hidden")) closeLead();
-      if (handOverlay && !handOverlay.classList.contains("hidden")) closeHand();
-      if (lootOverlay && !lootOverlay.classList.contains("hidden")) closeLoot();
-    },
-    { passive: true }
-  );
-})();
-
-// ====== AUTH START ======
-initAuth(async () => {
-  if (!gameId || !playerId) return;
-
-  gameRef = doc(db, "games", gameId);
-  playerRef = doc(db, "games", gameId, "players", playerId);
-
-  await ensurePlayerDoc();
-  hostInitUI();
-
-  onSnapshot(gameRef, (snap) => {
-    if (!snap.exists()) {
-      currentGame = null;
-      lastGame = null;
-      if (gameStatusDiv) gameStatusDiv.textContent = "Spel niet gevonden.";
-      return;
-    }
-
-    const newGame = { id: snap.id, ...snap.data() };
-
-    // ✅ Compat/migratie: oud gebruik van flagsRound.noPeek als boolean -> nieuw: noPeekAll + noPeek[]
-    try {
-      const fr = newGame?.flagsRound || null;
-      if (fr && (typeof fr.noPeek === "boolean" || (fr.noPeek && typeof fr.noPeek === "object" && !Array.isArray(fr.noPeek)))) {
-        const np = fr.noPeek;
-        const all = (typeof np === "boolean") ? np : (typeof np?.all === "boolean" ? np.all : false);
-        const zones = Array.isArray(np) ? np : (Array.isArray(np?.zones) ? np.zones : (Array.isArray(fr.noGoZones) ? fr.noGoZones : []));
-        // alleen migreren als er nog geen noPeekAll is gezet
-        if (typeof fr.noPeekAll !== "boolean") {
-          updateDoc(gameRef, {
-            "flagsRound.noPeekAll": all,
-            "flagsRound.noPeekReason": String(fr.noPeekReason || ""),
-            "flagsRound.noPeek": Array.isArray(zones) ? zones : [],
-          }).catch(() => {});
-        }
-      }
-    } catch {}
-
-
-    if (prevGame && prevGame.leadIndex !== newGame.leadIndex) resetLeadCache();
-
-    applyHostHooks(prevGame, newGame, prevPlayer, currentPlayer, null);
-
-    currentGame = newGame;
-    prevGame = newGame;
-    lastGame = newGame;
-
-    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
-
-    renderGame();
-    
-   // ✅ update LCC ook bij game-updates (DEN INTEL verandert via SCOUT)
-try {
-  const lccOpen =
-    (typeof leadCommandModalOverlay !== "undefined") &&
-    leadCommandModalOverlay &&
-    !leadCommandModalOverlay.classList.contains("hidden");
-
-  if (lccOpen && typeof renderLeadCommandCenterUI === "function") {
-    renderLeadCommandCenterUI(
-      Number(newGame?.round ?? 0),
-      (typeof leadCCPlayers !== "undefined" && leadCCPlayers) ? leadCCPlayers : [],
-      (typeof leadCCLogs !== "undefined" && leadCCLogs) ? leadCCLogs : []
-    );
-  }
-} catch {}
-
+    decision: null,
+    hand,
+    loot: [],
   });
 
-  onSnapshot(playerRef, (snap) => {
-    if (!snap.exists()) {
-      currentPlayer = null;
-      lastMe = null;
-      if (playerNameEl) playerNameEl.textContent = "Speler niet gevonden.";
-      return;
-    }
-
-    const newPlayer = { id: snap.id, ...snap.data() };
-
-    try { if (typeof updateLootButtonState === "function") updateLootButtonState(prevPlayer, newPlayer); } catch {}
-
-    applyHostHooks(currentGame, currentGame, prevPlayer, newPlayer, null);
-
-    currentPlayer = newPlayer;
-    prevPlayer = newPlayer;
-    lastMe = newPlayer;
-
-    if (typeof updateHintButtonFromState === "function") updateHintButtonFromState();
-
-    renderPlayer();
-  });
-
-  // MOVE
-  if (btnSnatch) btnSnatch.addEventListener("click", performSnatch);
-  if (btnForage) btnForage.addEventListener("click", performForage);
-  if (btnScout) btnScout.addEventListener("click", performScout);
-  if (btnShift) btnShift.addEventListener("click", performShift);
-
-  // DECISION
-  if (btnLurk) btnLurk.addEventListener("click", () => selectDecision("LURK"));
-  if (btnBurrow) btnBurrow.addEventListener("click", () => selectDecision("BURROW"));
-  if (btnDash) btnDash.addEventListener("click", () => selectDecision("DASH"));
-
-  // ACTIONS
-  if (btnPass) btnPass.addEventListener("click", passAction);
-  if (btnHand) btnHand.addEventListener("click", openHandModal);
-  if (btnLoot) btnLoot.addEventListener("click", () => { openLootModal(); markLootSeen(); });
-  if (btnLead) btnLead.addEventListener("click", openLeadCommandCenter);
-
- // HINT (1 try/catch)
-if (btnHint) {
-  btnHint.addEventListener("click", () => {
-    try { btnHint.classList.remove("is-pulse"); } catch {}
-    console.log("[HINT] clicked", {
-      hasGame: !!lastGame,
-      hasMe: !!lastMe,
-      gameId: lastGame?.id,
-      meId: lastMe?.id,
-    });
-
-    if (!lastGame || !lastMe) {
-      alert("Hint: game/player state nog niet geladen.");
-      return;
-    }
-
-    let hint = null;
-
-    try {
-      hint = getAdvisorHint({
-        game: lastGame,
-        me: lastMe,
-        players: lastPlayers || [],
-        actions: lastActions || [],
-        profileKey: "BEGINNER_COACH",
-      });
-
-      
-      // UI: stop pulse + mark hint as "seen" (alleen OPS)
-      try { markHintSeenIfOps(hint, lastGame); } catch {}
-console.log("[advisor] hint object:", hint);
-      console.log("[advisor] title:", hint?.title);
-      console.log("[advisor] bullets:", hint?.bullets);
-      console.log("[advisor] alternatives:", hint?.alternatives);
-      console.log("[advisor] debug:", hint?.debug);
-
-      // NEW overlay (Lead Fox style) als default
-      if (typeof window.openAdvisorHintOverlay === "function") {
-        window.openAdvisorHintOverlay(hint, { game: lastGame, me: lastMe });
-        return;
-      }
-
-      // fallback: oude overlay
-      if (typeof showHint === "function") {
-        showHint(hint);
-        return;
-      }
-
-      console.warn("[HINT] geen overlay-functie gevonden (openAdvisorHintOverlay/showHint).");
-    } catch (err) {
-      console.error("[HINT] crashed:", err);
-
-      // fallback 1: oude overlay
-      try {
-        if (hint && typeof showHint === "function") {
-          showHint(hint);
-          return;
-        }
-      } catch (e) {}
-
-      // fallback 2: alert
-      alert("Hint crash: " + (err?.message || err));
-    }
-  });
-} else {
-  console.warn("[HINT] btnHint niet gevonden in DOM");
+  await updateDoc(gRef, { botsEnabled: true, actionDeck });
 }
-});
 
 
