@@ -48,6 +48,10 @@ const OPS_DISCARD_VISIBLE_MS = 3100;
 // After every played Action Card: log a full-bot "OPS snapshot" with fresh metrics
 const OPS_SNAPSHOT_ENABLED = true;
 
+// Fairness mode: humans currently don't see the Event Track UI, so bots can be forced to play blind by default.
+// Set to false if you want bots to use the public Event Track again.
+const BOT_BASE_NOPEEK = true;
+
 // DISC mapping per Den kleur
 const DISC_BY_DEN = { RED: "D", YELLOW: "I", GREEN: "S", BLUE: "C" };
 
@@ -780,7 +784,7 @@ function buildBotCtxForHeuristics({
 
 
   // --- next event facts (respect noPeek) ---
-  const flags = fillFlags(game?.flagsRound);
+  const flags = flagsForBot(game, bot);
   const noPeek = !!flags.noPeek;
   const nextKnown = !noPeek || knownUpcomingCount > 0;
   const nextId = nextKnown ? (noPeek ? (knownUpcomingEvents[0] || null) : getNextEventId(game)) : null;
@@ -1126,6 +1130,13 @@ function fillFlags(flagsRound) {
   };
 }
 
+function flagsForBot(game, bot, flagsRoundOverride=null) {
+  const base = flagsRoundOverride ? fillFlags(flagsRoundOverride) : fillFlags(game?.flagsRound);
+  if (BOT_BASE_NOPEEK && bot?.isBot) return { ...base, noPeek: true };
+  return base;
+}
+
+
 
 function getNextEventId(game) {
   if (Array.isArray(game.eventTrack) && typeof game.eventIndex === "number") {
@@ -1383,7 +1394,7 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
       .filter(Boolean);
 
     // ---------- flags / next event / knowledge ----------
-    const flags = fillFlags(game?.flagsRound);
+    const flags = flagsForBot(game, bot);
     const noPeek = !!flags.noPeek;
 
     const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
@@ -2618,6 +2629,10 @@ extraGameUpdates.opsVersion = Number(g.opsVersion || 0) + 1;
         if (newTrack) {
           extraGameUpdates.eventTrack = newTrack;
           extraGameUpdates.eventTrackVersion = Number(g.eventTrackVersion || 0) + 1;
+
+          // NEW: Dust cloud hides the next event info for everyone this round
+          flagsRound.noPeek = true;
+          extraGameUpdates.noPeekReason = "KICK_UP_DUST";
         }
       }
     }
@@ -2690,6 +2705,10 @@ extraGameUpdates.opsVersion = Number(g.opsVersion || 0) + 1;
     if (cardName === "Scatter!") {
       flagsRound.scatter = true;
       extraGameUpdates.scatterArmed = true;
+
+      // NEW: Scatter makes everyone lose track of the next event this round
+      flagsRound.noPeek = true;
+      extraGameUpdates.noPeekReason = "SCATTER";
     }
 
     if (cardName === "Scent Check") {
@@ -2776,8 +2795,12 @@ extraGameUpdates.opsVersion = Number(g.opsVersion || 0) + 1;
     if (cardName === "Kick Up Dust") {
       msg = flagsRound.lockEvents
         ? "BOT speelt Kick Up Dust (geen effect: Burrow Beacon actief)"
-        : "BOT speelt Kick Up Dust (future events geschud)";
+        : "BOT speelt Kick Up Dust (future events geschud + noPeek actief deze ronde)";
     }
+    if (cardName === "Scatter!") {
+      msg = "BOT speelt Scatter! (noPeek actief: event info verborgen deze ronde)";
+    }
+
     if (cardName === "Den Signal") {
       msg = `BOT speelt Den Signal (DEN ${normColor(p.color) || "?"} immune)`;
     }
@@ -2984,7 +3007,7 @@ const playersForDecision = base.length
   ? base.map((x) => (String(x?.id) === String(botId) ? { ...x, ...p } : x))
   : [{ ...p }];
 
-    const flags = fillFlags(g?.flagsRound);
+    const flags = flagsForBot(g, p);
     const noPeek = flags?.noPeek === true;
 
     const denColor = normColor(p?.color || p?.den || p?.denColor);
@@ -3414,4 +3437,6 @@ export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLU
 
   await updateDoc(gRef, { botsEnabled: true, actionDeck });
 }
+
+
 
