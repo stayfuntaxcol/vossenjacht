@@ -5,6 +5,7 @@
 import { getEventFacts, getActionFacts } from "../rulesIndex.js";
 import { getActionDefByName, getLootDef } from "../../cards.js";
 import { comboScore } from "../actionComboMatrix.js";
+import { getEffectiveNextEventIntel } from "./trackState.js";
 
 /** =========================
  *  TUNING (edit here)
@@ -218,13 +219,16 @@ function computeIsLead(game, me, players) {
   return String(base[idx]?.id || "") === meId;
 }
 
-/** flags: keep compatible with your fillFlags strict boolean noPeek,
- *  but also tolerate array forms (future-proof). */
+/** flags: keep compatible with strict boolean flags (no arrays) */
 function getFlags(flagsRound, meId = null) {
   const fr = flagsRound || {};
-  const noPeek = fr.noPeek === true; // STRICT boolean only (no arrays)
+
+  const noPeek   = fr.noPeek === true;     // STRICT boolean only
+  const lockHead = fr.lockHead === true;   // STRICT boolean only (No-Go Zone)
+
   return {
     lockEvents: false,
+    lockHead: false,      // default
     scatter: false,
     denImmune: {},
     noPeek: false,
@@ -235,7 +239,8 @@ function getFlags(flagsRound, meId = null) {
     holdStill: {},
     denIntel: {},
     ...(fr || {}),
-    noPeek, // override after spread
+    noPeek,    // override after spread
+    lockHead,  // override after spread
   };
 }
 
@@ -251,26 +256,41 @@ function hasActionIdInHand(hand, actionId) {
 }
 
 /** =========================
- *  Peek intel (N=3..5)
+ *  Peek intel (N=3..5) + MEMORY + HEAD LOCK
  *  ========================= */
 window.getPeekIntel = function getPeekIntel({ game, me, flagsRound = null, lookaheadN = null }) {
   const n = Number.isFinite(Number(lookaheadN)) ? Number(lookaheadN) : DEFAULTS.lookaheadN;
   const flags = getFlags(flagsRound || game?.flagsRound, String(me?.id || ""));
 
-  if (flags.noPeek) {
+  // Belangrijk: dit is de "track fingerprint" die jij in engine laat bumpen
+  // bij KickUpDust/SHIFT en bij REVEAL (advance head).
+  const trackV = Number(game?.eventTrackVersion ?? 0);
+
+  // No-Go Zone = HEAD lock (geen noPeek)
+  const headLocked = Boolean(flags.lockHead);
+
+  // --- MEMORY (compatibel met oude knownUpcomingEvents) ---
+  const mem = me?.intelMemory || me?.memory || {};
+  const memEvents = safeArr(mem.events || me?.knownUpcomingEvents).filter(Boolean).map(String);
+  const memV = Number(mem.trackVersion ?? mem.knownAtTrackVersion ?? NaN);
+  const memValid = memEvents.length && Number.isFinite(memV) && memV === trackV;
+
+  // 1) Als peek echt geblokkeerd is (noPeek) en er is GEEN head-lock:
+  //    gebruik memory als die nog geldig is; anders fallback naar knownUpcomingEvents.
+  if (flags.noPeek && !headLocked) {
+    if (memValid) {
+      const events = memEvents.slice(0, n);
+      const confidence = Number.isFinite(Number(mem.confidence))
+        ? Math.max(0, Math.min(1, Number(mem.confidence)))
+        : Math.min(1, events.length / n);
+
+      return { mode: "memory", confidence, events, trackVersion: trackV, headLocked: false };
+    }
+
     const known = safeArr(me?.knownUpcomingEvents).filter(Boolean).map(String);
     const events = known.slice(0, n);
-    return { mode: "known", confidence: events.length ? Math.min(1, events.length / n) : 0, events };
-  }
+    return { mode: "known", confidence: events.length ? Math.min(1, even
 
-  const events = [];
-  for (let k = 0; k < n; k++) {
-    const id = nextEventId(game, k);
-    if (!id) break;
-    events.push(String(id));
-  }
-  return { mode: "peek", confidence: events.length ? 1 : 0, events };
-}
 /** =========================
  *  Risk model (0..10)
  *  ========================= */
@@ -933,9 +953,16 @@ function simulateActionOnce({ play, game, me, players, flagsRound, cfg, seedTag 
   if (idx >= 0) g.leadIndex = idx;
 }
 
-  if (actionId === "NO_GO_ZONE") {
-    flags.opsLocked = true;
-  }
+if (actionId === "NO_GO_ZONE") {
+  // No-Go Zone = lock HEAD event for this round (confidence stays high)
+  flags.lockHead = true;
+
+  // Niet doen:
+  // flags.noPeek = true;
+
+  // Alleen laten staan als je echt actions wil locken (waarschijnlijk niet):
+  // flags.opsLocked = true;
+}
 
   if (actionId === "BURROW_BEACON") {
     flags.lockEvents = true;
