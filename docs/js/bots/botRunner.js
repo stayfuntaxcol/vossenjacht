@@ -48,10 +48,6 @@ const OPS_DISCARD_VISIBLE_MS = 3100;
 // After every played Action Card: log a full-bot "OPS snapshot" with fresh metrics
 const OPS_SNAPSHOT_ENABLED = true;
 
-// Fairness mode: humans currently don't see the Event Track UI, so bots can be forced to play blind by default.
-// Set to false if you want bots to use the public Event Track again.
-const BOT_BASE_NOPEEK = true;
-
 // DISC mapping per Den kleur
 const DISC_BY_DEN = { RED: "D", YELLOW: "I", GREEN: "S", BLUE: "C" };
 
@@ -784,7 +780,7 @@ function buildBotCtxForHeuristics({
 
 
   // --- next event facts (respect noPeek) ---
-  const flags = flagsForBot(game, bot);
+  const flags = fillFlags(game?.flagsRound);
   const noPeek = !!flags.noPeek;
   const nextKnown = !noPeek || knownUpcomingCount > 0;
   const nextId = nextKnown ? (noPeek ? (knownUpcomingEvents[0] || null) : getNextEventId(game)) : null;
@@ -1112,30 +1108,42 @@ function classifyEvent(eventId) {
 
 function fillFlags(flagsRound) {
   const fr = flagsRound || {};
-  const noPeek = fr.noPeek === true; // STRICT boolean only (prevents [] -> true)
+
+  // No-Go Zone: blocked scout positions (1-based)
+  const noGoPositions =
+    Array.isArray(fr.noPeek)
+      ? fr.noPeek
+      : Array.isArray(fr.noGoZones)
+        ? fr.noGoZones
+        : (fr.noPeek && typeof fr.noPeek === "object" && !Array.isArray(fr.noPeek) && Array.isArray(fr.noPeek.zones))
+          ? fr.noPeek.zones
+          : [];
+
+  // Global blind play (no free track knowledge)
+  const noPeekAll =
+    fr?.noPeekAll === true ||
+    fr?.noPeek === true ||
+    (fr?.noPeek && typeof fr.noPeek === "object" && !Array.isArray(fr.noPeek) && fr.noPeek.all === true);
 
   return {
     lockEvents: false,
     scatter: false,
     denImmune: {},
-    noPeek: false,
+    noPeek: false,       // global blind play (boolean for bot logic)
+    noPeekAll: false,    // canonical boolean (UI + bots)
+    noGoPositions: [],   // No-Go Zone list (array)
     predictions: [],
     opsLocked: false,
     followTail: {},
     scentChecks: [],
     holdStill: {},
-    denIntel: {}, 
+    denIntel: {},
     ...(fr || {}),
-    noPeek, // override after spread
+    noGoPositions: (noGoPositions || []).map((x) => Number(x)).filter((x) => Number.isFinite(x)),
+    noPeekAll: !!noPeekAll,
+    noPeek: !!noPeekAll,
   };
 }
-
-function flagsForBot(game, bot, flagsRoundOverride=null) {
-  const base = flagsRoundOverride ? fillFlags(flagsRoundOverride) : fillFlags(game?.flagsRound);
-  if (BOT_BASE_NOPEEK && bot?.isBot) return { ...base, noPeek: true };
-  return base;
-}
-
 
 
 function getNextEventId(game) {
@@ -1394,7 +1402,7 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
       .filter(Boolean);
 
     // ---------- flags / next event / knowledge ----------
-    const flags = flagsForBot(game, bot);
+    const flags = fillFlags(game?.flagsRound);
     const noPeek = !!flags.noPeek;
 
     const knownUpcomingEvents = Array.isArray(bot?.knownUpcomingEvents)
@@ -1982,7 +1990,7 @@ if (share && denColor) {
     // - boolean true => global "no-peek mode"
     // - array [pos,...] => No-Go Zone blocked scout positions (1-based)
     const noPeekMode = flags?.noPeek === true;
-    const noGoPositions = (Array.isArray(flags?.noPeek) ? flags.noPeek : [])
+    const noGoPositions = (Array.isArray(flags?.noGoPositions) ? flags.noGoPositions : [])
       .map((x) => Number(x))
       .filter((x) => Number.isFinite(x));
 
@@ -2629,10 +2637,6 @@ extraGameUpdates.opsVersion = Number(g.opsVersion || 0) + 1;
         if (newTrack) {
           extraGameUpdates.eventTrack = newTrack;
           extraGameUpdates.eventTrackVersion = Number(g.eventTrackVersion || 0) + 1;
-
-          // NEW: Dust cloud hides the next event info for everyone this round
-          flagsRound.noPeek = true;
-          extraGameUpdates.noPeekReason = "KICK_UP_DUST";
         }
       }
     }
@@ -2702,13 +2706,18 @@ extraGameUpdates.opsVersion = Number(g.opsVersion || 0) + 1;
       flagsRound.lockEvents = true;
     }
 
+    if (cardName === "Kick Up Dust") {
+      if (!flagsRound.lockEvents) {
+        flagsRound.noPeekAll = true;
+        flagsRound.noPeekReason = "KICK_UP_DUST";
+      }
+    }
+
     if (cardName === "Scatter!") {
       flagsRound.scatter = true;
       extraGameUpdates.scatterArmed = true;
-
-      // NEW: Scatter makes everyone lose track of the next event this round
-      flagsRound.noPeek = true;
-      extraGameUpdates.noPeekReason = "SCATTER";
+      flagsRound.noPeekAll = true;
+      flagsRound.noPeekReason = "SCATTER";
     }
 
     if (cardName === "Scent Check") {
@@ -2718,8 +2727,9 @@ extraGameUpdates.opsVersion = Number(g.opsVersion || 0) + 1;
     }
 
     if (cardName === "No-Go Zone") {
-      // No-Go Zone: hide the next event info for everyone this round
-      flagsRound.noPeek = true;
+      // No-Go Zone: iedereen speelt blind (geen gratis track-kennis)
+      flagsRound.noPeekAll = true;
+      flagsRound.noPeekReason = "NO_GO_ZONE";
     }
 
     if (cardName === "Follow the Tail") {
@@ -2795,12 +2805,8 @@ extraGameUpdates.opsVersion = Number(g.opsVersion || 0) + 1;
     if (cardName === "Kick Up Dust") {
       msg = flagsRound.lockEvents
         ? "BOT speelt Kick Up Dust (geen effect: Burrow Beacon actief)"
-        : "BOT speelt Kick Up Dust (future events geschud + noPeek actief deze ronde)";
+        : "BOT speelt Kick Up Dust (future events geschud)";
     }
-    if (cardName === "Scatter!") {
-      msg = "BOT speelt Scatter! (noPeek actief: event info verborgen deze ronde)";
-    }
-
     if (cardName === "Den Signal") {
       msg = `BOT speelt Den Signal (DEN ${normColor(p.color) || "?"} immune)`;
     }
@@ -3007,7 +3013,7 @@ const playersForDecision = base.length
   ? base.map((x) => (String(x?.id) === String(botId) ? { ...x, ...p } : x))
   : [{ ...p }];
 
-    const flags = flagsForBot(g, p);
+    const flags = fillFlags(g?.flagsRound);
     const noPeek = flags?.noPeek === true;
 
     const denColor = normColor(p?.color || p?.den || p?.denColor);
@@ -3198,11 +3204,16 @@ try {
       ? Number(dec.meta.dashPushNext)
       : (Number.isFinite(Number(p?.dashPush)) ? Number(p.dashPush) : 0);
 
-  const update = {
-  decision,
-  ...(Number.isFinite(Number(dashPushNext)) ? { dashPush: dashPushNext } : {}),
-  // 👇 NIET hier zetten. Engine consume't BURROW bij REVEAL.
-};
+    // ✅ Legality: BURROW is 1x per raid
+    if (decision === "BURROW" && burrowUsedThisRaid) {
+      decision = "DASH";
+    }
+
+    const update = {
+      decision,
+      ...(Number.isFinite(Number(dashPushNext)) ? { dashPush: dashPushNext } : {}),
+      ...(decision === "BURROW" ? { burrowUsedThisRaid: true } : {}),
+    };
 
     tx.update(pRef, update);
 
@@ -3437,6 +3448,7 @@ export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLU
 
   await updateDoc(gRef, { botsEnabled: true, actionDeck });
 }
+
 
 
 
