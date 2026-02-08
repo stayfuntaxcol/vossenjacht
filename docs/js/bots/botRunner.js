@@ -1120,11 +1120,8 @@ function fillFlags(flagsRound) {
           : [];
 
   // Global blind play (no free track knowledge)
-  const noPeekAll =
-    fr?.noPeekAll === true ||
-    fr?.noPeek === true ||
-    (fr?.noPeek && typeof fr.noPeek === "object" && !Array.isArray(fr.noPeek) && fr.noPeek.all === true);
-
+  // Canonical only: ignore legacy flagsRound.noPeek booleans/objects so bots aren't blind by accident.
+  const noPeekAll = fr?.noPeekAll === true;
   return {
     lockEvents: false,
     scatter: false,
@@ -3448,7 +3445,3 @@ export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLU
 
   await updateDoc(gRef, { botsEnabled: true, actionDeck });
 }
-
-
-
-
