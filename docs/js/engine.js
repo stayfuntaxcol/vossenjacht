@@ -951,7 +951,7 @@ const lead = pickLeadFromBase(game, base);
     lockEvents: false,
     scatter: false,
     denImmune: {},
-    noPeek: [],
+    noPeek: false,
     predictions: [],
     opsLocked: false,
     followTail: {},
