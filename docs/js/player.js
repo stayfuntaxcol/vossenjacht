@@ -882,13 +882,46 @@ function mergeRoundFlags(game) {
     lockEvents: false,
     scatter: false,
     denImmune: {},
+    // noPeek = posities (1-based) die geblokkeerd zijn door No-Go Zone
     noPeek: [],
+    // noPeekAll = "blind play" (bots + UI): geen gratis track-kennis / geen track preview
+    noPeekAll: false,
+    noPeekReason: "",
     predictions: [],
     opsLocked: false,
     followTail: {},
     scentChecks: [],
   };
-  return { ...base, ...(game?.flagsRound || {}) };
+
+  const raw = (game && game.flagsRound) ? game.flagsRound : {};
+  const out = { ...base, ...(raw || {}) };
+
+  // Backwards compatibility:
+  // - oud: flagsRound.noPeek = boolean (global blind)
+  // - oud: flagsRound.noPeek = { all: true, zones: [...] }
+  const np = raw ? raw.noPeek : undefined;
+
+  if (typeof np === "boolean") {
+    out.noPeekAll = np;
+    out.noPeek = [];
+  } else if (np && typeof np === "object" && !Array.isArray(np)) {
+    if (typeof np.all === "boolean") out.noPeekAll = np.all;
+    if (Array.isArray(np.zones)) out.noPeek = np.zones.slice();
+  } else if (Array.isArray(np)) {
+    out.noPeek = np.slice();
+  }
+
+  // Alternatieve veldnamen (als we ooit migreren)
+  if (Array.isArray(raw?.noGoZones)) out.noPeek = raw.noGoZones.slice();
+  if (typeof raw?.noPeekAll === "boolean") out.noPeekAll = raw.noPeekAll;
+  if (typeof raw?.noPeekReason === "string") out.noPeekReason = raw.noPeekReason;
+
+  // Safety: force types
+  if (!Array.isArray(out.noPeek)) out.noPeek = [];
+  out.noPeekAll = !!out.noPeekAll;
+  out.noPeekReason = String(out.noPeekReason || "");
+
+  return out;
 }
 // ===== DEN INTEL (team shared SCOUT) =====
 function normalizeDenKey(c) {
@@ -965,9 +998,27 @@ function getTeamScoutsThisRound(game, player) {
     });
   }
 
+  // Filter stale scouts if the Event Track changed (Kick Up Dust / SHIFT):
+  // alleen scouts tonen die nog steeds matchen met de huidige track[pos].
+  const track = Array.isArray(game?.eventTrack) ? game.eventTrack : [];
+  let filtered = out;
+  if (track.length) {
+    filtered = out.filter((s) => {
+      if (!s || !s.eventId) return false;
+      const idx =
+        typeof s.index === "number"
+          ? s.index
+          : s.pos != null
+            ? s.pos - 1
+            : null;
+      if (idx == null || idx < 0 || idx >= track.length) return false;
+      return track[idx] === s.eventId;
+    });
+  }
+
   // newest first
-  out.sort((a, b) => (b.atMs || 0) - (a.atMs || 0));
-  return out;
+  filtered.sort((a, b) => (b.atMs || 0) - (a.atMs || 0));
+  return filtered;
 }
 
 function renderEventCardInto(container, ev, opts = {}) {
@@ -1052,6 +1103,65 @@ function renderTeamScoutsInto(container, scouts, roundNow) {
     const sub = document.createElement("div");
     sub.className = "vj-scout-sub";
     sub.textContent = s.byName ? `door ${s.byName}` : "";
+
+    meta.appendChild(title);
+    meta.appendChild(sub);
+
+    item.appendChild(meta);
+    grid.appendChild(item);
+  }
+
+  container.appendChild(grid);
+}
+
+function renderTrackPeekStrip(container, game, opts = {}) {
+  if (!container || !game) return;
+
+  const phase = String(game?.phase || "");
+  if (phase === "REVEAL" || phase === "END") return;
+
+  const { track, eventIndex } = splitEventTrackByStatus(game);
+  if (!track || !track.length) return;
+
+  const max = Math.max(1, Math.min(3, Number(opts.max || 2)));
+
+  const head = document.createElement("div");
+  head.className = "vj-scout-head";
+  head.textContent = "TRACK PREVIEW (open info)";
+  container.appendChild(head);
+
+  const grid = document.createElement("div");
+  grid.className = "vj-scout-grid";
+
+  for (let i = 0; i < max; i++) {
+    const idx = Number(eventIndex || 0) + i;
+    if (idx < 0 || idx >= track.length) break;
+
+    const evId = track[idx];
+    const ev = getEventById(evId);
+    if (!ev) continue;
+
+    const item = document.createElement("div");
+    item.className = "vj-scout-item";
+
+    if (ev.imageFront) {
+      const img = document.createElement("img");
+      img.src = ev.imageFront;
+      img.alt = ev.title || "Event";
+      img.className = "vj-scout-thumb";
+      item.appendChild(img);
+    }
+
+    const meta = document.createElement("div");
+    meta.className = "vj-scout-meta";
+
+    const title = document.createElement("div");
+    title.className = "vj-scout-title";
+    title.textContent = `#${idx + 1} ${ev.title || ""}`.trim();
+
+    const sub = document.createElement("div");
+    sub.className = "vj-scout-sub";
+    sub.textContent = i === 0 ? "volgende" : "daarna";
 
     meta.appendChild(title);
     meta.appendChild(sub);
@@ -1675,18 +1785,38 @@ function renderGame() {
   }
 
   if (eventScoutPreviewDiv) {
-    // toon alle team-scans van jouw den (deze ronde)
-    renderTeamScoutsInto(eventScoutPreviewDiv, teamScouts, roundNow);
-  }
+    eventScoutPreviewDiv.innerHTML = "";
 
+    const flags = mergeRoundFlags(g);
+
+    // Track preview (alleen als blind play NIET actief is)
+    if (!flags.noPeekAll) {
+      renderTrackPeekStrip(eventScoutPreviewDiv, g, { max: 2 });
+    }
+
+    // TEAM SCOUTS (jouw den, deze ronde)
+    const scoutsWrap = document.createElement("div");
+    eventScoutPreviewDiv.appendChild(scoutsWrap);
+    renderTeamScoutsInto(scoutsWrap, teamScouts, roundNow);
+  }
   if (specialFlagsDiv) {
     const flags = mergeRoundFlags(g);
+
+    if (flags.noPeekAll) {
+      const chip = document.createElement("span");
+      chip.className = "event-flag-chip event-flag-chip--danger";
+      chip.textContent =
+        "Blind play actief" + (flags.noPeekReason ? ` (${flags.noPeekReason})` : "");
+      specialFlagsDiv.appendChild(chip);
+    }
+
     if (flags.scatter) {
       const chip = document.createElement("span");
       chip.className = "event-flag-chip event-flag-chip--danger";
       chip.textContent = "Scatter! – niemand mag Scouten deze ronde";
       specialFlagsDiv.appendChild(chip);
     }
+
     if (flags.lockEvents) {
       const chip = document.createElement("span");
       chip.className = "event-flag-chip event-flag-chip--safe";
@@ -3035,7 +3165,8 @@ async function selectDecision(kind) {
   }
 
   const update = { decision: kind };
-  
+  if (kind === "BURROW") update.burrowUsedThisRaid = true;
+
   await updateDoc(playerRef, update);
   await logMoveAction(game, player, `DECISION_${kind}`, "DECISION");
 }
@@ -3386,6 +3517,9 @@ async function passAction() {
 async function playScatter(game, player) {
   const flags = mergeRoundFlags(game);
   flags.scatter = true;
+  // Scatter! => iedereen speelt blind (geen gratis track-kennis)
+  flags.noPeekAll = true;
+  flags.noPeekReason = "SCATTER";
   await updateDoc(gameRef, { flagsRound: flags });
   await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
@@ -3457,6 +3591,10 @@ async function playNoGoZone(game, player) {
   if (!noPeek.includes(pos)) noPeek.push(pos);
   flags.noPeek = noPeek;
 
+  // No-Go Zone => iedereen speelt blind (geen gratis track-kennis)
+  flags.noPeekAll = true;
+  flags.noPeekReason = "NO_GO_ZONE";
+
   await updateDoc(gameRef, { flagsRound: flags });
   await applyOpsActionAndAdvanceTurn({ db, gameRef, actorId: playerId, isPass: false });
   await addLog(gameId, {
@@ -3476,8 +3614,25 @@ async function playKickUpDust(game, player) {
     alert("Burrow Beacon is actief – de Event Track is gelocked en kan niet meer veranderen.");
     return false;
   }
+
+  // Kick Up Dust => vanaf nu blind play (ook voor bots / track preview)
+  flags.noPeekAll = true;
+  flags.noPeekReason = "KICK_UP_DUST";
+  await updateDoc(gameRef, { flagsRound: flags });
+
   await applyKickUpDust(gameId);
-  setActionFeedback("Kick Up Dust: de toekomstige Event kaarten zijn door elkaar geschud. Onthulde kaarten blijven op hun plek.");
+
+  await addLog(gameId, {
+    round: game.round || 0,
+    phase: "ACTIONS",
+    kind: "ACTION",
+    playerId,
+    message: `${player.name || "Speler"} speelt Kick Up Dust – toekomstige Events zijn geschud en iedereen speelt blind.`,
+  });
+
+  setActionFeedback(
+    "Kick Up Dust: de toekomstige Event kaarten zijn door elkaar geschud. Onthulde kaarten blijven op hun plek."
+  );
   return true;
 }
 
@@ -3917,6 +4072,25 @@ initAuth(async () => {
 
     const newGame = { id: snap.id, ...snap.data() };
 
+    // ✅ Compat/migratie: oud gebruik van flagsRound.noPeek als boolean -> nieuw: noPeekAll + noPeek[]
+    try {
+      const fr = newGame?.flagsRound || null;
+      if (fr && (typeof fr.noPeek === "boolean" || (fr.noPeek && typeof fr.noPeek === "object" && !Array.isArray(fr.noPeek)))) {
+        const np = fr.noPeek;
+        const all = (typeof np === "boolean") ? np : (typeof np?.all === "boolean" ? np.all : false);
+        const zones = Array.isArray(np) ? np : (Array.isArray(np?.zones) ? np.zones : (Array.isArray(fr.noGoZones) ? fr.noGoZones : []));
+        // alleen migreren als er nog geen noPeekAll is gezet
+        if (typeof fr.noPeekAll !== "boolean") {
+          updateDoc(gameRef, {
+            "flagsRound.noPeekAll": all,
+            "flagsRound.noPeekReason": String(fr.noPeekReason || ""),
+            "flagsRound.noPeek": Array.isArray(zones) ? zones : [],
+          }).catch(() => {});
+        }
+      }
+    } catch {}
+
+
     if (prevGame && prevGame.leadIndex !== newGame.leadIndex) resetLeadCache();
 
     applyHostHooks(prevGame, newGame, prevPlayer, currentPlayer, null);
@@ -4055,4 +4229,5 @@ console.log("[advisor] hint object:", hint);
   console.warn("[HINT] btnHint niet gevonden in DOM");
 }
 });
+
 
