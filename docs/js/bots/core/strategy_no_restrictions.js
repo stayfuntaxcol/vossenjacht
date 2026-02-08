@@ -289,7 +289,40 @@ window.getPeekIntel = function getPeekIntel({ game, me, flagsRound = null, looka
 
     const known = safeArr(me?.knownUpcomingEvents).filter(Boolean).map(String);
     const events = known.slice(0, n);
-    return { mode: "known", confidence: events.length ? Math.min(1, even
+    return { mode: "known", confidence: events.length ? Math.min(1, events.length / n) : 0, events, trackVersion: trackV, headLocked: false };
+  }
+
+  // 2) Als HEAD gelocked is (No-Go Zone):
+  //    - eerste event is gegarandeerd correct
+  //    - als je toch "noPeek" gebruikt voor andere redenen: geef alleen HEAD terug
+  if (headLocked && flags.noPeek) {
+    const head = nextEventId(game, 0);
+    const events = head ? [String(head)] : [];
+    const confidence = events.length ? 1 : 0;
+
+    // cache in-memory (handig voor dezelfde tick)
+    me.intelMemory = { events, confidence, trackVersion: trackV, source: "LOCK", updatedAt: Date.now() };
+
+    return { mode: "lock", confidence, events, trackVersion: trackV, headLocked: true };
+  }
+
+  // 3) Normale peek (of lock + peek toegestaan): pak events van de track
+  const events = [];
+  for (let k = 0; k < n; k++) {
+    const id = nextEventId(game, k);
+    if (!id) break;
+    events.push(String(id));
+  }
+
+  const confidence = events.length ? 1 : 0;
+  const mode = headLocked ? "lock+peek" : "peek";
+
+  // cache (belangrijk voor "menselijk geheugen" wanneer later noPeek aan staat)
+  me.intelMemory = { events, confidence, trackVersion: trackV, source: mode.toUpperCase(), updatedAt: Date.now() };
+
+  return { mode, confidence, events, trackVersion: trackV, headLocked };
+};
+
 
 /** =========================
  *  Risk model (0..10)
