@@ -1431,16 +1431,34 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
     const lootLen = Array.isArray(bot?.loot) ? bot.loot.length : 0;
 
     // IMPORTANT: pass the ctx shape your rulesIndex expects
-    const nextEventFacts = nextId
-      ? getEventFacts(nextId, {
-          denColor,
-          isLead,
-          flagsRound: flags,
-          lootLen,
-          carryExact,
-          roosterSeen,
-        })
-      : null;
+    let nextEventFacts = nextId
+  ? getEventFacts(nextId, {
+      denColor,
+      isLead,
+      flagsRound: flags,
+      lootLen,
+      carryExact,
+      roosterSeen,
+    })
+  : null;
+
+// ✅ bug-guard: DEN appliesToMe correct maken (aiKit kan dit verkeerd zetten)
+const appliesToMeFixed = (() => {
+  const id = String(nextId || "");
+  if (!id.startsWith("DEN_")) return null;
+
+  const evDen = id.slice(4).toUpperCase();
+  const myDen = String(denColor || "").toUpperCase();
+
+  const denImmune = (flags && typeof flags === "object" ? flags.denImmune : null) || null;
+  const immuneToMyDen = !!(denImmune && myDen && (denImmune[myDen] || denImmune[String(myDen).toLowerCase()]));
+
+  return (evDen === myDen) && !immuneToMyDen;
+})();
+
+if (nextEventFacts && appliesToMeFixed !== null && String(nextId || "").startsWith("DEN_")) {
+  nextEventFacts = { ...nextEventFacts, appliesToMe: appliesToMeFixed };
+}
 
     const dangerNext = nextEventFacts
       ? Math.max(
@@ -1567,6 +1585,15 @@ async function pickBestActionFromHand({ db, gameId, game, bot, players }) {
 
     for (const id of ids) ctx["handHas_" + id] = true;
 
+    // ✅ HARD PRIORITY: als DEN jou pakt en je hebt MASK_SWAP → speel die
+if (nextKnown && appliesToMeFixed === true && ids.includes("MASK_SWAP")) {
+  const chosenName = entries.find((e) => e.actionId === "MASK_SWAP")?.handToken || null;
+  const targetId = pickRichestTarget(players || [], bot.id);
+  if (chosenName && targetId) {
+    return { name: chosenName, actionId: "MASK_SWAP", targetId };
+  }
+}
+
   // ---------- ranking (strategy.js) ----------
 const usedIds = (
   Array.isArray(game?.discardThisRoundActionIds) && game.discardThisRoundActionIds.length
@@ -1656,25 +1683,34 @@ if (id === "PACK_TINKER") {
         if (!targetId) continue;
       }
 
-      if (id === "FOLLOW_THE_TAIL" && !targetId) {
-        targetId = followPick.targetId || pickRichestTarget(players || [], bot.id);
-        if (!targetId) continue;
-      }
+      if (id === "FOLLOW_THE_TAIL") {
+  // ✅ als next al known is: Follow is meestal wasted
+  if (nextKnown) continue;
+
+  // ✅ alleen gebruiken als het “eligible” is (zelfde den of den al revealed)
+  if (!followPick.eligible || !followPick.targetId) continue;
+
+  if (!targetId) targetId = followPick.targetId;
+  if (!targetId) continue;
+}
 
       if (id === "SCENT_CHECK" && !targetId) {
-        const intelTarget =
-          (players || [])
-            .filter((x) => x?.id && x.id !== bot.id && isInYard(x))
-            .map((x) => ({
-              id: x.id,
-              k: Array.isArray(x?.knownUpcomingEvents) ? x.knownUpcomingEvents.length : 0,
-              loot: sumLootPoints(x),
-            }))
-            .sort((a, b) => (b.k - a.k) || (b.loot - a.loot))[0]?.id || null;
+  const best =
+    (players || [])
+      .filter((x) => x?.id && x.id !== bot.id && isInYard(x))
+      .map((x) => ({
+        id: x.id,
+        k: Array.isArray(x?.knownUpcomingEvents) ? x.knownUpcomingEvents.length : 0,
+        loot: sumLootPoints(x),
+      }))
+      .sort((a, b) => (b.k - a.k) || (b.loot - a.loot))[0] || null;
 
-        targetId = intelTarget || pickRichestTarget(players || [], bot.id);
-        if (!targetId) continue;
-      }
+  // ✅ niemand heeft intel → dan is Scent Check vaak waste
+  if (!best || Number(best.k || 0) <= 0) continue;
+
+  targetId = best.id || null;
+  if (!targetId) continue;
+}
 
       return { name: chosenName, actionId: id, targetId };
     }
@@ -1711,7 +1747,16 @@ function canBotDecide(game, p) {
   if (game.phase !== "DECISION") return false;
   if (game.raidEndedByRooster) return false;
   if (!isInYard(p)) return false;
+
+  const roundNow = Number(game?.round || 0);
+
+  // ✅ hard lock per round: als er al een decision voor deze round is gezet → nooit meer overschrijven
+  const decidedRound = Number.isFinite(Number(p?.decisionRound)) ? Number(p.decisionRound) : null;
+  if (decidedRound !== null && decidedRound === roundNow) return false;
+
+  // legacy guard (oude docs zonder decisionRound)
   if (p.decision) return false;
+
   return true;
 }
 
@@ -3037,23 +3082,36 @@ const metricsNow = buildBotMetricsForLog({
   flagsRoundOverride: flags,
 });
 
-// ---- HYBRID DECISION ----
+// ---- DECISION (noPeek + memory + DISC fallback) ----
 let decision = "LURK";
 let rec = null;
 let dec = null;
 
-// simpele intel-check (optioneel): als bot knownUpcomingEvents heeft, strategy mag ook in noPeek
+const discProfile = (DISC_BY_DEN[denColor] || null);
+
+// intel-check: knownUpcomingEvents
 const known = Array.isArray(meForDecision?.knownUpcomingEvents)
-  ? meForDecision.knownUpcomingEvents.filter(Boolean)
+  ? meForDecision.knownUpcomingEvents.filter(Boolean).map((x) => String(x))
   : [];
-const hasKnown = known.length > 0;
 
-const useStrategy = !noPeek || hasKnown;
+// intel-check: memory (alleen geldig als trackVersion matcht)
+const trackV = Number(g?.eventTrackVersion ?? 0);
+const mem = (meForDecision?.intelMemory || meForDecision?.memory || null);
+const memEvents = Array.isArray(mem?.events)
+  ? mem.events.filter(Boolean).map((x) => String(x))
+  : [];
+const memV = Number(mem?.trackVersion ?? mem?.knownAtTrackVersion ?? NaN);
+const memValid = memEvents.length > 0 && Number.isFinite(memV) && memV === trackV;
 
-// ✅ noPeek + eigen intel: geef strategy expliciet de knownUpcomingEvents mee
-const peekIntel = (noPeek && hasKnown)
-  ? { events: known.map((x) => String(x)) }
+// peekIntel alleen bij noPeek (anders leest strategy zelf uit eventTrack)
+const peekIntel = noPeek
+  ? (memValid
+      ? { events: memEvents, confidence: Number(mem?.confidence ?? 0.7), trackVersion: trackV }
+      : (known.length ? { events: known, confidence: 0.9, trackVersion: trackV } : null))
   : null;
+
+// Strategy gebruiken als: noPeek=false óf we hebben echte intel (known/memory)
+const useStrategy = (!noPeek) || !!peekIntel;
 
 if (useStrategy) {
   dec = evaluateDecision({
@@ -3067,84 +3125,54 @@ if (useStrategy) {
 
   decision = dec?.decision || "LURK";
 } else {
-  rec = recommendDecision({
-    presetKey,
-    denColor,
-    game: g,
-    me: meForDecision,
-    ctx: {
-      round: Number(g.round || 0),
-      isLead,
-      dashDecisionsSoFar,
+  // noPeek=true + geen intel → probabilistische fallback met DISC verschil
+  const cfg0 = { ...BOT_UTILITY_CFG, ...(getStrategyCfgForBot(meForDecision, g) || {}) };
 
-      roosterSeen: Number.isFinite(Number(g?.roosterSeen))
-        ? Number(g.roosterSeen)
-        : countRevealedRoosters(g),
-      postRooster2Window: countRevealedRoosters(g) >= 2,
+  const pDanger = Number(metricsNow?.pDanger ?? 0); // 0..1
+  const dStay = Number(metricsNow?.dangerStay ?? metricsNow?.dangerEffective ?? 0); // 0..10
+  const dashPushNow = Number.isFinite(Number(p?.dashPush)) ? Number(p.dashPush) : 0;
 
-      carryValue: 0,
-      carryValueRec: 0,
+  // DISC: hoeveel “unknown danger” tolereren voordat je HIDE kiest
+  const lurkMaxMap = { D: 4.4, I: 4.0, C: 3.3, S: 2.6 };
+  const lurkMax = Number.isFinite(lurkMaxMap?.[discProfile]) ? lurkMaxMap[discProfile] : 3.0;
 
-      dangerVec: metricsNow?.dangerVec,
-      dangerPeak: metricsNow?.dangerPeak,
-      dangerStay: metricsNow?.dangerStay,
-      dangerEffective: metricsNow?.dangerEffective,
-      nextEventIdUsed: metricsNow?.nextEventIdUsed,
-      pDanger: metricsNow?.pDanger,
-      confidence: metricsNow?.confidence,
+  // Rooster3 kans → bij hoge kans altijd DASH
+  const pRooster3 = Number(cfg0.canonPThirdRoosterThreshold ?? 0.75);
 
-      flagsRound: g?.flagsRound || null,
-    },
-  });
+  // dashPush defensief gedrag (zelfde idee als strategy fallback)
+  const dashPushBase = Number(cfg0.canonDashPushBase ?? 7.0);
+  const dashPushThreshold = dashPushBase + Math.min(3, Number(dashDecisionsSoFar || 0)) * 0.35;
 
-  decision = rec?.decision || "LURK";
-}
+  let reason = "noPeek_prob_fallback";
 
-// Next event id only when allowed (noPeek=false OR bot has known intel)
-const nextEvent0 = (!noPeek)
-  ? nextEventId(g, 0)
-  : (hasKnown ? String(known[0] || "") : null);
-
-// (optioneel) debug vlag als bot BURROW wil maar al gebruikt is
-const burrowAttemptWhileUsed = (decision === "BURROW") && burrowUsedThisRaid;
-
-// Alleen als bot op LURK uitkomt: check of LURK (stay) veilig is op basis van nextEvent.
-// Onbekend => liever DASH dan dood.
-if (!useStrategy && decision === "LURK") {
-  let dStay = Number.NaN;
-
-  if (nextEvent0) {
-    try {
-      const f = getEventFacts(String(nextEvent0 || ""), {
-        game: g,
-        me: meForDecision,
-        denColor,
-        isLead,
-        flagsRound: flags,
-      });
-      const dl = Number(f?.dangerLurk);
-      if (Number.isFinite(dl)) dStay = dl;
-    } catch (e) {}
+  if (pDanger >= pRooster3) {
+    decision = "DASH";
+    reason = "noPeek_rooster3_prob";
+  } else if (dashPushNow >= dashPushThreshold) {
+    decision = burrowUsedThisRaid ? "DASH" : "BURROW";
+    reason = "noPeek_dashPush_defensive";
+  } else if (dStay <= lurkMax) {
+    decision = "LURK";
+    reason = "noPeek_prob_lurk";
+  } else {
+    decision = burrowUsedThisRaid ? "DASH" : "BURROW";
+    reason = "noPeek_prob_hide";
   }
 
-  // Unknown nextEvent (noPeek + no intel): gebruik onze geschatte risk i.p.v. "altijd lethal"
-if (!Number.isFinite(dStay)) {
-  dStay = Number(metricsNow?.dangerStay ?? metricsNow?.dangerEffective ?? 0);
+  dec = {
+    decision,
+    meta: { reason, discProfile, pDanger, dStay, lurkMax, dashPushNow, dashPushThreshold },
+  };
 }
 
-// Als staying risky lijkt: BURROW eerst, pas DASH als BURROW op is
-if (dStay > 3.0) decision = burrowUsedThisRaid ? "DASH" : "BURROW";
+// Next event id only when allowed (noPeek=false OR we have intel)
+const nextEvent0 = (!noPeek)
+  ? nextEventId(g, 0)
+  : (peekIntel?.events?.[0] ? String(peekIntel.events[0]) : null);
 
-}
-
-  // ===== HARD RULE: eigen DEN_* (zonder Den Signal) => LURK is lethal (caught)
+// ===== HARD RULE: eigen DEN_* (zonder Den Signal) => LURK is lethal (caught)
 // Alleen veilig: DASH of BURROW. Als BURROW al op is -> force DASH.
-// (En als bot al DASH kiest voor carry/Hidden Nest, laten we dat staan.)
 try {
-  if (useStrategy) {
-    // strategy decides; no post-overrides
-  } else {
-
   const ne = String(nextEvent0 || "");
   if (ne.startsWith("DEN_")) {
     const evDen = ne.slice(4).toUpperCase();
@@ -3154,48 +3182,27 @@ try {
     const immuneToDen = !!(denImmune && evDen && (denImmune[evDen] || denImmune[String(evDen).toLowerCase()]));
 
     if (myDen && evDen && myDen === evDen && !immuneToDen) {
-      if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
+      if (decision !== "DASH") decision = burrowUsedThisRaid ? "DASH" : "BURROW";
     }
   }
-
-  }
 } catch (e) {}
+
 // ===== HARD RULE: DOG_CHARGE / SECOND_CHARGE / MAGPIE_SNITCH => LURK is lethal
 try {
-  if (useStrategy) {
-    // strategy decides; no post-overrides
-  } else {
-
   const ne = String(nextEvent0 || "");
 
-  // Den Signal immunity (zelfde stijl als DEN_* rule)
   const denImmune = (flags && typeof flags === "object" ? flags.denImmune : null) || null;
   const myDen = String(denColor || "").toUpperCase();
   const immuneToMyDen = !!(denImmune && myDen && (denImmune[myDen] || denImmune[String(myDen).toLowerCase()]));
 
-  // DOG charges: alleen veilig = DASH of (1x) BURROW
   if ((ne === "DOG_CHARGE" || ne === "SECOND_CHARGE") && !immuneToMyDen) {
-    if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
+    if (decision !== "DASH") decision = burrowUsedThisRaid ? "DASH" : "BURROW";
   }
 
-  // Magpie Snitch: alleen relevant voor Lead (hier is Den Signal niet van toepassing)
   if (ne === "MAGPIE_SNITCH" && isLead) {
-    if (decision !== "DASH") decision = burrowUsed ? "DASH" : "BURROW";
-  }
-
+    if (decision !== "DASH") decision = burrowUsedThisRaid ? "DASH" : "BURROW";
   }
 } catch (e) {}
-// ✅ Anti-herding coordination for congestion events (HIDDEN_NEST): limit DASH slots
-    if (String(nextEvent0) === "HIDDEN_NEST" && decision === "DASH") {
-      const picked = pickHiddenNestDashSet({ game: g, gameId, players: playersForDecision || [] });
-      const dashSet = picked?.dashSet || null;
-
-      if (dashSet && !dashSet.has(p.id)) {
-      // CANON (jouw regel): Hidden Nest / winst-DASH mag nooit BURROW triggeren.
-        decision = "LURK";
-      }
-
-    }
 
     const dashPushNext = Number.isFinite(Number(dec?.meta?.dashPushNext))
       ? Number(dec.meta.dashPushNext)
@@ -3207,10 +3214,13 @@ try {
     }
 
     const update = {
-      decision,
-      ...(Number.isFinite(Number(dashPushNext)) ? { dashPush: dashPushNext } : {}),
-      ...(decision === "BURROW" ? { burrowUsedThisRaid: true } : {}),
-    };
+  decision,
+  decisionRound: Number(g.round || 0),
+  decisionAtMs: Date.now(),
+
+  ...(Number.isFinite(Number(dashPushNext)) ? { dashPush: dashPushNext } : {}),
+  ...(decision === "BURROW" ? { burrowUsedThisRaid: true } : {}),
+};
 
     tx.update(pRef, update);
 
