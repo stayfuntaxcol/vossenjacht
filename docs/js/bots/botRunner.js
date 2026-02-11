@@ -87,6 +87,11 @@ moltingMinDangerSelf: 7.5,
 moltingOffDenPenalty: 0.95,
 moltingWhenSafePenalty: 1.40,
 
+canonUnknownLurkMax: 4.6,   // noPeek + unknown: durft vaker LURK
+canonDashPushBase: 7.6,     // later “paniek”-druk, blijft langer
+actionPlayMinGain: 0.48,    // sneller acties spelen
+opsPlayTaxBase: 0.55,       // minder “kaart-spaar” belasting
+
 // Mask Swap: agressief, maar geen suicides
 maskSwapTargetTopN: 4,
 maskSwapMinGain: 1.00,
@@ -122,6 +127,11 @@ moltingMinDangerSelf: 7.8,
 moltingOffDenPenalty: 1.05,
 moltingWhenSafePenalty: 1.55,
 
+canonUnknownLurkMax: 4.2,
+canonDashPushBase: 7.3,
+actionPlayMinGain: 0.50,
+opsPlayTaxBase: 0.58,
+    
 // Mask Swap: zelden
 maskSwapTargetTopN: 3,
 maskSwapMinGain: 1.20,
@@ -151,6 +161,11 @@ noseBaseCorrectP: 0.18,
 noseLootValue: 2.00,
 noseVsKudPenalty: 0.70,
 
+canonUnknownLurkMax: 2.6,   // noPeek + unknown: snel BURROW
+canonDashPushBase: 6.6,     // eerder defensief (BURROW/DASH)
+actionPlayMinGain: 0.80,    // speelt minder snel acties
+opsPlayTaxBase: 0.92,       // spaart kaarten harder
+    
 // Molting Mask: juist defensief inzetbaar bij DEN-dreiging
 moltingMaskSamples: 7,
 moltingMinDangerSelf: 6.8,
@@ -185,6 +200,11 @@ noseKnownCorrectP: 0.98,
 noseBaseCorrectP: 0.16,
 noseLootValue: 2.05,
 noseVsKudPenalty: 0.55,
+
+canonUnknownLurkMax: 3.0,   // zonder geheugen: liever veilig
+canonDashPushBase: 6.9,
+actionPlayMinGain: 0.74,
+opsPlayTaxBase: 0.84,
 
 // Molting Mask: analytisch, maar niet verspillen
 moltingMaskSamples: 7,
