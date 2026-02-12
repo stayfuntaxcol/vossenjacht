@@ -72,6 +72,7 @@ const JAZZ_UTILITY_OVERRIDES = {
     opsMinAdvantage: 0.92,
     opsReserveHandEarly: 2,
     opsSpendCostBase: 0.32,
+    kickUpDustOptimism: 0.70,
   // --- Card IQ tuning ---
 // Kick Up Dust: D mag pesten (Scout/Nose/Den Signal) maar niet spammen
 kudDenyScoutBonus: 1.10,
@@ -111,7 +112,7 @@ maskSwapLowGainPenalty: 0.70,
     opsMinAdvantage: 0.90,
     opsReserveHandEarly: 2,
     opsSpendCostBase: 0.34,
-    kickUpDustOptimism: 0.65,
+    kickUpDustOptimism: 0.78,
   // --- Card IQ tuning ---
 // Kick Up Dust: I speelt dit liever defensief, niet als pestkaart
 kudDenyScoutBonus: 0.20,
@@ -137,7 +138,7 @@ moltingWhenSafePenalty: 1.55,
 
 canonUnknownLurkMax: 4.2,
 canonDashPushBase: 7.3,
-actionPlayMinGain: 0.50,
+actionPlayMinGain: 0.48,
 opsPlayTaxBase: 0.58,
     
 // Mask Swap: zelden
@@ -206,12 +207,12 @@ kudSelfNosePenalty: 1.7,
 // Nose for Trouble: C speelt dit alleen met intel
 noseKnownCorrectP: 0.98,
 noseBaseCorrectP: 0.16,
-noseLootValue: 2.05,
+noseLootValue: 2.25,
 noseVsKudPenalty: 0.55,
 
 canonUnknownLurkMax: 3.0,   // zonder geheugen: liever veilig
 canonDashPushBase: 6.9,
-actionPlayMinGain: 0.74,
+actionPlayMinGain: 0.78,
 opsPlayTaxBase: 0.84,
 
 // Molting Mask: analytisch, maar niet verspillen
@@ -271,7 +272,13 @@ const JAZZ_STRATEGY_OVERRIDES = {
 
     lookaheadN: 4,
     
-    // Hidden Nest timing + track play (DISC-tuned)
+    
+    // --- MOVE bias (DISC) ---
+    moveHandMinAdj: -1,          // minder vaak FORAGE
+    moveAllowSoftForage: 0,      // FORAGE alleen als het "moet"
+    moveShiftDangerAdj: +0.6,    // SHIFT later triggeren
+    moveShiftBenefitMinMult: 1.25, // SHIFT alleen bij duidelijk voordeel
+// Hidden Nest timing + track play (DISC-tuned)
     hiddenNestStart: 0.5,
     hiddenNestMustAt: 0.85,
     hiddenNestDashBonusMax: 3.2,
@@ -329,7 +336,13 @@ const JAZZ_STRATEGY_OVERRIDES = {
 
     lookaheadN: 4,
     
-    // Hidden Nest timing + track play (DISC-tuned)
+    
+    // --- MOVE bias (DISC) ---
+    moveHandMinAdj: 0,
+    moveAllowSoftForage: 0,      // I zoekt tempo via SHIFT, niet via “hand vullen”
+    moveShiftDangerAdj: -0.8,    // SHIFT sneller triggeren
+    moveShiftBenefitMinMult: 0.75, // SHIFT bij kleiner voordeel al oké
+// Hidden Nest timing + track play (DISC-tuned)
     hiddenNestStart: 0.5,
     hiddenNestMustAt: 0.85,
     hiddenNestDashBonusMax: 2.8,
@@ -387,7 +400,13 @@ const JAZZ_STRATEGY_OVERRIDES = {
 
     lookaheadN: 4,
     
-    // Hidden Nest timing + track play (DISC-tuned)
+    
+    // --- MOVE bias (DISC) ---
+    moveHandMinAdj: +1,          // vaker FORAGE (stabiel)
+    moveAllowSoftForage: 1,      // ook in “niet-nood” situaties FORAGE
+    moveShiftDangerAdj: -0.4,    // SHIFT ook om te stabiliseren
+    moveShiftBenefitMinMult: 0.90,
+// Hidden Nest timing + track play (DISC-tuned)
     hiddenNestStart: 0.6,
     hiddenNestMustAt: 0.88,
     hiddenNestDashBonusMax: 2.2,
@@ -446,7 +465,13 @@ const JAZZ_STRATEGY_OVERRIDES = {
 
     lookaheadN: 5,
     
-    // Hidden Nest timing + track play (DISC-tuned)
+    
+    // --- MOVE bias (DISC) ---
+    moveHandMinAdj: +1,          // vaker FORAGE om info/utility te vinden
+    moveAllowSoftForage: 1,
+    moveShiftDangerAdj: +0.4,    // SHIFT minder vaak (pas bij serieus gevaar)
+    moveShiftBenefitMinMult: 1.15,
+// Hidden Nest timing + track play (DISC-tuned)
     hiddenNestStart: 0.55,
     hiddenNestMustAt: 0.87,
     hiddenNestDashBonusMax: 2.6,
@@ -2057,6 +2082,20 @@ if (share && denColor) {
     const lastMoveKind = String(p?.lastMoveKind || "").toUpperCase();
     const lastMoveRound = Number.isFinite(Number(p?.lastMoveRound)) ? Number(p.lastMoveRound) : -999;
     const shiftOnCooldown = (lastMoveKind === "SHIFT") && ((roundNum - lastMoveRound) <= shiftCooldownRounds);
+    // ============================
+    // DISC MOVE bias (cfg0)
+    // ============================
+    const disc = DISC_BY_DEN[myColor] || "S";
+
+    const moveHandMinAdj = Number.isFinite(Number(cfg0.moveHandMinAdj)) ? Number(cfg0.moveHandMinAdj) : 0;
+    const moveAllowSoftForage = Number(cfg0.moveAllowSoftForage || 0) ? 1 : 0;
+
+    const moveShiftDangerAdj = Number.isFinite(Number(cfg0.moveShiftDangerAdj)) ? Number(cfg0.moveShiftDangerAdj) : 0;
+    const moveShiftBenefitMinMult = Number.isFinite(Number(cfg0.moveShiftBenefitMinMult)) ? Number(cfg0.moveShiftBenefitMinMult) : 1;
+
+    // effective shift thresholds (clamped)
+    const shiftDangerTriggerEff = clamp(shiftDangerTrigger + moveShiftDangerAdj, 0, 10);
+    const shiftBenefitMinEff = Math.max(0.5, shiftBenefitMin * moveShiftBenefitMinMult);
 
     const basePlayers = Array.isArray(latestPlayers) ? latestPlayers : [];
     const mergedPlayers = basePlayers.length
@@ -2128,8 +2167,12 @@ if (share && denColor) {
     const extremePressure = carryValueRec >= 10.5;
 
     // Stronger: keep a healthy hand early so OPS can actually do something.
-    const desiredHandMin = roundNum <= 1 ? 4 : 3;
-    const desiredHandMax = 6;
+    const desiredHandMinBase = roundNum <= 1 ? 4 : 3;
+    const desiredHandMaxBase = 6;
+
+    // D: -1, S/C: +1, etc. (clamp zodat het nooit gek wordt)
+    const desiredHandMin = clamp(desiredHandMinBase + Math.round(moveHandMinAdj), 2, 6);
+    const desiredHandMax = clamp(desiredHandMaxBase + Math.round(Math.max(0, moveHandMinAdj) * 0.5), 5, 7);
 
     // ---- SCOUT pick (1-based) ----
     let scoutPos = null;
@@ -2174,7 +2217,7 @@ if (share && denColor) {
             : 0;
 
         // SHIFT trigger: gevaar óf (PaintBomb) score-threat
-        if (nextPeak >= shiftDangerTrigger && (!defenseReady || nextCostW > 0)) {
+        if (nextPeak >= shiftDangerTriggerEff && (!defenseReady || nextCostW > 0)) {
           const LOOKAHEAD = Math.max(1, Number(shiftLookahead || 0));
           let best = null;
 
@@ -2196,7 +2239,7 @@ if (share && denColor) {
             }
           }
 
-          if (best && best.benefit >= shiftBenefitMin) {
+          if (best && best.benefit >= shiftBenefitMinEff) {
             shiftPick = {
               i1: eventIdx,
               i2: best.j,
@@ -2224,17 +2267,27 @@ if (share && denColor) {
       (dangerMid || pDanger >= 0.2 || uncertain) &&
       !defenseReady;
 
-    const wantForage =
+    // HARD forage = altijd doen (ongeacht DISC)
+    const hardForage =
       !mustHaveLoot &&
       actionDeck.length > 0 &&
       hand.length < desiredHandMax &&
       (
-        hand.length < desiredHandMin ||                 // hard minimum hand size
-        (dangerHigh && !defenseReady) ||                // danger, no defense
-        (dangerMid && cashPressure && !defenseReady) || // pressure + danger
+        hand.length < desiredHandMin ||
+        (dangerHigh && !defenseReady) ||
+        (dangerMid && cashPressure && !defenseReady) ||
         (extremePressure && (pDanger >= 0.25 || uncertain)) ||
         avoidSnatch
       );
+
+    // SOFT forage = alleen bij S/C (en evt later als je dat wil)
+    const softForage =
+      !hardForage &&
+      !mustHaveLoot &&
+      actionDeck.length > 0 &&
+      hand.length < desiredHandMax;
+
+    const wantForage = hardForage || (softForage && moveAllowSoftForage === 1);
 
     // Choose MOVE
     let did = null;
@@ -3568,3 +3621,4 @@ export async function addBotToCurrentGame({ db, gameId, denColors = ["RED", "BLU
 
   await updateDoc(gRef, { botsEnabled: true, actionDeck });
 }
+
