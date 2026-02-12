@@ -2199,41 +2199,43 @@ if (canShift) {
         avoidSnatch
       );
 
-    // Choose MOVE
-    let did = null;
+   // Choose MOVE
+let did = null;
 
-    if (mustHaveLoot && lootPts <= 0) {
-      // Must have loot to stay viable (Gate Toll etc.)
-      did = { kind: "SNATCH", detail: "mustHaveLoot" };
-    } else if (wantScout) {
-      did = { kind: "SCOUT", detail: `pos ${scoutPos}` };
-    } else if (actionDeck.length > 0 && hand.length < desiredHandMin) {
-      did = { kind: "FORAGE", detail: `hand<${desiredHandMin}` };
-    } else if (shiftPick) {
-      did = { kind: "SHIFT", detail: `${shiftPick.pos1}<->${shiftPick.pos2} (Δ≈${shiftPick.benefit.toFixed(1)})` };
-    } else if (wantForage) {
-      did = { kind: "FORAGE", detail: `rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)}` };
-    } else {
-      did = { kind: "SNATCH", detail: `rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)}` };
+if (mustHaveLoot && lootPts <= 0) {
+  // Must have loot to stay viable (Gate Toll etc.)
+  did = { kind: "SNATCH", detail: "mustHaveLoot" };
+} else if (wantScout) {
+  did = { kind: "SCOUT", detail: `pos ${scoutPos}` };
+} else if (actionDeck.length > 0 && hand.length < desiredHandMin) {
+  did = { kind: "FORAGE", detail: `hand<${desiredHandMin}` };
+} else if (shiftPick) {
+  did = { kind: "SHIFT", detail: `${shiftPick.pos1}<->${shiftPick.pos2} (Δ≈${shiftPick.benefit.toFixed(1)})` };
+} else if (wantForage) {
+  did = { kind: "FORAGE", detail: `rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)}` };
+} else {
+  did = { kind: "SNATCH", detail: `rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)}` };
+}
+
+// Execute MOVE (mutate local copies used for tx.update)
+if (did.kind === "SNATCH") {
+  if (!lootDeck.length) {
+    // fallback to forage if possible
+    if (!actionDeck.length) return;
+    let drawn = 0;
+    for (let i = 0; i < 2; i++) {
+      if (!actionDeck.length) break;
+      hand.push(actionDeck.pop());
+      drawn++;
     }
+    did = { kind: "FORAGE", detail: `${drawn} kaart(en) (loot op)` };
+  } else {
+    const card = lootDeck.pop();
+    loot.push(card);
+    did.detail = `${card?.t || "Loot"} ${card?.v ?? ""} (${did.detail})`;
+  }
+}
 
-    // Execute MOVE (mutate local copies used for tx.update)
-    if (did.kind === "SNATCH") {
-      if (!lootDeck.length) {
-        // fallback to forage if possible
-        if (!actionDeck.length) return;
-        let drawn = 0;
-        for (let i = 0; i < 2; i++) {
-          if (!actionDeck.length) break;
-          hand.push(actionDeck.pop());
-          drawn++;
-        }
-        did = { kind: "FORAGE", detail: `${drawn} kaart(en) (loot op)` };
-      } else {
-        const card = lootDeck.pop();
-        loot.push(card);
-        did.detail = `${card?.t || "Loot"} ${card?.v ?? ""} (${did.detail})`;
-      }
     } else if (did.kind === "FORAGE") {
       if (!actionDeck.length) {
         // fallback to snatch if possible
