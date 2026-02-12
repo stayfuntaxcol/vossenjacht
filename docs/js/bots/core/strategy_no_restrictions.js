@@ -126,8 +126,20 @@ import { getEffectiveNextEventIntel } from "./trackState.js";
   // Random actions sampling
   kickUpDustSamples: 6,
   kickUpDustOptimism: 0.55,
+  kudHiddenNestDelayBonus: 1.4,     // extra KUD value if HIDDEN_NEST is too early
 
-  // Hidden Nest coordination (anti-herding)
+  
+
+  // Hidden Nest timing + DISC (ramp + delay-control)
+  // - Early raid: prefer to push HIDDEN_NEST backwards (SHIFT/Kick Up Dust)
+  // - Late raid: HIDDEN_NEST increasingly encourages DASH (esp. solo)
+  hiddenNestStart: 0.50,           // start considering HIDDEN_NEST dash in 2nd half
+  hiddenNestMustAt: 0.85,          // very late: solo on HIDDEN_NEST => MUST DASH
+  hiddenNestDashBonusMax: 3.0,     // max added "dashPush" from HIDDEN_NEST at endgame
+  wHiddenNestDelay: 1.25,          // SHIFT utility bias to push HIDDEN_NEST later (early game)
+  hiddenNestDashMultByDisc: { D: 1.20, I: 1.00, S: 0.85, C: 1.05 },
+  hiddenNestDelayMultByDisc: { D: 0.70, I: 1.30, S: 1.00, C: 1.20 },
+// Hidden Nest coordination (anti-herding)
   hiddenNestCoordination: true,
   hiddenNestDashPenalty: 6.0,        // discourage DASH if not in slot
   hiddenNestBurrowPenalty: 16.0,      // discourage BURROW on Hidden Nest
@@ -596,6 +608,69 @@ function canonUpdateDashPush({ cfg, dashPushNow, safeNow, dangerStay, endPressur
     };
   }
 
+
+  // ===== RULE 0.5: Hidden Nest ramps up later (DISC-tuned)
+  // - Early raid: don't DASH for HIDDEN_NEST; prefer to delay it with SHIFT/KUD.
+  // - Second half: HIDDEN_NEST increasingly encourages DASH.
+  // - Very late + solo: HIDDEN_NEST becomes MUST-DASH.
+  {
+    const idxBase = Number.isFinite(Number(game?.eventIndex)) ? Number(game.eventIndex) : 0;
+    const trackLen = safeArr(game?.eventTrack).length || 1;
+    const prog = (trackLen > 1) ? clamp(idxBase / (trackLen - 1), 0, 1) : 0;
+
+    const hnStart = Number(cfg0.hiddenNestStart ?? DEFAULTS.hiddenNestStart ?? 0.50);
+    const hnMustAt = Number(cfg0.hiddenNestMustAt ?? DEFAULTS.hiddenNestMustAt ?? 0.85);
+    const hnDashBonusMax = Number(cfg0.hiddenNestDashBonusMax ?? DEFAULTS.hiddenNestDashBonusMax ?? 3.0);
+
+    const disc = String(me?.discProfile || me?.disc || "").toUpperCase();
+    const multMap = cfg0.hiddenNestDashMultByDisc || DEFAULTS.hiddenNestDashMultByDisc || { D: 1.20, I: 1.00, S: 0.85, C: 1.05 };
+    const hnDashMult = Number(multMap?.[disc] ?? 1.0);
+
+    if (String(nextId) === "HIDDEN_NEST" && prog >= hnStart) {
+      const t = clamp((prog - hnStart) / Math.max(1e-6, (1 - hnStart)), 0, 1);
+      const ramp = t * t * (3 - 2 * t); // smoothstep
+
+      const inYardCount = safeArr(players).filter(isInYard).length;
+
+      const dashers = canonCountDashers(players);
+      const dashPushNow = getDashPush(me, cfg0);
+      const dashPushThreshold = canonDashPushThreshold(cfg0, dashers);
+
+      const hnBonus = ramp * hnDashBonusMax * hnDashMult;
+      const dashPushHN = dashPushNow + hnBonus;
+
+      // MUST only when very late AND you're effectively solo in the Yard.
+      if (inYardCount <= 1 && prog >= hnMustAt) {
+        return {
+          decision: "DASH",
+          meta: {
+            reason: "hidden_nest_must_dash_late",
+            nextEventIdUsed: nextId,
+            prog, hnStart, hnMustAt, ramp,
+            dashPushNow, hnBonus, dashPushHN, dashPushThreshold,
+            inYardCount,
+            dangerStay, safeNow,
+          },
+        };
+      }
+
+      // Otherwise: make DASH "considerable" in the second half.
+      if (dashPushHN >= dashPushThreshold) {
+        return {
+          decision: "DASH",
+          meta: {
+            reason: "hidden_nest_dash_ramp",
+            nextEventIdUsed: nextId,
+            prog, hnStart, ramp,
+            dashPushNow, hnBonus, dashPushHN, dashPushThreshold,
+            inYardCount,
+            dangerStay, safeNow,
+          },
+        };
+      }
+    }
+  }
+
   // ===== SIMPLE POLICY (your spec)
   // safe  -> LURK (unless later you add an explicit Hidden Nest DASH override)
   // danger-> BURROW if available, else DASH
@@ -627,6 +702,25 @@ function evaluateShiftPlan({ game, me, players, flagsRound, cfg, peekIntel }) {
   const weights = [1.0, 0.65, 0.42, 0.28, 0.18];
   const wAt = (k) => weights[k] ?? Math.max(0.12, 0.18 * Math.pow(0.7, k));
 
+
+  // --- Hidden Nest delay bias (DISC-driven) ---
+  // Early raid: push HIDDEN_NEST backwards.
+  // Late raid: bias fades out (let it happen; decision phase handles DASH ramp).
+  const disc = String(me?.discProfile || me?.disc || "").toUpperCase();
+  const multByDisc = c.hiddenNestDelayMultByDisc || DEFAULTS.hiddenNestDelayMultByDisc || { D: 0.70, I: 1.30, S: 1.00, C: 1.20 };
+  const hnDelayMult = Number(multByDisc?.[disc] ?? 1.0);
+
+  const trackLen = safeArr(game?.eventTrack).length || 1;
+  const prog = (trackLen > 1) ? clamp(idxBase / (trackLen - 1), 0, 1) : 0;
+
+  const hnStart = Number(c.hiddenNestStart ?? DEFAULTS.hiddenNestStart ?? 0.50);
+  const tHN = clamp((prog - hnStart) / Math.max(1e-6, (1 - hnStart)), 0, 1);
+  const rampHN = tHN * tHN * (3 - 2 * tHN); // smoothstep
+  const wantDelay = 1 - rampHN; // early: ~1, late: ~0
+
+  const wHiddenNestDelay = Number(c.wHiddenNestDelay ?? DEFAULTS.wHiddenNestDelay ?? 1.25);
+  const hnIdx0 = events.indexOf("HIDDEN_NEST");
+
   function weightedPeak(pl, evs) {
     let s = 0;
     for (let k = 0; k < evs.length; k++) {
@@ -657,7 +751,15 @@ function evaluateShiftPlan({ game, me, players, flagsRound, cfg, peekIntel }) {
 
       const teamImprove = baseTeam - t;        // positive good
       const enemyWorsen = e - baseEnemies;     // positive good
-      const utilityGain = c.wTeam * teamImprove + c.wDeny * enemyWorsen;
+      // Hidden Nest: reward delaying it (early raid) per DISC profile
+      let hnBias = 0;
+      if (hnIdx0 >= 0) {
+        const hnIdx1 = newEvents.indexOf("HIDDEN_NEST");
+        const delta = hnIdx1 - hnIdx0; // + = pushed later, - = pulled earlier
+        hnBias = wHiddenNestDelay * hnDelayMult * wantDelay * delta;
+      }
+
+      const utilityGain = c.wTeam * teamImprove + c.wDeny * enemyWorsen + hnBias;
 
       if (!best || utilityGain > best.utilityGain) {
         best = {
@@ -1405,6 +1507,36 @@ if (facts?.engineImplemented === false && !RUNNER_IMPLEMENTED.has(actionId)) {
     if (selfNosePlayed) denyBonus -= Number(c.kudSelfNosePenalty || 1.5);
 
     utility += denyBonus;
+
+
+    // Hidden Nest timing control: early raid + HIDDEN_NEST upcoming -> KUD gets extra value (DISC-tuned)
+    // (KUD shuffles future; when HIDDEN_NEST is too early, a shuffle usually delays it.)
+    {
+      const hnStart = Number(c.hiddenNestStart ?? DEFAULTS.hiddenNestStart ?? 0.50);
+      const idxBase = Number.isFinite(Number(game?.eventIndex)) ? Number(game.eventIndex) : 0;
+      const trackLen = safeArr(game?.eventTrack).length || 1;
+      const prog = (trackLen > 1) ? clamp(idxBase / (trackLen - 1), 0, 1) : 0;
+
+      if (prog < hnStart) {
+        const evs = safeArr(intel0?.events).filter(Boolean).map(String);
+        const hnIdx = evs.indexOf("HIDDEN_NEST");
+        if (hnIdx >= 0) {
+          const disc = String(me?.discProfile || me?.disc || "").toUpperCase();
+          const multByDisc = c.hiddenNestDelayMultByDisc || DEFAULTS.hiddenNestDelayMultByDisc || { D: 0.70, I: 1.30, S: 1.00, C: 1.20 };
+          const hnDelayMult = Number(multByDisc?.[disc] ?? 1.0);
+
+          const wantDelay = clamp(1 - (prog / Math.max(1e-6, hnStart)), 0, 1); // linear early pressure
+          const near = (hnIdx === 0) ? 1.0 : (hnIdx === 1) ? 0.65 : 0.35;
+          const baseBonus = Number(c.kudHiddenNestDelayBonus ?? DEFAULTS.kudHiddenNestDelayBonus ?? 1.4);
+
+          utility += baseBonus * wantDelay * hnDelayMult * near;
+          // debug tag
+          if ((typeof window !== "undefined") && window.__BOTS_DEBUG__) {
+            console.log("[OPS][KUD] kud_hidden_nest_delay", { prog, hnStart, hnIdx, wantDelay, near, baseBonus, disc });
+          }
+        }
+      }
+    }
   }
 
   // C) Molting Mask: avoid wasting it when not under DEN-danger
@@ -1733,5 +1865,3 @@ if (typeof window !== "undefined") {
   window.evaluateOpsActions = evaluateOpsActions;
   window.evaluateDecision = evaluateDecision;
 }
-
-
