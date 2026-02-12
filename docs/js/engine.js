@@ -682,24 +682,23 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
       });
     }
 
-  } else if (eventId === "SHEEPDOG_PATROL") {
-    for (const p of players) {
-      if (!isInYardForEvents(p)) continue;
+} else if (eventId === "SHEEPDOG_PATROL") {
+  for (const p of players) {
+    if (!isInYardForEvents(p)) continue;
 
-      // SAFE: DASH/BURROW/HIDE
-      if (isSafeDecision(p.decision)) continue;
+    // Sheepdog Patrol: alleen DASH wordt gepakt
+    if (!isDecision(p.decision, "DASH")) continue;
 
-      // Unsafe => caught
-      markCaught(p);
+    markCaught(p);
 
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        playerId: p.id,
-        message: `${p.name || "Vos"} wordt tijdens de Sheepdog Patrol gepakt (LURK) en verliest alle buit.`,
-      });
-    }
+    await addLog(gameId, {
+      round,
+      phase: "REVEAL",
+      kind: "EVENT",
+      playerId: p.id,
+      message: `${p.name || "Vos"} wordt tijdens de Sheepdog Patrol gepakt omdat hij DASH koos en verliest alle buit.`,
+    });
+  }
 
    } else if (eventId === "SECOND_CHARGE") {
     for (const p of players) {
