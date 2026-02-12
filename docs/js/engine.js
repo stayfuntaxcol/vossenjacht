@@ -43,10 +43,9 @@ function splitTrackByStatus(game) {
   };
 }
 
-// =========================
-// DECISION normalize + safety
-// DASH/BURROW/HIDE = safe, LURK/unknown = unsafe
-// =========================
+// =====================================================
+// DECISION helpers (prefix-proof) + Lead helper
+// =====================================================
 function normDecision(x) {
   const s = String(x || "").toUpperCase().trim();
   return s.startsWith("DECISION_") ? s.slice("DECISION_".length) : s;
@@ -56,11 +55,354 @@ function isDecision(x, want) {
   return normDecision(x) === String(want || "").toUpperCase().trim();
 }
 
-function isSafeDecision(x) {
-  const d = normDecision(x);
-  if (d === "DASH") return true;
-  if (d === "BURROW" || d === "HIDE") return true;
-  return false; // LURK/unknown
+function isBurrowOrHide(decision) {
+  const d = normDecision(decision);
+  return d === "BURROW" || d === "HIDE";
+}
+
+function getLeadForEvents(game, players) {
+  const orderedAll = [...players].sort((a, b) => {
+    const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
+    const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
+    return ao - bo;
+  });
+
+  const orderedActive = orderedAll.filter(isActiveForTurn);
+  const base = orderedActive.length ? orderedActive : orderedAll;
+
+  return pickLeadFromBase(game, base);
+}
+
+async function consumeBurrowOnce({ gameId, p, round }) {
+  // Admin-only: 1x per raid markeren. NOOIT unsafe maken in REVEAL.
+  if (!p || !isBurrowOrHide(p.decision)) return;
+
+  if (!p.burrowUsedThisRaid) {
+    const pRef = doc(db, "games", gameId, "players", p.id);
+    await updateDoc(pRef, { burrowUsedThisRaid: true });
+    p.burrowUsedThisRaid = true;
+
+    await addLog(gameId, {
+      round,
+      phase: "REVEAL",
+      kind: "EVENT",
+      playerId: p.id,
+      message: `${p.name || "Vos"} gebruikt BURROW/HIDE (1× per raid).`,
+    });
+  }
+}
+
+// =====================================================
+// Event Specs: appliesTo / caughtIf / penaltyIf
+// (optioneel before/after voor globale effecten)
+// =====================================================
+const EVENT_SPECS = [
+  // -------------------------
+  // DEN_*
+  // -------------------------
+  {
+    match: (id) => String(id || "").toUpperCase().startsWith("DEN_"),
+    before: async (ctx) => {
+      const color = normalizeColorKey(String(ctx.eventId).substring(4));
+      ctx.denColor = color;
+
+      if (isDenImmune(ctx.flagsRound, color)) {
+        ctx.denImmuneActive = true;
+        await addLog(ctx.gameId, {
+          round: ctx.round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          message: `Den ${color} is immune door Den Signal – niemand wordt gepakt.`,
+        });
+      }
+    },
+    appliesTo: (p, ctx) =>
+      !ctx.denImmuneActive &&
+      isInYardForEvents(p) &&
+      normalizeColorKey(p.denColor || p.color) === ctx.denColor,
+
+    caughtIf: (p, ctx) =>
+      !isDecision(p.decision, "DASH") && !isBurrowOrHide(p.decision),
+
+    penaltyIf: async (p, ctx) => {
+      // Alleen admin/markering
+      if (isBurrowOrHide(p.decision)) {
+        await consumeBurrowOnce({ gameId: ctx.gameId, p, round: ctx.round });
+      }
+    },
+
+    onCaughtLog: (p, ctx) =>
+      `${p.name || "Vos"} wordt gepakt bij ${ctx.ev ? ctx.ev.title : "Den-event"} en verliest alle buit.`,
+  },
+
+  // -------------------------
+  // DOG_CHARGE
+  // -------------------------
+  {
+    match: (id) => String(id || "").toUpperCase() === "DOG_CHARGE",
+    appliesTo: (p, ctx) => isInYardForEvents(p) && !isDenImmune(ctx.flagsRound, p.denColor || p.color),
+    caughtIf: (p, ctx) => !isDecision(p.decision, "DASH") && !isBurrowOrHide(p.decision),
+    penaltyIf: async (p, ctx) => {
+      if (isBurrowOrHide(p.decision)) {
+        await consumeBurrowOnce({ gameId: ctx.gameId, p, round: ctx.round });
+      }
+    },
+    onSafeImmuneLog: (p) => `${p.name || "Vos"} ontsnapt aan de herderhond dankzij Den Signal.`,
+    onCaughtLog: (p) => `${p.name || "Vos"} wordt onder de voet gelopen door de herderhond en verliest alle buit.`,
+  },
+
+  // -------------------------
+  // SECOND_CHARGE
+  // -------------------------
+  {
+    match: (id) => String(id || "").toUpperCase() === "SECOND_CHARGE",
+    appliesTo: (p, ctx) => isInYardForEvents(p) && !isDenImmune(ctx.flagsRound, p.denColor || p.color),
+    caughtIf: (p, ctx) => !isDecision(p.decision, "DASH") && !isBurrowOrHide(p.decision),
+    penaltyIf: async (p, ctx) => {
+      if (isBurrowOrHide(p.decision)) {
+        await consumeBurrowOnce({ gameId: ctx.gameId, p, round: ctx.round });
+      }
+    },
+    onSafeImmuneLog: (p) => `${p.name || "Vos"} ontsnapt aan de tweede herderhond-charge dankzij Den Signal.`,
+    onCaughtLog: (p) => `${p.name || "Vos"} wordt alsnog ingehaald bij de Second Charge en verliest alle buit.`,
+  },
+
+  // -------------------------
+  // SHEEPDOG_PATROL (ANTI-DASH)
+  // -------------------------
+  {
+    match: (id) => String(id || "").toUpperCase() === "SHEEPDOG_PATROL",
+    appliesTo: (p, ctx) => isInYardForEvents(p),
+    caughtIf: (p, ctx) => isDecision(p.decision, "DASH"),
+    penaltyIf: async () => {},
+    onCaughtLog: (p) =>
+      `${p.name || "Vos"} wordt tijdens de Sheepdog Patrol gepakt omdat hij DASH koos en verliest alle buit.`,
+  },
+
+  // -------------------------
+  // HIDDEN_NEST (global)
+  // -------------------------
+  {
+    match: (id) => String(id || "").toUpperCase() === "HIDDEN_NEST",
+    before: async (ctx) => {
+      const results = applyHiddenNestEvent(ctx.players, ctx.lootDeck); // patch 2 maakt dit prefix-proof
+      if (results && results.length) {
+        const parts = results.map((r) => `${r.player.name || "Vos"} (+${r.count})`);
+        await addLog(ctx.gameId, {
+          round: ctx.round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          cardId: ctx.eventId,
+          message: `Hidden Nest: ${parts.join(", ")}.`,
+        });
+      } else {
+        await addLog(ctx.gameId, {
+          round: ctx.round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          cardId: ctx.eventId,
+          message: "Hidden Nest had geen effect – het aantal dashers was niet 1, 2 of 3 (of er was geen loot meer).",
+        });
+      }
+    },
+    appliesTo: () => false,
+    caughtIf: () => false,
+    penaltyIf: async () => {},
+  },
+
+  // -------------------------
+  // GATE_TOLL
+  // -------------------------
+  {
+    match: (id) => String(id || "").toUpperCase() === "GATE_TOLL",
+    appliesTo: (p, ctx) => isInYardForEvents(p) && !isDecision(p.decision, "DASH"),
+    caughtIf: (p) => (Array.isArray(p.loot) ? p.loot.length : 0) <= 0,
+    penaltyIf: async (p, ctx) => {
+      // Alleen als niet caught (framework roept penaltyIf alleen aan wanneer not caught)
+      const loot = Array.isArray(p.loot) ? [...p.loot] : [];
+      loot.pop();
+      p.loot = loot;
+      await addLog(ctx.gameId, {
+        round: ctx.round,
+        phase: "REVEAL",
+        kind: "EVENT",
+        playerId: p.id,
+        message: `${p.name || "Vos"} betaalt Gate Toll en verliest 1 buit.`,
+      });
+    },
+    onCaughtLog: (p) => `${p.name || "Vos"} kan de tol niet betalen en wordt gepakt bij het hek.`,
+  },
+
+  // -------------------------
+  // MAGPIE_SNITCH (lead-only)
+  // -------------------------
+  {
+    match: (id) => String(id || "").toUpperCase() === "MAGPIE_SNITCH",
+    before: async (ctx) => {
+      ctx.lead = getLeadForEvents(ctx.game, ctx.players);
+    },
+    appliesTo: (p, ctx) => ctx.lead && p.id === ctx.lead.id && isInYardForEvents(p),
+    caughtIf: (p, ctx) => !isDecision(p.decision, "DASH") && !isBurrowOrHide(p.decision),
+    penaltyIf: async (p, ctx) => {
+      // safe paths: dash/burrow/hide
+      if (isBurrowOrHide(p.decision)) {
+        await consumeBurrowOnce({ gameId: ctx.gameId, p, round: ctx.round });
+        await addLog(ctx.gameId, {
+          round: ctx.round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          playerId: p.id,
+          message: `Magpie Snitch ziet de Lead Fox, maar ${p.name || "de vos"} is veilig (${normDecision(p.decision)}).`,
+        });
+      } else if (isDecision(p.decision, "DASH")) {
+        await addLog(ctx.gameId, {
+          round: ctx.round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          playerId: p.id,
+          message: "Magpie Snitch vindt niets – de Lead Fox is al aan het dashen.",
+        });
+      }
+    },
+    onCaughtLog: (p) =>
+      `Magpie Snitch verraadt de Lead Fox – ${p.name || "de vos"} wordt gepakt en verliest alle buit.`,
+  },
+
+  // -------------------------
+  // SILENT_ALARM (lead-only, economy)
+  // -------------------------
+  {
+    match: (id) => String(id || "").toUpperCase() === "SILENT_ALARM",
+    before: async (ctx) => {
+      ctx.lead = getLeadForEvents(ctx.game, ctx.players);
+    },
+    appliesTo: (p, ctx) => ctx.lead && p.id === ctx.lead.id && isInYardForEvents(p),
+    caughtIf: () => false, // Silent Alarm vangt niet; is penalty
+    penaltyIf: async (p, ctx) => {
+      if (isDecision(p.decision, "DASH")) {
+        await addLog(ctx.gameId, {
+          round: ctx.round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          playerId: p.id,
+          message: `${p.name || "Lead Fox"} dash't al weg – Silent Alarm heeft geen effect.`,
+        });
+        return;
+      }
+
+      const loot = Array.isArray(p.loot) ? [...p.loot] : [];
+      if (loot.length >= 2) {
+        const drop1 = loot.pop();
+        const drop2 = loot.pop();
+        p.loot = loot;
+        if (drop1) ctx.sack.push(drop1);
+        if (drop2) ctx.sack.push(drop2);
+
+        await addLog(ctx.gameId, {
+          round: ctx.round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          playerId: p.id,
+          message: `${p.name || "Lead Fox"} betaalt Silent Alarm en legt 2 buit af in de Sack.`,
+        });
+      } else {
+        ctx.leadAdvanceBonus = 1;
+        await addLog(ctx.gameId, {
+          round: ctx.round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          playerId: p.id,
+          message: `${p.name || "Lead Fox"} kan Silent Alarm niet betalen (minder dan 2 buit) en verliest zijn Lead-status.`,
+        });
+      }
+    },
+  },
+
+  // -------------------------
+  // PAINT_BOMB_NEST (global)
+  // -------------------------
+  {
+    match: (id) => String(id || "").toUpperCase() === "PAINT_BOMB_NEST",
+    before: async (ctx) => {
+      if (ctx.sack.length) {
+        ctx.lootDeck.push(...ctx.sack);
+        ctx.sack.length = 0;
+        ctx.lootDeck = shuffleArray(ctx.lootDeck);
+
+        await addLog(ctx.gameId, {
+          round: ctx.round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          message: "Paint-Bomb Nest: alle buit in de Sack gaat terug naar de loot-deck.",
+        });
+      }
+    },
+    appliesTo: () => false,
+    caughtIf: () => false,
+    penaltyIf: async () => {},
+  },
+
+  // -------------------------
+  // ROOSTER_CROW (no-op hier; teller in host.js, 3e crow al eerder afgehandeld)
+  // -------------------------
+  {
+    match: (id) => String(id || "").toUpperCase() === "ROOSTER_CROW",
+    appliesTo: () => false,
+    caughtIf: () => false,
+    penaltyIf: async () => {},
+  },
+];
+
+function pickEventSpec(eventId) {
+  const id = String(eventId || "").toUpperCase();
+  return EVENT_SPECS.find((s) => s.match(id)) || null;
+}
+
+async function resolveRevealBySpec(ctx) {
+  const spec = pickEventSpec(ctx.eventId);
+  if (!spec) return;
+
+  if (spec.before) await spec.before(ctx);
+
+  for (const p of ctx.players) {
+    // Den immunity log voor DOG/SECOND: huidige engine logt per player.
+    if ((ctx.eventId === "DOG_CHARGE" || ctx.eventId === "SECOND_CHARGE") && isInYardForEvents(p)) {
+      if (isDenImmune(ctx.flagsRound, p.denColor || p.color)) {
+        if (spec.onSafeImmuneLog) {
+          await addLog(ctx.gameId, {
+            round: ctx.round,
+            phase: "REVEAL",
+            kind: "EVENT",
+            playerId: p.id,
+            message: spec.onSafeImmuneLog(p, ctx),
+          });
+        }
+        continue;
+      }
+    }
+
+    if (!spec.appliesTo(p, ctx)) continue;
+
+    const caught = !!spec.caughtIf(p, ctx);
+
+    if (caught) {
+      markCaught(p);
+      if (spec.onCaughtLog) {
+        await addLog(ctx.gameId, {
+          round: ctx.round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          playerId: p.id,
+          message: spec.onCaughtLog(p, ctx),
+        });
+      }
+      continue;
+    }
+
+    await spec.penaltyIf(p, ctx);
+  }
+
+  if (spec.after) await spec.after(ctx);
 }
 
 function isInYardForEvents(p) {
@@ -617,285 +959,33 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
     }
   }
 
+   // =======================================
+  // Event resolve via specs (appliesTo / caughtIf / penaltyIf)
   // =======================================
-  // Event-specifieke logica
-  // =======================================
+  const ctx = {
+    gameId,
+    gameRef,
+    game,
+    round,
+    eventId,
+    ev,
+    players,
+    lootDeck,
+    sack,
+    flagsRound,
+    leadAdvanceBonus,
+    denColor: null,
+    denImmuneActive: false,
+    lead: null,
+  };
 
-    if (eventId.startsWith("DEN_")) {
-    const color = normalizeColorKey(eventId.substring(4)); // RED / BLUE / GREEN / YELLOW
+  await resolveRevealBySpec(ctx);
 
-    if (isDenImmune(flagsRound, color)) {
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        message: `Den ${color} is immune door Den Signal – niemand wordt gepakt.`,
-      });
-    } else {
-      for (const p of players) {
-        if (!isInYardForEvents(p)) continue;
-        if (normalizeColorKey(p.color || p.denColor) !== color) continue;
+  // terugschrijven naar locals (let op: Paint Bomb kan lootDeck vervangen)
+  lootDeck = ctx.lootDeck;
+  sack = ctx.sack;
+  leadAdvanceBonus = ctx.leadAdvanceBonus;
 
-        // SAFE: DASH/BURROW/HIDE
-        if (isSafeDecision(p.decision)) continue;
-
-        // Unsafe (LURK/unknown) => caught
-        markCaught(p);
-
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: p.id,
-          message: `${p.name || "Vos"} wordt gepakt bij ${ev ? ev.title : "Den-event"} en verliest alle buit.`,
-        });
-      }
-    }
-
-    } else if (eventId === "DOG_CHARGE") {
-    for (const p of players) {
-      if (!isInYardForEvents(p)) continue;
-
-      if (isDenImmune(flagsRound, p.color || p.denColor)) {
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: p.id,
-          message: `${p.name || "Vos"} ontsnapt aan de herderhond dankzij Den Signal.`,
-        });
-        continue;
-      }
-
-      // SAFE: DASH/BURROW/HIDE
-      if (isSafeDecision(p.decision)) continue;
-
-      // Unsafe => caught
-      markCaught(p);
-
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        playerId: p.id,
-        message: `${p.name || "Vos"} wordt onder de voet gelopen door de herderhond en verliest alle buit.`,
-      });
-    }
-
-} else if (eventId === "SHEEPDOG_PATROL") {
-  for (const p of players) {
-    if (!isInYardForEvents(p)) continue;
-
-    // Sheepdog Patrol: alleen DASH wordt gepakt
-    if (!isDecision(p.decision, "DASH")) continue;
-
-    markCaught(p);
-
-    await addLog(gameId, {
-      round,
-      phase: "REVEAL",
-      kind: "EVENT",
-      playerId: p.id,
-      message: `${p.name || "Vos"} wordt tijdens de Sheepdog Patrol gepakt omdat hij DASH koos en verliest alle buit.`,
-    });
-  }
-
-   } else if (eventId === "SECOND_CHARGE") {
-    for (const p of players) {
-      if (!isInYardForEvents(p)) continue;
-
-      if (isDenImmune(flagsRound, p.color || p.denColor)) {
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: p.id,
-          message: `${p.name || "Vos"} ontsnapt aan de tweede herderhond-charge dankzij Den Signal.`,
-        });
-        continue;
-      }
-
-      // SAFE: DASH/BURROW/HIDE
-      if (isSafeDecision(p.decision)) continue;
-
-      // Unsafe => caught
-      markCaught(p);
-
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        playerId: p.id,
-        message: `${p.name || "Vos"} wordt alsnog ingehaald bij de Second Charge en verliest alle buit.`,
-      });
-    }
-
-  } else if (eventId === "HIDDEN_NEST") {
-    const results = applyHiddenNestEvent(players, lootDeck);
-
-    if (results && results.length) {
-      const parts = results.map((r) => `${r.player.name || "Vos"} (+${r.count})`);
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        cardId: eventId,
-        message: `Hidden Nest: ${parts.join(", ")}.`,
-      });
-    } else {
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        cardId: eventId,
-        message: "Hidden Nest had geen effect – het aantal dashers was niet 1, 2 of 3 (of er was geen loot meer).",
-      });
-    }
-  } else if (eventId === "GATE_TOLL") {
-    for (const p of players) {
-      if (!isInYardForEvents(p)) continue;
-      if (isSafeDecision(p.decision)) continue;
-
-      const loot = Array.isArray(p.loot) ? [...p.loot] : [];
-      if (loot.length > 0) {
-        loot.pop();
-        p.loot = loot;
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: p.id,
-          message: `${p.name || "Vos"} betaalt Gate Toll en verliest 1 buit.`,
-        });
-      } else {
-        markCaught(p);
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: p.id,
-          message: `${p.name || "Vos"} kan de tol niet betalen en wordt gepakt bij het hek.`,
-        });
-      }
-    }
-  } else if (eventId === "MAGPIE_SNITCH") {
-  const orderedAll = [...players].sort((a, b) => {
-    const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
-    const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
-    return ao - bo;
-  });
-
-  // leadIndex is gebaseerd op actieve yard-spelers (match host.js)
-const orderedActive = orderedAll.filter(isActiveForTurn);
-const base = orderedActive.length ? orderedActive : orderedAll;
-
-const lead = pickLeadFromBase(game, base);
-
-    if (lead && isInYardForEvents(lead)) {
-    // SAFE: DASH/BURROW/HIDE
-    if (isSafeDecision(lead.decision)) {
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        playerId: lead.id,
-        message: `Magpie Snitch ziet de Lead Fox, maar ${lead.name || "de vos"} is veilig (${normDecision(lead.decision)}).`,
-      });
-    } else {
-      // Unsafe => caught
-      markCaught(lead);
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        playerId: lead.id,
-        message: `Magpie Snitch verraadt de Lead Fox – ${lead.name || "de vos"} wordt gepakt en verliest alle buit.`,
-      });
-    }
-  } else {
-    await addLog(gameId, {
-      round,
-      phase: "REVEAL",
-      kind: "EVENT",
-      message: "Magpie Snitch: geen effect (Lead Fox is niet in de Yard).",
-    });
-  }
-
-} else if (eventId === "SILENT_ALARM") {
-  const orderedAll = [...players].sort((a, b) => {
-    const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
-    const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
-    return ao - bo;
-  });
-
- const orderedActive = orderedAll.filter(isActiveForTurn);
- const base = orderedActive.length ? orderedActive : orderedAll;
-
- const lead = pickLeadFromBase(game, base);
-
-
-  if (lead && isInYardForEvents(lead)) {
-    if (isSafeDecision(lead.decision)) {
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        playerId: lead.id,
-        message: `${lead.name || "Lead Fox"} dash't al weg – Silent Alarm heeft geen effect.`,
-      });
-    } else {
-      const loot = Array.isArray(lead.loot) ? [...lead.loot] : [];
-
-      if (loot.length >= 2) {
-        const drop1 = loot.pop();
-        const drop2 = loot.pop();
-        lead.loot = loot;
-        if (drop1) sack.push(drop1);
-        if (drop2) sack.push(drop2);
-
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: lead.id,
-          message: `${lead.name || "Lead Fox"} betaalt Silent Alarm en legt 2 buit af in de Sack.`,
-        });
-      } else {
-        leadAdvanceBonus = 1;
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: lead.id,
-          message: `${lead.name || "Lead Fox"} kan Silent Alarm niet betalen (minder dan 2 buit) en verliest zijn Lead-status.`,
-        });
-      }
-    }
-  } else {
-    await addLog(gameId, {
-      round,
-      phase: "REVEAL",
-      kind: "EVENT",
-     message: `${lead.name || "Lead Fox"} is veilig (${normDecision(lead.decision)}) – Silent Alarm heeft geen effect.`,
-    });
-  }
-
-  } else if (eventId === "PAINT_BOMB_NEST") {
-
-    if (sack.length) {
-      lootDeck.push(...sack);
-      sack = [];
-      lootDeck = shuffleArray(lootDeck);
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        message: "Paint-Bomb Nest: alle buit in de Sack gaat terug naar de loot-deck.",
-      });
-    }
-  } else if (eventId === "ROOSTER_CROW") {
-    // roosterSeen teller wordt in host.js bijgehouden
-  }
 
   // =======================================
   // Na event: dashers markeren + flags resetten
