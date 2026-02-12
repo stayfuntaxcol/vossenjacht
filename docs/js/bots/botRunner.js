@@ -2133,53 +2133,48 @@ if (canShift) {
         ? Number(eventCostWeight(nextId, g) || 0)
         : 0;
 
-    // SHIFT trigger: gevaar óf (PaintBomb) score-threat
-    if (nextPeak >= shiftDangerTrigger && (!defenseReady || nextCostW > 0)) {
-      const LOOKAHEAD = shiftLookahead;
-      let best = null;
+  // SHIFT trigger: gevaar óf (PaintBomb) score-threat
+if (nextPeak >= shiftDangerTrigger && (!defenseReady || nextCostW > 0)) {
+  const LOOKAHEAD = shiftLookahead;
+  let best = null;
 
-      for (let j = eventIdx + 1; j < Math.min(track.length, eventIdx + 1 + LOOKAHEAD); j++) {
-        const candId = track[j] ? String(track[j]) : null;
-        if (!candId) continue;
+  for (let j = eventIdx + 1; j < Math.min(track.length, eventIdx + 1 + LOOKAHEAD); j++) {
+    const candId = track[j] ? String(track[j]) : null;
+    if (!candId) continue;
 
-        const f = getEventFacts(candId, { game: g, me: meForMetrics, denColor: myColor, isLead });
+    const f = getEventFacts(candId, { game: g, me: meForMetrics, denColor: myColor, isLead });
 
-        const candPeak =
-          (typeof peakThreatForShift === "function")
-            ? peakThreatForShift(candId, f, g)
-            : peakDanger(f);
+    const candPeak =
+      (typeof peakThreatForShift === "function")
+        ? peakThreatForShift(candId, f, g)
+        : peakDanger(f);
 
-        // Benefit: reduce immediate danger/threat, small penalty for swapping too far.
-        const benefit = (nextPeak - candPeak) - shiftDistancePenalty * (j - eventIdx);
+    const benefit = (nextPeak - candPeak) - shiftDistancePenalty * (j - eventIdx);
 
-        if (!best || benefit > best.benefit) {
-          best = { j, candId, candPeak, benefit };
-        }
-      }
-
-      if (best && best.benefit >= shiftBenefitMin) {
-        shiftPick = {
-          i1: eventIdx,
-          i2: best.j,
-          pos1: eventIdx + 1,
-          pos2: best.j + 1,
-          benefit: best.benefit,
-          nextId,
-          nextPeak,
-          candId: best.candId,
-          candPeak: best.candPeak,
-        };
-      }
+    if (!best || benefit > best.benefit) {
+      best = { j, candId, candPeak, benefit };
     }
+  }
+
+  if (best && best.benefit >= shiftBenefitMin) {
+    shiftPick = {
+      i1: eventIdx,
+      i2: best.j,
+      pos1: eventIdx + 1,
+      pos2: best.j + 1,
+      benefit: best.benefit,
+      nextId,
+      nextPeak,
+      candId: best.candId,
+      candPeak: best.candPeak,
+    };
   }
 }
 
-
-    // Anti-SHIFT spam: block repeated SHIFT unless the benefit is huge.
-    if (shiftOnCooldown && shiftPick && Number(shiftPick.benefit || 0) < shiftOverrideBenefit) {
-      shiftPick = null;
-    }
-    }
+// Anti-SHIFT spam: block repeated SHIFT unless the benefit is huge.
+if (shiftOnCooldown && shiftPick && Number(shiftPick.benefit || 0) < shiftOverrideBenefit) {
+  shiftPick = null;
+}
 
     // ---- FORAGE desire ----
     const avoidSnatch =
@@ -2199,22 +2194,37 @@ if (canShift) {
         avoidSnatch
       );
 
-   // Choose MOVE
+  // Choose MOVE
 let did = null;
 
 if (mustHaveLoot && lootPts <= 0) {
-  // Must have loot to stay viable (Gate Toll etc.)
   did = { kind: "SNATCH", detail: "mustHaveLoot" };
 } else if (wantScout) {
-  did = { kind: "SCOUT", detail: `pos ${scoutPos}` };
+  did = { kind: "SCOUT", detail: "pos " + String(scoutPos) };
 } else if (actionDeck.length > 0 && hand.length < desiredHandMin) {
-  did = { kind: "FORAGE", detail: `hand<${desiredHandMin}` };
+  did = { kind: "FORAGE", detail: "hand<" + String(desiredHandMin) };
 } else if (shiftPick) {
-  did = { kind: "SHIFT", detail: `${shiftPick.pos1}<->${shiftPick.pos2} (Δ≈${shiftPick.benefit.toFixed(1)})` };
+  const b = Number(shiftPick.benefit || 0);
+  did = {
+    kind: "SHIFT",
+    detail:
+      String(shiftPick.pos1) +
+      "<->" +
+      String(shiftPick.pos2) +
+      " (delta~" +
+      b.toFixed(1) +
+      ")",
+  };
 } else if (wantForage) {
-  did = { kind: "FORAGE", detail: `rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)}` };
+  did = {
+    kind: "FORAGE",
+    detail: "rec=" + carryValueRec.toFixed(1) + " dEff=" + dangerEffective.toFixed(1),
+  };
 } else {
-  did = { kind: "SNATCH", detail: `rec=${carryValueRec.toFixed(1)} dEff=${dangerEffective.toFixed(1)}` };
+  did = {
+    kind: "SNATCH",
+    detail: "rec=" + carryValueRec.toFixed(1) + " dEff=" + dangerEffective.toFixed(1),
+  };
 }
 
 // Execute MOVE (mutate local copies used for tx.update)
@@ -2228,11 +2238,13 @@ if (did.kind === "SNATCH") {
       hand.push(actionDeck.pop());
       drawn++;
     }
-    did = { kind: "FORAGE", detail: `${drawn} kaart(en) (loot op)` };
+    did = { kind: "FORAGE", detail: String(drawn) + " kaart(en) (loot op)" };
   } else {
     const card = lootDeck.pop();
     loot.push(card);
-    did.detail = `${card?.t || "Loot"} ${card?.v ?? ""} (${did.detail})`;
+    const t = card && card.t ? card.t : "Loot";
+    const v = card && card.v != null ? String(card.v) : "";
+    did.detail = t + " " + v + " (" + did.detail + ")";
   }
 }
 
