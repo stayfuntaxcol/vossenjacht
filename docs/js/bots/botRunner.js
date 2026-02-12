@@ -701,13 +701,35 @@ function buildBotMetricsForLog({ game, bot, players, flagsRoundOverride = null, 
 
 }
 
-
 // ================================
 // Heuristics/Strategies ctx builder
 // ================================
 function peakDanger(f) {
   if (!f) return 0;
   return Math.max(Number(f.dangerDash || 0), Number(f.dangerLurk || 0), Number(f.dangerBurrow || 0));
+}
+
+function clamp(n, lo, hi) {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+// Extra "dreiging" die niet uit caught-risk komt, maar uit score-schade.
+function eventCostWeight(eventId, game) {
+  const id = String(eventId || "").toUpperCase();
+  if (id !== "PAINT_BOMB_NEST") return 0;
+
+  const sack = Array.isArray(game?.sack) ? game.sack : [];
+  const sackValue = sack.reduce((s, c) => s + (Number(c?.v ?? c?.value ?? 0) || 0), 0);
+
+  // TUNING: 0..4 extra threat (meer sack = meer urgent om te SHIFT’en)
+  // Voorbeeld: sackValue 0 => 0, sackValue 24 => ~4
+  return clamp(sackValue / 6, 0, 4);
+}
+
+function peakThreatForShift(eventId, facts, game) {
+  const base = peakDanger(facts);                 // jouw bestaande 0..10 caught-peak
+  const extra = eventCostWeight(eventId, game);   // 0..4 score-threat
+  return clamp(base + extra, 0, 10);
 }
 
 function buildRevealedDenMap(game) {
@@ -2096,11 +2118,14 @@ if (share && denColor) {
     if (canShift) {
       const nextId = track[eventIdx] ? String(track[eventIdx]) : null;
       if (nextId) {
-        const nextFacts = getEventFacts(nextId, { game: g, me: meForMetrics, denColor: myColor, isLead });
-        const nextPeak = peakDanger(nextFacts);
+       const nextFacts = getEventFacts(nextId, { game: g, me: meForMetrics, denColor: myColor, isLead });
 
-        // Only bother shifting if the near-term looks nasty and we don't have defensive tools ready.
-        if (nextPeak >= shiftDangerTrigger && !defenseReady) {
+const nextThreat = peakThreatForShift(nextId, nextFacts, g);
+const nextCostW = eventCostWeight(nextId, g);
+
+// SHIFT ook toestaan bij “score-threat”, zelfs als defenseReady=true (Den Signal helpt niet tegen sack-damage)
+if (nextThreat >= shiftDangerTrigger && (!defenseReady || nextCostW > 0)) {
+
           const LOOKAHEAD = shiftLookahead;
           let best = null;
 
@@ -2109,10 +2134,8 @@ if (share && denColor) {
             if (!candId) continue;
 
             const f = getEventFacts(candId, { game: g, me: meForMetrics, denColor: myColor, isLead });
-            const candPeak = peakDanger(f);
-
-            // Benefit: reduce immediate danger, small penalty for swapping too far.
-            const benefit = (nextPeak - candPeak) - shiftDistancePenalty * (j - eventIdx);
+       const candThreat = peakThreatForShift(candId, f, g);
+const benefit = (nextThreat - candThreat) - shiftDistancePenalty * (j - eventIdx);
 
             if (!best || benefit > best.benefit) {
               best = { j, candId, candPeak, benefit };
@@ -2130,6 +2153,11 @@ if (share && denColor) {
               nextPeak,
               candId: best.candId,
               candPeak: best.candPeak,
+              extThreat,
+              nextCostW,
+              candId: best.candId,
+              candThreat: best.candThreat,
+              candCostW: eventCostWeight(best.candId, g),
             };
           }
         }
