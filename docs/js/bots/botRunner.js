@@ -2114,54 +2114,66 @@ if (share && denColor) {
       knownUpcomingEvents.length < 1; // no intel yet
 
     // ---- SHIFT pick: swap the next event with a safer one within a small lookahead ----
-    let shiftPick = null;
-    if (canShift) {
-      const nextId = track[eventIdx] ? String(track[eventIdx]) : null;
-      if (nextId) {
-       const nextFacts = getEventFacts(nextId, { game: g, me: meForMetrics, denColor: myColor, isLead });
+let shiftPick = null;
 
-const nextThreat = peakThreatForShift(nextId, nextFacts, g);
-const nextCostW = eventCostWeight(nextId, g);
+if (canShift) {
+  const nextId = track[eventIdx] ? String(track[eventIdx]) : null;
 
-// SHIFT ook toestaan bij “score-threat”, zelfs als defenseReady=true (Den Signal helpt niet tegen sack-damage)
-if (nextThreat >= shiftDangerTrigger && (!defenseReady || nextCostW > 0)) {
+  if (nextId) {
+    const nextFacts = getEventFacts(nextId, { game: g, me: meForMetrics, denColor: myColor, isLead });
 
-          const LOOKAHEAD = shiftLookahead;
-          let best = null;
+    // Compat: als je peakThreatForShift/eventCostWeight al hebt -> gebruik ze, anders fallback naar peakDanger.
+    const nextPeak =
+      (typeof peakThreatForShift === "function")
+        ? peakThreatForShift(nextId, nextFacts, g)
+        : peakDanger(nextFacts);
 
-          for (let j = eventIdx + 1; j < Math.min(track.length, eventIdx + 1 + LOOKAHEAD); j++) {
-            const candId = track[j] ? String(track[j]) : null;
-            if (!candId) continue;
+    const nextCostW =
+      (typeof eventCostWeight === "function")
+        ? Number(eventCostWeight(nextId, g) || 0)
+        : 0;
 
-            const f = getEventFacts(candId, { game: g, me: meForMetrics, denColor: myColor, isLead });
-       const candThreat = peakThreatForShift(candId, f, g);
-const benefit = (nextThreat - candThreat) - shiftDistancePenalty * (j - eventIdx);
+    // SHIFT trigger: gevaar óf (PaintBomb) score-threat
+    if (nextPeak >= shiftDangerTrigger && (!defenseReady || nextCostW > 0)) {
+      const LOOKAHEAD = shiftLookahead;
+      let best = null;
 
-            if (!best || benefit > best.benefit) {
-              best = { j, candId, candPeak, benefit };
-            }
-          }
+      for (let j = eventIdx + 1; j < Math.min(track.length, eventIdx + 1 + LOOKAHEAD); j++) {
+        const candId = track[j] ? String(track[j]) : null;
+        if (!candId) continue;
 
-          if (best && best.benefit >= shiftBenefitMin) {
-            shiftPick = {
-              i1: eventIdx,
-              i2: best.j,
-              pos1: eventIdx + 1,
-              pos2: best.j + 1,
-              benefit: best.benefit,
-              nextId,
-              nextPeak,
-              candId: best.candId,
-              candPeak: best.candPeak,
-              extThreat,
-              nextCostW,
-              candId: best.candId,
-              candThreat: best.candThreat,
-              candCostW: eventCostWeight(best.candId, g),
-            };
-          }
+        const f = getEventFacts(candId, { game: g, me: meForMetrics, denColor: myColor, isLead });
+
+        const candPeak =
+          (typeof peakThreatForShift === "function")
+            ? peakThreatForShift(candId, f, g)
+            : peakDanger(f);
+
+        // Benefit: reduce immediate danger/threat, small penalty for swapping too far.
+        const benefit = (nextPeak - candPeak) - shiftDistancePenalty * (j - eventIdx);
+
+        if (!best || benefit > best.benefit) {
+          best = { j, candId, candPeak, benefit };
         }
       }
+
+      if (best && best.benefit >= shiftBenefitMin) {
+        shiftPick = {
+          i1: eventIdx,
+          i2: best.j,
+          pos1: eventIdx + 1,
+          pos2: best.j + 1,
+          benefit: best.benefit,
+          nextId,
+          nextPeak,
+          candId: best.candId,
+          candPeak: best.candPeak,
+        };
+      }
+    }
+  }
+}
+
 
     // Anti-SHIFT spam: block repeated SHIFT unless the benefit is huge.
     if (shiftOnCooldown && shiftPick && Number(shiftPick.benefit || 0) < shiftOverrideBenefit) {
