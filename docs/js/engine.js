@@ -43,6 +43,26 @@ function splitTrackByStatus(game) {
   };
 }
 
+// =========================
+// DECISION normalize + safety
+// DASH/BURROW/HIDE = safe, LURK/unknown = unsafe
+// =========================
+function normDecision(x) {
+  const s = String(x || "").toUpperCase().trim();
+  return s.startsWith("DECISION_") ? s.slice("DECISION_".length) : s;
+}
+
+function isDecision(x, want) {
+  return normDecision(x) === String(want || "").toUpperCase().trim();
+}
+
+function isSafeDecision(x) {
+  const d = normDecision(x);
+  if (d === "DASH") return true;
+  if (d === "BURROW" || d === "HIDE") return true;
+  return false; // LURK/unknown
+}
+
 function isInYardForEvents(p) {
   return p?.inYard !== false && !p?.dashed && !p?.caught;
 }
@@ -126,7 +146,7 @@ async function writePlayers(gameId, players) {
 // Loot komt uit lootDeck. Als er te weinig kaarten zijn,
 // delen we eerlijk in rondes.
 function applyHiddenNestEvent(players, lootDeck) {
-  const dashers = players.filter((p) => isInYardForEvents(p) && p.decision === "DASH");
+  const dashers = players.filter((p) => isInYardForEvents(p) && isDecision(p.decision, "DASH"));
   const n = dashers.length;
 
   let targetEach = 0;
@@ -429,7 +449,8 @@ async function scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack
 // Rooster-limiet: 3e Rooster Crow
 async function endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, event, round) {
   const dashers = players
-    .filter((p) => isInYardForEvents(p) && p.decision === "DASH")
+    .filter((p) => isInYardForEvents(p) && isDecision(p.decision, "DASH"))
+
     .sort((a, b) => {
       const ao = typeof a.joinOrder === "number" ? a.joinOrder : Number.MAX_SAFE_INTEGER;
       const bo = typeof b.joinOrder === "number" ? b.joinOrder : Number.MAX_SAFE_INTEGER;
@@ -440,7 +461,8 @@ async function endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, 
   // Regel: wie niet DASH’t bij de 3e Rooster Crow wordt gepakt en verliest alle LOOT (dus ook 0 punten).
   for (const p of players) {
     const inYard = isInYardForEvents(p);
-    const choseDash = inYard && p.decision === "DASH";
+    const choseDash = inYard && isDecision(p.decision, "DASH");
+
     const getsCaught = inYard && !choseDash;
 
     if (choseDash) {
@@ -573,15 +595,35 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
       }
     }
   }
+  
+  // ====== BURROW/HIDE: consume token zodra gekozen (voor UI/consistency) ======
+  for (const p of players) {
+    if (!isInYardForEvents(p)) continue;
+
+    if (isDecision(p.decision, "BURROW") || isDecision(p.decision, "HIDE")) {
+      if (!p.burrowUsedThisRaid) {
+        const pRef = doc(db, "games", gameId, "players", p.id);
+        await updateDoc(pRef, { burrowUsedThisRaid: true });
+        p.burrowUsedThisRaid = true;
+
+        await addLog(gameId, {
+          round,
+          phase: "REVEAL",
+          kind: "EVENT",
+          playerId: p.id,
+          message: `${p.name || "Vos"} gebruikt BURROW/HIDE (1× per raid) en is veilig.`,
+        });
+      }
+    }
+  }
 
   // =======================================
   // Event-specifieke logica
   // =======================================
 
-  if (eventId.startsWith("DEN_")) {
+    if (eventId.startsWith("DEN_")) {
     const color = normalizeColorKey(eventId.substring(4)); // RED / BLUE / GREEN / YELLOW
 
-    // Optioneel: snelle log als het hele Den-event geneutraliseerd is
     if (isDenImmune(flagsRound, color)) {
       await addLog(gameId, {
         round,
@@ -592,38 +634,12 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
     } else {
       for (const p of players) {
         if (!isInYardForEvents(p)) continue;
-        if (normalizeColorKey(p.color) !== color) continue;
+        if (normalizeColorKey(p.color || p.denColor) !== color) continue;
 
-        if (p.decision === "BURROW") {
-  const pRef = doc(db, "games", gameId, "players", p.id);
-  const already = !!p.burrowUsedThisRaid;
+        // SAFE: DASH/BURROW/HIDE
+        if (isSafeDecision(p.decision)) continue;
 
-  if (already) {
-    await addLog(gameId, {
-      round,
-      phase: "REVEAL",
-      kind: "EVENT",
-      playerId: p.id,
-      message: `${p.name || "Vos"} probeert opnieuw te burrowen, maar dat mag maar 1× per raid.`,
-    });
-    // géén continue -> laat event afhandelen (kan dus gepakt worden)
-  } else {
-    await updateDoc(pRef, { burrowUsedThisRaid: true });
-    p.burrowUsedThisRaid = true;
-
-    await addLog(gameId, {
-      round,
-      phase: "REVEAL",
-      kind: "EVENT",
-      playerId: p.id,
-      message: `${p.name || "Vos"} is veilig in zijn hol (BURROW).`,
-    });
-    continue;
-  }
-}
-
-        if (p.decision === "DASH") continue;
-
+        // Unsafe (LURK/unknown) => caught
         markCaught(p);
 
         await addLog(gameId, {
@@ -635,11 +651,12 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
         });
       }
     }
-  } else if (eventId === "DOG_CHARGE") {
+
+    } else if (eventId === "DOG_CHARGE") {
     for (const p of players) {
       if (!isInYardForEvents(p)) continue;
 
-      if (isDenImmune(flagsRound, p.color)) {
+      if (isDenImmune(flagsRound, p.color || p.denColor)) {
         await addLog(gameId, {
           round,
           phase: "REVEAL",
@@ -649,40 +666,11 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
         });
         continue;
       }
-      
-      if (p.decision === "BURROW") {
-        const pRef = doc(db, "games", gameId, "players", p.id);
-        const already = !!p.burrowUsedThisRaid;
 
-        if (already) {
-          // HARD RULE: 2e burrow = geweigerd → speler krijgt het event gewoon
-          await addLog(gameId, {
-            round,
-            phase: "REVEAL",
-            kind: "EVENT",
-            playerId: p.id,
-            message: `${p.name || "Vos"} probeert opnieuw te burrowen, maar dat mag maar 1× per raid.`,
-          });
-          // géén continue → laat de normale event-afhandeling hieronder doorgaan
-        } else {
-          // 1e burrow = toegestaan → markeer in Firestore en skip event
-          await updateDoc(pRef, { burrowUsedThisRaid: true });
-          p.burrowUsedThisRaid = true;
+      // SAFE: DASH/BURROW/HIDE
+      if (isSafeDecision(p.decision)) continue;
 
-          await addLog(gameId, {
-            round,
-            phase: "REVEAL",
-            kind: "EVENT",
-            playerId: p.id,
-            message: `${p.name || "Vos"} duikt onder de grond en ontwijkt de herderhond.`,
-          });
-
-          continue; // event ontwijken (zoals je nu al doet)
-        }
-      }
-
-      if (p.decision === "DASH") continue;
-
+      // Unsafe => caught
       markCaught(p);
 
       await addLog(gameId, {
@@ -693,11 +681,15 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
         message: `${p.name || "Vos"} wordt onder de voet gelopen door de herderhond en verliest alle buit.`,
       });
     }
+
   } else if (eventId === "SHEEPDOG_PATROL") {
     for (const p of players) {
       if (!isInYardForEvents(p)) continue;
-      if (p.decision !== "DASH") continue;
 
+      // SAFE: DASH/BURROW/HIDE
+      if (isSafeDecision(p.decision)) continue;
+
+      // Unsafe => caught
       markCaught(p);
 
       await addLog(gameId, {
@@ -705,14 +697,15 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
         phase: "REVEAL",
         kind: "EVENT",
         playerId: p.id,
-        message: `${p.name || "Vos"} wordt tijdens de Sheepdog Patrol gepakt terwijl hij probeert te dashen en verliest alle buit.`,
+        message: `${p.name || "Vos"} wordt tijdens de Sheepdog Patrol gepakt (LURK) en verliest alle buit.`,
       });
     }
-  } else if (eventId === "SECOND_CHARGE") {
+
+   } else if (eventId === "SECOND_CHARGE") {
     for (const p of players) {
       if (!isInYardForEvents(p)) continue;
 
-      if (isDenImmune(flagsRound, p.color)) {
+      if (isDenImmune(flagsRound, p.color || p.denColor)) {
         await addLog(gameId, {
           round,
           phase: "REVEAL",
@@ -723,38 +716,11 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
         continue;
       }
 
- if (p.decision === "BURROW") {
-  const pRef = doc(db, "games", gameId, "players", p.id);
-  const already = !!p.burrowUsedThisRaid;
+      // SAFE: DASH/BURROW/HIDE
+      if (isSafeDecision(p.decision)) continue;
 
-  if (already) {
-    await addLog(gameId, {
-      round,
-      phase: "REVEAL",
-      kind: "EVENT",
-      playerId: p.id,
-      message: `${p.name || "Vos"} probeert opnieuw te burrowen, maar dat mag maar 1× per raid.`,
-    });
-    // geen continue → normale afhandeling (kan gepakt worden)
-  } else {
-    await updateDoc(pRef, { burrowUsedThisRaid: true });
-    p.burrowUsedThisRaid = true;
-
-    await addLog(gameId, {
-      round,
-      phase: "REVEAL",
-      kind: "EVENT",
-      playerId: p.id,
-      message: `${p.name || "Vos"} duikt onder en ontwijkt de tweede charge (BURROW).`,
-    });
-
-    continue;
-  }
-}
-
-      if (p.decision === "DASH") continue;
-
-     markCaught(p);
+      // Unsafe => caught
+      markCaught(p);
 
       await addLog(gameId, {
         round,
@@ -764,6 +730,7 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
         message: `${p.name || "Vos"} wordt alsnog ingehaald bij de Second Charge en verliest alle buit.`,
       });
     }
+
   } else if (eventId === "HIDDEN_NEST") {
     const results = applyHiddenNestEvent(players, lootDeck);
 
@@ -788,7 +755,7 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
   } else if (eventId === "GATE_TOLL") {
     for (const p of players) {
       if (!isInYardForEvents(p)) continue;
-      if (p.decision === "DASH") continue;
+      if (isSafeDecision(p.decision)) continue;
 
       const loot = Array.isArray(p.loot) ? [...p.loot] : [];
       if (loot.length > 0) {
@@ -825,59 +792,25 @@ const base = orderedActive.length ? orderedActive : orderedAll;
 
 const lead = pickLeadFromBase(game, base);
 
-  if (lead && isInYardForEvents(lead)) {
-    if (lead.decision === "BURROW") {
-      // ✅ BURROW is 1x per raid: consume token hier
-      const pRef = doc(db, "games", gameId, "players", lead.id);
-      const already = !!lead.burrowUsedThisRaid;
-
-      if (already) {
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: lead.id,
-          message: `${lead.name || "Lead Fox"} probeert opnieuw te burrowen, maar dat mag maar 1× per raid.`,
-        });
-        // geen continue -> Magpie effect gaat door (dus kan gepakt worden)
-        markCaught(lead);
-        
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: lead.id,
-          message: `Magpie Snitch verraadt de Lead Fox – ${lead.name || "de vos"} wordt gepakt en verliest alle buit.`,
-        });
-      } else {
-        await updateDoc(pRef, { burrowUsedThisRaid: true });
-        lead.burrowUsedThisRaid = true;
-
-        await addLog(gameId, {
-          round,
-          phase: "REVEAL",
-          kind: "EVENT",
-          playerId: lead.id,
-          message: `Magpie Snitch ziet de Lead Fox, maar ${lead.name || "de vos"} zit veilig in zijn hol (BURROW).`,
-        });
-      }
-    } else if (lead.decision !== "DASH") {
-      lead.inYard = false;
-      lead.loot = [];
+    if (lead && isInYardForEvents(lead)) {
+    // SAFE: DASH/BURROW/HIDE
+    if (isSafeDecision(lead.decision)) {
+      await addLog(gameId, {
+        round,
+        phase: "REVEAL",
+        kind: "EVENT",
+        playerId: lead.id,
+        message: `Magpie Snitch ziet de Lead Fox, maar ${lead.name || "de vos"} is veilig (${normDecision(lead.decision)}).`,
+      });
+    } else {
+      // Unsafe => caught
+      markCaught(lead);
       await addLog(gameId, {
         round,
         phase: "REVEAL",
         kind: "EVENT",
         playerId: lead.id,
         message: `Magpie Snitch verraadt de Lead Fox – ${lead.name || "de vos"} wordt gepakt en verliest alle buit.`,
-      });
-    } else {
-      await addLog(gameId, {
-        round,
-        phase: "REVEAL",
-        kind: "EVENT",
-        playerId: lead.id,
-        message: "Magpie Snitch vindt niets – de Lead Fox is al aan het dashen.",
       });
     }
   } else {
@@ -903,7 +836,7 @@ const lead = pickLeadFromBase(game, base);
 
 
   if (lead && isInYardForEvents(lead)) {
-    if (lead.decision === "DASH") {
+    if (isSafeDecision(lead.decision)) {
       await addLog(gameId, {
         round,
         phase: "REVEAL",
@@ -944,7 +877,7 @@ const lead = pickLeadFromBase(game, base);
       round,
       phase: "REVEAL",
       kind: "EVENT",
-      message: "Silent Alarm: geen effect (Lead Fox is niet meer in de Yard).",
+     message: `${lead.name || "Lead Fox"} is veilig (${normDecision(lead.decision)}) – Silent Alarm heeft geen effect.`,
     });
   }
 
@@ -969,7 +902,7 @@ const lead = pickLeadFromBase(game, base);
   // Na event: dashers markeren + flags resetten
   // =======================================
   for (const p of players) {
-    if (isInYardForEvents(p) && p.decision === "DASH") {
+    if (isInYardForEvents(p) && isDecision(p.decision, "DASH")) {
       p.dashed = true;
       await addLog(gameId, {
         round,
