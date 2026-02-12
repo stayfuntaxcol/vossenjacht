@@ -51,6 +51,14 @@ const OPS_SNAPSHOT_ENABLED = true;
 // DISC mapping per Den kleur
 const DISC_BY_DEN = { RED: "D", YELLOW: "I", GREEN: "S", BLUE: "C" };
 
+// Helper: geef strategy toegang tot discProfile zonder Firestore schema te wijzigen
+function withDiscProfile(p) {
+  const den = normColor(p?.color || p?.den || p?.denColor);
+  const discProfile = DISC_BY_DEN[den] || null;
+  return discProfile ? { ...p, discProfile } : p;
+}
+
+
 // Kleine, “stabiele” overrides (geen spikes)
 // =============================
 // JAZZ settings (utility layer)
@@ -262,6 +270,14 @@ const JAZZ_STRATEGY_OVERRIDES = {
     wResource: 0.35,
 
     lookaheadN: 4,
+    
+    // Hidden Nest timing + track play (DISC-tuned)
+    hiddenNestStart: 0.5,
+    hiddenNestMustAt: 0.85,
+    hiddenNestDashBonusMax: 3.2,
+    wHiddenNestDelay: 0.6,
+    kudHiddenNestDelayBonus: 0.3,
+    
 
     // SHIFT (laat staan zoals jij het had; we buffen OPS i.p.v. SHIFT te nerfen)
     shiftMinGain: 3.2,
@@ -312,6 +328,14 @@ const JAZZ_STRATEGY_OVERRIDES = {
     wResource: 0.45,
 
     lookaheadN: 4,
+    
+    // Hidden Nest timing + track play (DISC-tuned)
+    hiddenNestStart: 0.5,
+    hiddenNestMustAt: 0.85,
+    hiddenNestDashBonusMax: 2.8,
+    wHiddenNestDelay: 1.7,
+    kudHiddenNestDelayBonus: 1.2,
+    
 
     // SHIFT
     shiftMinGain: 3.0,
@@ -362,6 +386,14 @@ const JAZZ_STRATEGY_OVERRIDES = {
     wResource: 0.55,
 
     lookaheadN: 4,
+    
+    // Hidden Nest timing + track play (DISC-tuned)
+    hiddenNestStart: 0.6,
+    hiddenNestMustAt: 0.88,
+    hiddenNestDashBonusMax: 2.2,
+    wHiddenNestDelay: 1.1,
+    kudHiddenNestDelayBonus: 0.7,
+    
 
     // SHIFT
     shiftMinGain: 3.4,
@@ -413,6 +445,14 @@ const JAZZ_STRATEGY_OVERRIDES = {
     wResource: 0.85,
 
     lookaheadN: 5,
+    
+    // Hidden Nest timing + track play (DISC-tuned)
+    hiddenNestStart: 0.55,
+    hiddenNestMustAt: 0.87,
+    hiddenNestDashBonusMax: 2.6,
+    wHiddenNestDelay: 1.4,
+    kudHiddenNestDelayBonus: 1.0,
+    
 
     // SHIFT
     shiftMinGain: 3.0,
@@ -1645,7 +1685,7 @@ const usedIds = (
 
 const res = evaluateOpsActions({
   game,
-  me: bot,
+  me: withDiscProfile(bot),
   players: list,
   flagsRound: flags,
   cfg: getStrategyCfgForBot(bot, game), // behoud: per-bot DISC overrides (+ optioneel game.botDiscProfiles)
@@ -3189,7 +3229,7 @@ const useStrategy = (!noPeek) || !!peekIntel;
 if (useStrategy) {
   dec = evaluateDecision({
     game: g,
-    me: meForDecision,
+    me: withDiscProfile(meForDecision),
     players: playersForDecision || [],
     flagsRound: flags,
     cfg: getStrategyCfgForBot(meForDecision, g),
