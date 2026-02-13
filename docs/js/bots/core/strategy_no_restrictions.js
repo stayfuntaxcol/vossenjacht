@@ -626,8 +626,10 @@ function canonUpdateDashPush({ cfg, dashPushNow, safeNow, dangerStay, endPressur
     const multMap = cfg0.hiddenNestDashMultByDisc || DEFAULTS.hiddenNestDashMultByDisc || { D: 1.20, I: 1.00, S: 0.85, C: 1.05 };
     const hnDashMult = Number(multMap?.[disc] ?? 1.0);
 
-    if (String(nextId) === "HIDDEN_NEST" && prog >= hnStart) {
-      const t = clamp((prog - hnStart) / Math.max(1e-6, (1 - hnStart)), 0, 1);
+    const hnStartEff = disc === "S" ? 0 : hnStart;
+
+    if (String(nextId) === "HIDDEN_NEST" && prog >= hnStartEff) {
+      const t = clamp((prog - hnStartEff) / Math.max(1e-6, (1 - hnStartEff)), 0, 1);
       const ramp = t * t * (3 - 2 * t); // smoothstep
 
       const inYardCount = safeArr(players).filter(isInYard).length;
@@ -680,6 +682,68 @@ function canonUpdateDashPush({ cfg, dashPushNow, safeNow, dangerStay, endPressur
       meta: { reason: "safe_lurk", nextEventIdUsed: nextId, isRooster3: false, dangerStay, safeNow },
     };
   }
+
+
+// ===== DISC override: S (GREEN)
+// Regel: normaal geen DASH met 0 loot.
+// Uitzonderingen:
+// - HIDDEN_NEST: mag wél DASH zonder loot (want je krijgt loot via het event)
+// - Extreem gevaar: overleven gaat voor (of als je anders vrijwel zeker gepakt wordt)
+if (String(me?.discProfile || me?.disc || "").toUpperCase() === "S") {
+  const lootCount = safeArr(me?.loot).length;
+  const isHiddenNest = String(nextId) === "HIDDEN_NEST";
+
+  const critMin = Number(cfg0.canonCritDangerMin ?? DEFAULTS.canonCritDangerMin ?? 8.5);
+  const highMin = Number(cfg0.canonHighDangerMin ?? DEFAULTS.canonHighDangerMin ?? 6.5);
+  const noPeek = !!flags?.noPeek;
+
+  if (!isHiddenNest && lootCount < 1) {
+    const extreme = Number(dangerStay) >= critMin;
+
+    // Niet extreem: eerst BURROW als het kan
+    if (!extreme && burrowReady) {
+      return {
+        decision: "BURROW",
+        meta: {
+          reason: "green_zero_loot_force_burrow",
+          nextEventIdUsed: nextId,
+          dangerStay,
+          safeNow,
+          lootCount,
+        },
+      };
+    }
+
+    // Geen BURROW, wel duidelijke dreiging en we zien het aankomen → dan toch DASH (anders domme LURK)
+    if (!burrowReady && !noPeek && Number(dangerStay) >= highMin) {
+      return {
+        decision: "DASH",
+        meta: {
+          reason: "green_zero_loot_no_burrow_dash_to_survive",
+          nextEventIdUsed: nextId,
+          dangerStay,
+          safeNow,
+          lootCount,
+        },
+      };
+    }
+
+    // Anders: LURK (risico nemen), want DASH met 0 loot is niet de default voor GREEN
+    if (!extreme) {
+      return {
+        decision: "LURK",
+        meta: {
+          reason: "green_zero_loot_hold_lurk",
+          nextEventIdUsed: nextId,
+          dangerStay,
+          safeNow,
+          lootCount,
+        },
+      };
+    }
+    // Extreem: val terug op standaard danger policy hieronder.
+  }
+}
 
   return {
     decision: burrowReady ? "BURROW" : "DASH",
@@ -1865,3 +1929,4 @@ if (typeof window !== "undefined") {
   window.evaluateOpsActions = evaluateOpsActions;
   window.evaluateDecision = evaluateDecision;
 }
+
