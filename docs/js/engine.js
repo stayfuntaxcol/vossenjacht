@@ -43,6 +43,67 @@ function splitTrackByStatus(game) {
   };
 }
 
+// =======================================
+// Action deck: hand cleanup rules (NEW)
+// - DASH   -> hand naar actionDiscardPile
+// - CAUGHT -> hand onderop actionDeck
+// =======================================
+function _normHandCard(c) {
+  if (c == null) return null;
+  if (typeof c === "string") return { name: String(c) };
+  if (typeof c === "object") {
+    if (c.name) return { name: String(c.name) };
+    if (c.cardName) return { name: String(c.cardName) };
+    return c;
+  }
+  return { name: String(c) };
+}
+
+function moveHandToDiscardPile(p, actionDiscardPile, round) {
+  if (!p) return;
+  const hand = Array.isArray(p.hand) ? [...p.hand] : [];
+  if (!hand.length) {
+    p.hand = [];
+    return;
+  }
+
+  const discard = Array.isArray(actionDiscardPile) ? actionDiscardPile : [];
+  const at = Date.now();
+  const r = Number(round || 0);
+
+  for (const c of hand) {
+    const cardObj = _normHandCard(c);
+    const name = String(cardObj?.name || "").trim();
+    if (!name) continue;
+
+    discard.push({
+      uid: `${at}-${Math.random().toString(16).slice(2)}`,
+      name,
+      by: p.id || null,
+      round: r,
+      at,
+    });
+  }
+
+  p.hand = [];
+}
+
+function moveHandToBottomOfActionDeck(p, actionDeck) {
+  if (!p) return;
+  const hand = Array.isArray(p.hand) ? [...p.hand] : [];
+  if (!hand.length) {
+    p.hand = [];
+    return;
+  }
+
+  const deck = Array.isArray(actionDeck) ? actionDeck : [];
+  // Deck-conventie: pop() = top (einde array) → bottom is begin.
+  const cards = hand.map(_normHandCard).filter(Boolean);
+  deck.unshift(...cards);
+
+  p.hand = [];
+}
+
 // =====================================================
 // DECISION helpers (prefix-proof) + Lead helper
 // =====================================================
@@ -386,6 +447,7 @@ async function resolveRevealBySpec(ctx) {
     const caught = !!spec.caughtIf(p, ctx);
 
     if (caught) {
+      moveHandToBottomOfActionDeck(p, ctx.actionDeck);
       markCaught(p);
       if (spec.onCaughtLog) {
         await addLog(ctx.gameId, {
@@ -697,7 +759,7 @@ export async function applyKickUpDust(gameId) {
 // =======================================
 // Scoring & einde raid
 // =======================================
-async function scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, reason) {
+async function scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, reason, actionDeck = null, actionDiscardPile = null) {
   const round = game.round || 0;
 
   // Loot Sack eindscore:
@@ -782,6 +844,8 @@ async function scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack
     phase: "END",
     lootDeck,
     sack,
+    actionDeck: Array.isArray(actionDeck) ? actionDeck : (game.actionDeck || []),
+    actionDiscardPile: Array.isArray(actionDiscardPile) ? actionDiscardPile : (game.actionDiscardPile || []),
     raidEndedByRooster: !!game.raidEndedByRooster,
   });
 
@@ -789,7 +853,7 @@ async function scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack
 }
 
 // Rooster-limiet: 3e Rooster Crow
-async function endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, event, round) {
+async function endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, event, round, actionDeck, actionDiscardPile) {
   const dashers = players
     .filter((p) => isInYardForEvents(p) && isDecision(p.decision, "DASH"))
 
@@ -808,10 +872,13 @@ async function endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, 
     const getsCaught = inYard && !choseDash;
 
     if (choseDash) {
+      moveHandToDiscardPile(p, actionDiscardPile, round);
       p.dashed = true;
     }
 
     if (getsCaught) {
+      moveHandToBottomOfActionDeck(p, actionDeck);
+
       p.caught = true;
       p.role = "VIEWER";
       p.state = "CAUGHT";
@@ -842,7 +909,7 @@ async function endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, 
       : "Derde Rooster Crow: raid eindigt. Geen Dashers → Loot Sack levert geen bonus op.",
   });
 
-  await scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, "Rooster Crow limiet bereikt");
+  await scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, "Rooster Crow limiet bereikt", actionDeck, actionDiscardPile);
 }
 
 // =======================================
@@ -869,6 +936,8 @@ export async function resolveAfterReveal(gameId) {
   const ev = getEventById(eventId);
   let lootDeck = [...(game.lootDeck || [])];
   let sack = [...(game.sack || [])];
+  let actionDeck = [...(game.actionDeck || [])];
+  let actionDiscardPile = [...(game.actionDiscardPile || [])];
   
   let leadAdvanceBonus = 0; // +1 betekent: lead roteert extra hard (penalty)
   
@@ -911,7 +980,7 @@ if (predictions.length && lootDeck.length) {
 
 // ====== Rooster: limiet-check (3e crow) ======
 if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
-  await endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, ev, round);
+  await endRaidByRooster(gameId, gameRef, game, players, lootDeck, sack, ev, round, actionDeck, actionDiscardPile);
   return;
 }
 
@@ -972,6 +1041,8 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
     players,
     lootDeck,
     sack,
+    actionDeck,
+    actionDiscardPile,
     flagsRound,
     leadAdvanceBonus,
     denColor: null,
@@ -992,6 +1063,7 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
   // =======================================
   for (const p of players) {
     if (isInYardForEvents(p) && isDecision(p.decision, "DASH")) {
+      moveHandToDiscardPile(p, actionDiscardPile, round);
       p.dashed = true;
       await addLog(gameId, {
         round,
@@ -1056,7 +1128,7 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
       });
     }
 
-    await scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, "Geen vossen meer in de Yard");
+    await scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, "Geen vossen meer in de Yard", actionDeck, actionDiscardPile);
     return;
   }
 
@@ -1068,7 +1140,7 @@ if ((game.roosterSeen || 0) >= 3 && eventId === "ROOSTER_CROW") {
       kind: "SYSTEM",
       message: "Alle Event Cards zijn gespeeld. De raid eindigt.",
     });
-    await scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, "Event deck leeg");
+    await scoreRaidAndFinish(gameId, gameRef, game, players, lootDeck, sack, "Event deck leeg", actionDeck, actionDiscardPile);
     return;
   }
 
@@ -1085,6 +1157,8 @@ let newLeadIndex = typeof game.leadIndex === "number" ? game.leadIndex : 0;
   await updateDoc(gameRef, {
     lootDeck,
     sack,
+    actionDeck,
+    actionDiscardPile,
     flagsRound,
     movedPlayerIds: [],
     leadIndex: newLeadIndex,
@@ -1175,5 +1249,6 @@ if (!Number.isFinite(s) || s <= 0) continue;
     console.error("saveLeaderboardForGame failed", err);
   }
 }
+
 
 
