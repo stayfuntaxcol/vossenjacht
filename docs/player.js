@@ -1,2 +1,3 @@
-// /player.js  (root)
-import "./js/bots/botRunner.js";
+// js/player.js (entry voor player.html)
+import "./bots/botRunner.js";
+
