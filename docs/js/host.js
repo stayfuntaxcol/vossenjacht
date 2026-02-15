@@ -13,7 +13,9 @@ import { addLog } from "./log.js";
 import {
   getFirestore,
   doc,
+  setDoc,
   getDoc,
+  writeBatch,
   collection,
   onSnapshot,
   updateDoc,
