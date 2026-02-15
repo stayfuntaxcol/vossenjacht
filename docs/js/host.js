@@ -61,6 +61,77 @@ if (gameId) {
 }
 
 // ===============================
+// CLONE RAID RUNS (host-only)
+// ===============================
+// Vereist dat je host.js al deze imports heeft uit firebase/firestore:
+// doc, collection, getDoc, getDocs, setDoc, writeBatch, serverTimestamp
+
+window.cloneRaidRuns = async function cloneRaidRuns(templateGameId) {
+  const gRef = doc(db, "games", templateGameId);
+  const gSnap = await getDoc(gRef);
+  if (!gSnap.exists()) throw new Error("Template game bestaat niet: " + templateGameId);
+
+  const g0 = gSnap.data();
+
+  // Lees spelers uit template
+  const pCol = collection(db, "games", templateGameId, "players");
+  const pSnaps = await getDocs(pCol);
+  const players = pSnaps.docs.map(d => ({ id: d.id, data: d.data() }));
+
+  // Handige helper: maak nieuwe gameId
+  const mkGameId = () => doc(collection(db, "games")).id;
+
+  // Runs: pas alleen noPeek aan (zelfde rest)
+  const runs = [
+    { name: "A_noPeek_false", noPeek: false }, // baseline
+    { name: "B_noPeek_true",  noPeek: true  }, // iedereen blind (meest fair)
+    { name: "C_noPeek_true",  noPeek: true  }, // idem, maar jij kunt hier extra toggles testen
+  ];
+
+  const results = [];
+
+  for (const r of runs) {
+    const newId = mkGameId();
+    const newGRef = doc(db, "games", newId);
+
+    // Clone game doc + override een paar runtime velden
+    const g1 = structuredClone(g0);
+    g1.createdAt = serverTimestamp();
+    g1.raidPaused = true;       // start ook gepauzeerd
+    g1.botsEnabled = false;     // zet jij straks aan per run
+    g1.leaderboardWritten = false;
+    g1.movedPlayerIds = [];     // schoon
+    g1.opsStep = 0;
+    g1.opsCount = 0;
+    g1.opsEndedAtMs = null;
+
+    // noPeek toggles
+    g1.flagsRound = g1.flagsRound || {};
+    g1.flagsRound.noPeek = r.noPeek;
+
+    await setDoc(newGRef, g1);
+
+    // Clone players (zelfde docIds = belangrijk!)
+    const batch = writeBatch(db);
+    for (const p of players) {
+      const newPRef = doc(db, "games", newId, "players", p.id);
+      batch.set(newPRef, p.data);
+    }
+    await batch.commit();
+
+    results.push({ name: r.name, gameId: newId });
+  }
+
+  console.table(results);
+
+  // Handige links
+  const base = location.origin + location.pathname.replace(/\/[^/]*$/, "/host.html");
+  results.forEach(x => console.log(`${x.name}: ${base}?game=${x.gameId}&mode=host`));
+
+  return results;
+};
+
+// ===============================
 // Basis host UI
 // ===============================
 const gameInfo = document.getElementById("gameInfo");
